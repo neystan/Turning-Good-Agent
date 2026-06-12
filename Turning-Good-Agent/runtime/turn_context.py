@@ -1,0 +1,28 @@
+from dataclasses import dataclass, field
+from typing import Any
+from uuid import uuid4
+
+from ..bus.messages import InboundMessage, OutboundMessage
+from .state import TurnState
+
+
+@dataclass(slots=True)
+class TurnContext:
+    """保存一轮消息处理过程中的临时状态。"""
+
+    inbound: InboundMessage
+    state: TurnState = TurnState.PREPARE
+    turn_id: str = field(default_factory=lambda: str(uuid4()))
+    session: Any | None = None
+    history: list[Any] = field(default_factory=list)
+    model_messages: list[dict[str, Any]] = field(default_factory=list)
+    final_content: str = ""
+    shortcut_response: str | None = None
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    trace: list[Any] = field(default_factory=list)
+    saved_trace_count: int = 0
+    token_usage: dict[str, int] = field(default_factory=dict)
+    should_compact: bool = False
+    compact_stats: dict[str, Any] = field(default_factory=dict)
+    outbound: OutboundMessage | None = None
+    error: str | None = None
