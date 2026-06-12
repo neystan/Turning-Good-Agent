@@ -4,3 +4,4 @@ __pycache__/
 .tga/
 data/
 settings.local.json
+tests/
