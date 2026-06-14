@@ -9,19 +9,18 @@
 运行时目录：
 
 ```text
-data/
-  sessions/
-    <UTC时间>_<session_id>/
-      session.json
-      messages.jsonl
-      turn_traces.jsonl
-      token_usage.jsonl
+.sessions/
+  <北京时间>_<session_id>/
+    session.json
+    messages.jsonl
+    turn_traces.jsonl
+    token_usage.jsonl
 ```
 
 说明：
 
 - `session_id` 是逻辑会话标识，用于恢复会话。
-- 目录名带 UTC 创建时间，便于人工区分多次会话。
+- 目录名带北京时间，也就是东八区时间，便于人工区分多次会话。
 - `session.json` 中保存真实 `id`、`created_at`、`updated_at`、`summary`、`metadata`。
 
 ## 命令语义

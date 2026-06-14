@@ -1,6 +1,6 @@
 import json
 import shutil
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -11,14 +11,16 @@ from ..context.budget import estimate_tokens
 from .types import MessageRecord, Session
 
 
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
 class JsonlSessionStore:
     """使用 JSONL 文件保存会话、消息、trace 和 token 记录。"""
 
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.sessions_dir = self.data_dir / "sessions"
-        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        self.sessions_dir = self.data_dir
 
     async def load_session(self, session_id: str) -> Session | None:
         """按 ID 加载最新会话记录。"""
@@ -212,7 +214,7 @@ class JsonlSessionStore:
 
     def _new_session_dir(self, session_id: str, created_at: str) -> Path:
         """返回新会话目录路径。"""
-        stamp = datetime.fromisoformat(created_at).strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.fromisoformat(created_at).astimezone(BEIJING_TZ).strftime("%Y%m%dT%H%M%S+0800")
         return self.sessions_dir / f"{stamp}_{quote(session_id, safe='')}"
 
     def _session_file(self, session_id: str) -> Path:

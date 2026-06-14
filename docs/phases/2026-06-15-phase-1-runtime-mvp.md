@@ -70,7 +70,7 @@ python -m Turning-Good-Agent chat
 检查数据目录：
 
 ```bash
-find data/sessions -maxdepth 2 -type f | sort
+find .sessions -maxdepth 2 -type f | sort
 ```
 
 预期可以看到：

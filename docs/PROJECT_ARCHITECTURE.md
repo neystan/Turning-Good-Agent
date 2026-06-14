@@ -25,7 +25,7 @@ python -m Turning-Good-Agent chat
 | `docs/` | 项目文档目录，包含当前 spec、架构说明、阶段计划和历史文档。 |
 | `settings.example.json` | 本地配置模板。 |
 | `settings.local.json` | 本地私有配置文件，实际运行时优先读取，已被 `.gitignore` 忽略。 |
-| `data/` | 默认运行数据目录，保存 session、messages、trace、token usage，已被 `.gitignore` 忽略。 |
+| `.sessions/` | 默认运行数据目录，保存 session、messages、trace、token usage，已被 `.gitignore` 忽略。 |
 | `tests/` | 本地测试目录，已被 `.gitignore` 忽略，不上传 GitHub。 |
 | `README.md` | 项目快速运行说明。 |
 | `pyproject.toml` | Python 项目元数据和运行配置。 |
@@ -95,13 +95,12 @@ python -m Turning-Good-Agent chat
 默认数据结构：
 
 ```text
-data/
-  sessions/
-    <UTC时间>_<session_id>/
-      session.json
-      messages.jsonl
-      turn_traces.jsonl
-      token_usage.jsonl
+.sessions/
+  <北京时间>_<session_id>/
+    session.json
+    messages.jsonl
+    turn_traces.jsonl
+    token_usage.jsonl
 ```
 
 ### 4.6 `context/`

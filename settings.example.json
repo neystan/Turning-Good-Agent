@@ -1,5 +1,5 @@
 {
-  "data_dir": "data",
+  "data_dir": ".sessions",
   "user_id": "local-user",
   "channel": "cli",
   "runtime": {

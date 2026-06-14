@@ -45,7 +45,7 @@ class LLMSettings:
 class Settings:
     """保存应用运行所需的集中配置。"""
 
-    data_dir: Path = Path("data")
+    data_dir: Path = Path(".sessions")
     default_session_id: str = "default"
     user_id: str = "local-user"
     channel: str = "cli"

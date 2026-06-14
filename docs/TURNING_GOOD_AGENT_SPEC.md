@@ -166,19 +166,18 @@ CLI / Web / WeChat / Feishu
 默认目录：
 
 ```text
-data/
-  sessions/
-    <UTC时间>_<session_id>/
-      session.json
-      messages.jsonl
-      turn_traces.jsonl
-      token_usage.jsonl
+.sessions/
+  <北京时间>_<session_id>/
+    session.json
+    messages.jsonl
+    turn_traces.jsonl
+    token_usage.jsonl
 ```
 
 规则：
 
 - 每个 session 一个独立目录。
-- 目录名包含 UTC 时间，方便人工区分。
+- 目录名包含北京时间，也就是东八区时间，方便人工区分。
 - `/new` 只切换到新 session，不创建空目录。
 - `/clear` 删除当前 session 整个目录。
 - `retention_days` 默认 7 天，超期 session 在后续请求前清理。

@@ -52,7 +52,7 @@ cp settings.example.json settings.local.json
 运行时数据默认保存在：
 
 ```text
-data/sessions/<UTC时间>_<session_id>/
+.sessions/<北京时间>_<session_id>/
 ```
 
 每个 session 目录下独立保存：
