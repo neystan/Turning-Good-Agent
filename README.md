@@ -126,6 +126,33 @@ observability trace 和 token 记录
 proactive/    主动能力扩展入口
 ```
 
+## 当前阶段
+
+项目当前处于 Phase 2：真实 LLM SDK 化、Tool Calling 与 CLI 流式输出。
+
+已完成：
+
+```text
+OpenAI Python SDK 接入
+openai-compatible 统一接入族
+基础 tool calling 工作消息回注
+请求失败错误回显
+可恢复 LLM 错误重试
+```
+
+下一步：
+
+```text
+tools 参数归一化和 JSON Schema 校验
+ToolRegistry.prepare_call()
+ToolLoader 自动加载内置工具
+工具 schema 稳定排序
+CLI 纯文本流式输出开关
+tool call observability 单独落盘
+```
+
+工具系统会继续保持轻量，不引入完整插件生态。当前阶段只做内置工具自动加载；MCP tools 会在 Phase 3 通过 adapter 注册进同一个 `ToolRegistry`。
+
 ## 使用真实 LLM 测试
 
 当前使用 OpenAI-compatible Provider。真实 LLM 接入已经迁移到 OpenAI Python SDK，并支持基础 tool calling。
