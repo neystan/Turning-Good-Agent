@@ -1,7 +1,7 @@
 # Turning-Good-Agent 持续更新 Spec
 
 > Last updated: 2026-06-15  
-> 状态：MVP 已可运行，真实 LLM SDK 化与基础 tool calling 已接入，下一步继续补 observability 与 MCP。
+> 状态：MVP 已可运行，真实 LLM SDK 化与基础 tool calling 已接入，下一步继续补 CLI 流式输出、observability 与 MCP。
 
 ## 1. 产品目标
 
@@ -275,6 +275,7 @@ raw_window_token_limit = 20000
 - `ToolResult`
 - `ToolRegistry`
 - `ToolExecutor`
+- 后续增加 `ToolLoader`
 
 当前内置工具：
 
@@ -288,9 +289,34 @@ raw_window_token_limit = 20000
 - 真实模型返回空 `content` 但包含 `tool_calls` 时，会继续进入工具调用循环
 - OpenAI-compatible tools schema 转换
 - `AgentLoop` 已补齐 assistant tool call message 和 tool result message
+- Phase 2 后半段将增加可配置 CLI 纯文本流式输出
+
+Tools 改造约束：
+
+- `BaseTool` 保持轻量，但需要从“只有 name/description/input_schema/run”扩展为可校验工具接口。
+- 参数 schema 统一使用 JSON Schema object；对外字段建议逐步统一为 `parameters`，兼容期可保留 `input_schema`。
+- 每次执行工具前必须先做参数归一化和校验：
+  - 非 object 参数直接返回可诊断错误。
+  - 缺少 required 字段直接返回可诊断错误。
+  - 基础类型错误尽量按 schema 安全转换，例如 `"3"` 转为 `3`。
+  - 无法转换或不满足 enum/min/max/minLength 等约束时返回错误，不进入工具内部执行。
+- `ToolRegistry` 负责 `prepare_call(name, args)`，集中处理工具查找、参数转换、参数校验和错误文本。
+- `ToolExecutor` 只负责执行、计时和异常包装，不再直接承担参数边界判断。
+- 工具 schema 输出必须稳定排序，先内置工具，再 MCP tools；同组内按工具名排序。
+- 需要新增 `tools/loader.py`，自动加载内置工具：
+  - 扫描 `tools/` 包中的工具类。
+  - 跳过 `base.py`、`registry.py`、`executor.py`、`loader.py`、`schema.py` 等基础模块。
+  - 只加载非抽象、可发现的工具类。
+  - 支持 `enabled(settings/context)`，为后续按配置启停工具留入口。
+  - 当前不做 entry_points 第三方插件机制。
+- 当前不引入 nanobot 的完整 Schema 类体系；只保留最小 JSON Schema 校验函数，避免工具层过早复杂化。
 
 下一阶段要做：
 
+- `settings.llm.streaming_enabled` 流式输出开关
+- CLI 普通文本回复的流式打印
+- `ToolLoader` 自动加载内置工具
+- `ToolRegistry.prepare_call()` 参数校验和稳定排序
 - tool call observability 单独落盘
 - tool call / tool result 的会话级查看入口
 - 更细粒度的 provider 错误信息与 trace 字段
@@ -303,6 +329,17 @@ raw_window_token_limit = 20000
 - 当 `message.content` 为空但模型返回了 `tool_calls` 时，不应被视为无回复；应进入工具调用循环。
 - 当 provider 返回兼容扩展字段，例如 `reasoning_content`，MVP 阶段只做兼容读取和调试保留，不直接把推理内容输出给用户。
 - HTTP 细节、错误对象、超时和重试应交给 SDK 或 Provider 层处理，不在 AgentLoop 内扩散。
+
+流式输出约束：
+
+- 流式输出属于 Phase 2 的后半段能力。
+- 流式输出必须通过集中配置显式开启，配置字段为 `settings.llm.streaming_enabled`，默认值为 `false`。
+- 第一版只支持 CLI 纯文本流式输出，不实现流式 tool calling。
+- 当 `streaming_enabled = false` 时，保持当前非流式完整回复行为。
+- 当 `streaming_enabled = true` 时，LLM 层通过 OpenAI SDK `stream=True` 产出文本增量，CLI 逐段打印。
+- `messages.jsonl` 只保存最终完整 assistant message，不保存每个 chunk。
+- `turn_traces.jsonl` 可以记录本轮是否启用 streaming，但不记录完整 chunk 序列。
+- Web、微信、飞书的流式展示不属于 Phase 2，后续在 channel 阶段接入统一事件协议。
 
 ## 10. Skills
 
@@ -411,7 +448,7 @@ Main Agent
 ## 16. 阶段路线
 
 1. Phase 1：Runtime MVP
-2. Phase 2：真实 LLM SDK 化与 tool calling
+2. Phase 2：真实 LLM SDK 化、tool calling 与 CLI 文本流式输出
 3. Phase 3：MCP client MVP
 4. Phase 4：Skills 机制
 5. Phase 5：Web observability

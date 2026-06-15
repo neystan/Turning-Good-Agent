@@ -4,7 +4,7 @@
 
 **Goal:** 实现 MCP client 最小闭环，让 Turning-Good-Agent 可以连接 MCP server、发现工具并调用工具。
 
-**Architecture:** MCP client 独立放在 `mcp/`，不把协议细节塞进 `AgentLoop`。Runtime 只消费统一后的 tool schema，MCP tool 通过 adapter 注册进 `ToolRegistry`。
+**Architecture:** MCP client 独立放在 `mcp/`，不把协议细节塞进 `AgentLoop`。Runtime 只消费统一后的 tool schema，MCP tool 通过 adapter 注册进 `ToolRegistry`。本阶段依赖 Phase 2 中收口后的 `BaseTool`、`ToolRegistry.prepare_call()`、工具稳定排序和 `ToolLoader` 边界。
 
 **Tech Stack:** Python 3.11+、asyncio、JSON-RPC、stdio transport，后续扩展 SSE 和 streamable HTTP。
 

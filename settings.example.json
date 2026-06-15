@@ -16,9 +16,10 @@
     "retention_days": 7
   },
   "llm": {
-    "provider": "fake",
+    "provider": "openai-compatible",
     "api_key": "replace-with-your-key",
     "base_url": "https://api.openai.com/v1",
-    "model": "replace-with-your-model"
+    "model": "replace-with-your-model",
+    "streaming_enabled": false
   }
 }

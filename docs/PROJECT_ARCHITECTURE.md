@@ -4,7 +4,7 @@
 
 ## 1. 项目定位
 
-Turning-Good-Agent 是一个轻量 Runtime-first 通用 Agent。当前仓库处于 MVP 阶段，主路径是 CLI 对话、会话存储、短期压缩、基础工具调用，以及基于 OpenAI Python SDK 的 OpenAI-compatible LLM 接入。
+Turning-Good-Agent 是一个轻量 Runtime-first 通用 Agent。当前仓库处于 MVP 阶段，主路径是 CLI 对话、会话存储、短期压缩、基础工具调用，以及基于 OpenAI Python SDK 的 OpenAI-compatible LLM 接入。Phase 2 后半段会在这一接入层上增加可配置的 CLI 纯文本流式输出。
 
 当前运行入口：
 
@@ -135,10 +135,19 @@ python -m Turning-Good-Agent chat
 
 | 路径 | 作用 |
 | --- | --- |
-| `tools/base.py` | 定义 `BaseTool` 协议和 `ToolResult`。 |
-| `tools/registry.py` | 工具注册表，输出模型可见 schema。 |
-| `tools/executor.py` | 工具执行器，处理调用和结果序列化。 |
+| `tools/base.py` | 定义 `BaseTool` 协议、`ToolResult`，后续补充参数归一化和校验入口。 |
+| `tools/registry.py` | 工具注册表，输出模型可见 schema；后续集中处理 `prepare_call()` 和稳定排序。 |
+| `tools/executor.py` | 工具执行器，处理调用、耗时和结果序列化。 |
+| `tools/loader.py` | 计划新增。自动扫描并加载内置工具，当前不支持 entry_points 插件。 |
 | `tools/builtin_tools.py` | 当前内置 `echo` 和 `now`。 |
+
+Tools 下一步边界：
+
+- 自动加载内置工具，避免每新增一个工具都修改 runtime 组装代码。
+- `ToolRegistry` 负责工具查找、参数安全转换和参数校验。
+- `ToolExecutor` 只负责执行和异常包装。
+- 工具 schema 输出稳定排序：内置工具在前，MCP tools 在后，同组内按名称排序。
+- 暂不搬入 nanobot 的完整 Schema 类体系，先使用最小 JSON Schema 校验函数。
 
 ### 4.9 `llm/`
 
@@ -147,7 +156,7 @@ python -m Turning-Good-Agent chat
 | 路径 | 作用 |
 | --- | --- |
 | `llm/client.py` | `LLMProvider` 协议。 |
-| `llm/types.py` | 定义 `LLMResponse` 和 `ToolCall`。 |
+| `llm/types.py` | 定义 `LLMResponse`、`ToolCall`，后续补充 `LLMChunk`。 |
 | `llm/openai_compatible.py` | 基于 OpenAI Python SDK 的 OpenAI-compatible Chat Completions 接入，负责解析文本和 `tool_calls`。 |
 
 当前真实 LLM 接入边界：
@@ -155,6 +164,8 @@ python -m Turning-Good-Agent chat
 - `OpenAICompatibleLLM` 使用 OpenAI Python SDK 的 `client.chat.completions.create(...)`。
 - 当前只保留 `openai_compatible` 这一类接入；DeepSeek、Qwen 等兼容服务也统一通过这一路径接入。
 - 真实模型返回 `content` 为空但包含 `tool_calls` 时，不会被当作无回复；会交给 `AgentLoop` 执行工具循环。
+- 流式输出计划作为 `openai_compatible` 接入族的可选能力，通过 `settings.llm.streaming_enabled` 开启，默认关闭。
+- 第一版流式只覆盖 CLI 纯文本回复；流式 tool calling 和多 channel 流式展示后置。
 - 当前仍缺少独立的 tool call 落盘结构，后续 observability 会继续补齐。
 
 ### 4.10 `observability/`
