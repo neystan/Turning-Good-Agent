@@ -17,3 +17,12 @@ class LLMResponse:
 
     content: str
     tool_calls: list[ToolCall] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class LLMChunk:
+    """表示模型流式返回的增量。"""
+
+    delta_text: str = ""
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    finish_reason: str | None = None

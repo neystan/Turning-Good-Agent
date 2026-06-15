@@ -1,4 +1,5 @@
 import time
+from collections.abc import Callable
 
 from ..bus.messages import InboundMessage, OutboundMessage
 from ..config.settings import Settings
@@ -13,7 +14,7 @@ from ..sessions.store import JsonlSessionStore
 from ..tools.loader import ToolLoader
 from ..tools.registry import ToolRegistry
 from .agent_loop import AgentLoop
-from .state import TurnState, compact_trace_metadata, next_state, run_state, save_remaining_traces
+from .state import TurnState, compact_trace_metadata, next_state, run_state, run_trace_metadata, save_remaining_traces
 from .turn_context import TurnContext
 
 
@@ -49,14 +50,14 @@ class AgentRuntime:
             settings=settings,
             sessions=sessions,
             context_builder=ContextBuilder(),
-            agent_loop=AgentLoop(llm, tools, settings.runtime),
+            agent_loop=AgentLoop(llm, tools, settings.runtime, settings.llm.streaming_enabled),
             profile_memory=ProfileMemory(),
             proactive=ProactiveManager(),
         )
 
-    async def run_turn(self, msg: InboundMessage) -> OutboundMessage:
+    async def run_turn(self, msg: InboundMessage, on_delta: Callable[[str], object] | None = None) -> OutboundMessage:
         """执行一轮消息处理并返回出站消息。"""
-        ctx = TurnContext(inbound=msg)
+        ctx = TurnContext(inbound=msg, on_delta=on_delta)
         lock = self.sessions.locks.lock_for(msg.session_id)
         async with lock:
             while True:
@@ -69,7 +70,11 @@ class AgentRuntime:
                         ctx.final_content = f"请求失败：{ctx.error}"
                     event = "error"
                 duration_ms = (time.perf_counter() - started) * 1000
-                metadata = compact_trace_metadata(ctx) if ctx.state is TurnState.COMPACT else {}
+                metadata = {}
+                if ctx.state is TurnState.RUN:
+                    metadata = run_trace_metadata(ctx)
+                elif ctx.state is TurnState.COMPACT:
+                    metadata = compact_trace_metadata(ctx)
                 ctx.trace.append(
                     StateTrace(ctx.turn_id, msg.session_id, ctx.state.name, duration_ms, event, ctx.error, metadata)
                 )

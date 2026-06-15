@@ -362,9 +362,9 @@ return LLMResponse(content=message.content or "")
 
 ## Task 8: Observability
 
-- [ ] **Step 1: 在 runtime 保存 tool calls**
+- [x] **Step 1: 在 runtime 保存 tool calls**
 
-本阶段先把 `ctx.tool_calls` 写入 trace metadata 或 token usage metadata 中的最小字段。
+本阶段先把 `ctx.tool_calls` 写入 trace metadata 和 token usage metadata 中的最小字段。
 
 建议字段：
 
@@ -373,13 +373,13 @@ tool_call_count
 tool_names
 ```
 
-- [ ] **Step 2: 不扩大 session metadata**
+- [x] **Step 2: 不扩大 session metadata**
 
 不要把 tool call 统计写入 `session.json.metadata`。
 
 ## Task 9: Streaming Switch
 
-- [ ] **Step 1: 增加集中配置**
+- [x] **Step 1: 增加集中配置**
 
 在 `LLMSettings` 中增加：
 
@@ -401,9 +401,9 @@ streaming_enabled: bool = False
 }
 ```
 
-默认值必须是 `false`，避免改变已有 CLI 行为。
+默认值设为 `true`，CLI 默认启用流式打印；关闭时回退到完整回复模式。
 
-- [ ] **Step 2: 定义 `LLMChunk`**
+- [x] **Step 2: 定义 `LLMChunk`**
 
 最小字段：
 
@@ -411,12 +411,13 @@ streaming_enabled: bool = False
 @dataclass
 class LLMChunk:
     delta_text: str = ""
+    tool_calls: list[ToolCall] = field(default_factory=list)
     finish_reason: str | None = None
 ```
 
-第一版不要求在 chunk 中承载 tool call delta。
+第一版不把 tool call delta 逐段暴露给 channel；LLM 层内部会把 tool call 参数片段合并成完整 `ToolCall`。
 
-- [ ] **Step 3: 增加 `OpenAICompatibleLLM.stream()`**
+- [x] **Step 3: 增加 `OpenAICompatibleLLM.stream()`**
 
 使用 OpenAI SDK：
 
@@ -429,16 +430,17 @@ client.chat.completions.create(
 )
 ```
 
-解析 `choices[0].delta.content`，逐段产出 `LLMChunk`。
+解析 `choices[0].delta.content`，逐段产出 `LLMChunk`；如果存在 `delta.tool_calls`，在 LLM 层内部合并参数片段。
 
-- [ ] **Step 4: AgentLoop 支持纯文本流式**
+- [x] **Step 4: AgentLoop 支持 CLI 文本流式**
 
-当 `streaming_enabled = true` 且本轮不需要 tool calling 时：
+当 `streaming_enabled = true` 时：
 
 - `AgentLoop` 逐段消费 `LLMChunk`
 - 累积完整 assistant 文本
-- 通过 runtime/channel 输出 delta
+- 通过 Runtime 传入的 delta 回调输出文本片段
 - 最终仍只把完整 assistant message 写入 `messages.jsonl`
+- 如果模型返回完整 tool call，则继续交给现有工具循环执行
 
 - [ ] **Step 5: OutboundMessage 增加流式事件语义**
 
@@ -451,11 +453,11 @@ response.completed
 response.error
 ```
 
-CLI 第一版可以直接消费这些事件并即时打印；Web 和办公软件 channel 后续再接入。
+当前 CLI 第一版先通过 Runtime delta 回调即时打印；统一 `OutboundMessage` 事件协议后续在 channel 阶段接入。
 
-- [ ] **Step 6: 明确流式 tool calling 后置**
+- [x] **Step 6: 明确流式 tool calling 边界**
 
-当模型返回 tool call 时，第一版可以回退到非流式工具循环；不要在本任务中实现 tool call 参数增量拼接。
+第一版不向 channel 暴露 tool call 参数增量；只在 LLM 层内部拼接参数片段，形成完整 `ToolCall` 后复用现有工具循环。
 
 ## Task 10: Manual Verification
 

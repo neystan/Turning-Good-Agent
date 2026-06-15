@@ -1,9 +1,12 @@
 import json
+import inspect
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from ..config.settings import RuntimeSettings
 from ..llm.client import LLMProvider
+from ..llm.types import LLMResponse
 from ..tools.executor import ToolExecutor
 from ..tools.registry import ToolRegistry
 
@@ -20,18 +23,29 @@ class AgentLoopResult:
 class AgentLoop:
     """执行 LLM 对话与工具调用循环。"""
 
-    def __init__(self, llm: LLMProvider, tools: ToolRegistry, runtime: RuntimeSettings) -> None:
+    def __init__(
+        self,
+        llm: LLMProvider,
+        tools: ToolRegistry,
+        runtime: RuntimeSettings,
+        streaming_enabled: bool = False,
+    ) -> None:
         self.llm = llm
         self.tools = tools
         self.runtime = runtime
         self.executor = ToolExecutor(tools)
+        self.streaming_enabled = streaming_enabled
 
-    async def run(self, messages: list[dict[str, Any]]) -> AgentLoopResult:
+    async def run(
+        self,
+        messages: list[dict[str, Any]],
+        on_delta: Callable[[str], Any] | None = None,
+    ) -> AgentLoopResult:
         """运行模型调用和工具循环直到得到最终文本。"""
         working = list(messages)
         tool_records: list[dict[str, Any]] = []
         for _ in range(self.runtime.max_tool_rounds):
-            response = await self.llm.complete(working, self.tools.openai_tools())
+            response = await self._complete(working, self.tools.openai_tools(), on_delta)
             if not response.tool_calls:
                 return AgentLoopResult(response.content, working, tool_records)
             working.append(
@@ -63,3 +77,26 @@ class AgentLoop:
                     }
                 )
         return AgentLoopResult("工具调用轮数已达到上限。", working, tool_records)
+
+    async def _complete(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        on_delta: Callable[[str], Any] | None,
+    ) -> LLMResponse:
+        """按配置选择非流式或流式模型调用。"""
+        if not self.streaming_enabled or not hasattr(self.llm, "stream"):
+            return await self.llm.complete(messages, tools)
+
+        content_parts: list[str] = []
+        tool_calls = []
+        async for chunk in self.llm.stream(messages, tools):
+            if chunk.delta_text:
+                content_parts.append(chunk.delta_text)
+                if on_delta is not None:
+                    emitted = on_delta(chunk.delta_text)
+                    if inspect.isawaitable(emitted):
+                        await emitted
+            if chunk.tool_calls:
+                tool_calls = chunk.tool_calls
+        return LLMResponse(content="".join(content_parts), tool_calls=tool_calls)

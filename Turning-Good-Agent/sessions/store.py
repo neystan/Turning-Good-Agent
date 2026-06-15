@@ -137,7 +137,7 @@ class JsonlSessionStore:
             },
         )
 
-    async def save_token_usage(self, turn_id: str, session_id: str, usage: dict[str, int]) -> None:
+    async def save_token_usage(self, turn_id: str, session_id: str, usage: dict[str, Any]) -> None:
         """保存单轮 token 使用量。"""
         self._append_jsonl(
             self._tokens_file(session_id),
@@ -154,6 +154,8 @@ class JsonlSessionStore:
                 "compacted_token_count": usage.get("compacted_token_count", 0),
                 "raw_window_message_count": usage.get("raw_window_message_count", 0),
                 "raw_window_token_count": usage.get("raw_window_token_count", 0),
+                "tool_call_count": usage.get("tool_call_count", 0),
+                "tool_names": usage.get("tool_names", []),
             },
         )
 

@@ -79,7 +79,7 @@ async def run(runtime: AgentRuntime, ctx: TurnContext) -> str:
     if ctx.shortcut_response is not None:
         ctx.final_content = ctx.shortcut_response
         return "ok"
-    result = await runtime.agent_loop.run(ctx.model_messages)
+    result = await runtime.agent_loop.run(ctx.model_messages, ctx.on_delta)
     ctx.final_content = result.final_content
     ctx.tool_calls = result.tool_calls
     return "ok"
@@ -110,6 +110,8 @@ async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
             "compacted_token_count": 0,
             "raw_window_message_count": 0,
             "raw_window_token_count": 0,
+            "tool_call_count": len(ctx.tool_calls),
+            "tool_names": [record["tool_name"] for record in ctx.tool_calls],
         }
     )
     ctx.token_usage = usage
@@ -256,4 +258,12 @@ def compact_trace_metadata(ctx: TurnContext) -> dict[str, int]:
         "compacted_token_count": int(ctx.token_usage.get("compacted_token_count", 0)),
         "raw_window_message_count": int(ctx.token_usage.get("raw_window_message_count", 0)),
         "raw_window_token_count": int(ctx.token_usage.get("raw_window_token_count", 0)),
+    }
+
+
+def run_trace_metadata(ctx: TurnContext) -> dict[str, int | list[str]]:
+    """返回 RUN 状态需要暴露的工具调用统计。"""
+    return {
+        "tool_call_count": len(ctx.tool_calls),
+        "tool_names": [record["tool_name"] for record in ctx.tool_calls],
     }

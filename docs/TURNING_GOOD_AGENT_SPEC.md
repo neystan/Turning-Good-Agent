@@ -289,7 +289,7 @@ raw_window_token_limit = 20000
 - 真实模型返回空 `content` 但包含 `tool_calls` 时，会继续进入工具调用循环
 - OpenAI-compatible tools schema 转换
 - `AgentLoop` 已补齐 assistant tool call message 和 tool result message
-- Phase 2 后半段将增加可配置 CLI 纯文本流式输出
+- Phase 2 后半段已开始接入可配置 CLI 文本流式输出
 
 Tools 改造约束：
 
@@ -313,8 +313,7 @@ Tools 改造约束：
 
 下一阶段要做：
 
-- `settings.llm.streaming_enabled` 流式输出开关
-- CLI 普通文本回复的流式打印
+- 流式输出 trace 字段
 - `ToolLoader` 自动加载内置工具
 - `ToolRegistry.prepare_call()` 参数校验和稳定排序
 - tool call observability 单独落盘
@@ -333,10 +332,10 @@ Tools 改造约束：
 流式输出约束：
 
 - 流式输出属于 Phase 2 的后半段能力。
-- 流式输出必须通过集中配置显式开启，配置字段为 `settings.llm.streaming_enabled`，默认值为 `false`。
-- 第一版只支持 CLI 纯文本流式输出，不实现流式 tool calling。
-- 当 `streaming_enabled = false` 时，保持当前非流式完整回复行为。
-- 当 `streaming_enabled = true` 时，LLM 层通过 OpenAI SDK `stream=True` 产出文本增量，CLI 逐段打印。
+- 流式输出必须通过集中配置控制，配置字段为 `settings.llm.streaming_enabled`，默认值为 `true`。
+- 第一版支持 CLI 文本 delta 输出；tool call 参数 delta 只在 LLM 层内部合并，不作为独立事件向 channel 暴露。
+- 当 `streaming_enabled = false` 时，回退到非流式完整回复行为。
+- 当 `streaming_enabled = true` 时，LLM 层通过 OpenAI SDK `stream=True` 产出文本增量，CLI 逐段打印；如果模型返回 tool call delta，则先合并成完整 `ToolCall` 后交给现有工具循环。
 - `messages.jsonl` 只保存最终完整 assistant message，不保存每个 chunk。
 - `turn_traces.jsonl` 可以记录本轮是否启用 streaming，但不记录完整 chunk 序列。
 - Web、微信、飞书的流式展示不属于 Phase 2，后续在 channel 阶段接入统一事件协议。

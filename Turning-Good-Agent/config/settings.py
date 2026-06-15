@@ -42,6 +42,7 @@ class LLMSettings:
     timeout_seconds: float = 60.0
     max_retries: int = 2
     retry_delay_seconds: float = 0.5
+    streaming_enabled: bool = True
 
 
 @dataclass(slots=True)
@@ -88,7 +89,16 @@ class Settings:
                 if key in sessions:
                     setattr(settings.sessions, key, sessions[key])
             llm = payload.get("llm", {})
-            for key in ("provider", "api_key", "base_url", "model", "timeout_seconds", "max_retries", "retry_delay_seconds"):
+            for key in (
+                "provider",
+                "api_key",
+                "base_url",
+                "model",
+                "timeout_seconds",
+                "max_retries",
+                "retry_delay_seconds",
+                "streaming_enabled",
+            ):
                 if key in llm:
                     setattr(settings.llm, key, llm[key])
         if data_dir is not None:
@@ -117,6 +127,12 @@ class Settings:
         settings.llm.retry_delay_seconds = float(
             os.getenv("TGA_LLM_RETRY_DELAY_SECONDS", settings.llm.retry_delay_seconds)
         )
+        if "TGA_LLM_STREAMING_ENABLED" in os.environ:
+            settings.llm.streaming_enabled = os.environ["TGA_LLM_STREAMING_ENABLED"].lower() in {
+                "1",
+                "true",
+                "yes",
+            }
         settings.memory.compact_token_threshold = int(
             os.getenv("TGA_MEMORY_COMPACT_TOKEN_THRESHOLD", settings.memory.compact_token_threshold)
         )

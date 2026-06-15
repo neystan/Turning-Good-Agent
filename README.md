@@ -147,7 +147,7 @@ tools 参数归一化和 JSON Schema 校验
 ToolRegistry.prepare_call()
 ToolLoader 自动加载内置工具
 工具 schema 稳定排序
-CLI 纯文本流式输出开关
+CLI 文本流式输出开关
 tool call observability 单独落盘
 ```
 
@@ -180,7 +180,7 @@ python -m Turning-Good-Agent chat
 
 当前真实 LLM 已使用 OpenAI Python SDK 的 `client.chat.completions.create(...)`，并在 `AgentLoop` 中补齐 assistant tool_call 消息和 tool result 消息。后续仍需要把 tool call 结果单独落盘到更清晰的 observability 结构中。
 
-流式输出计划放在 Phase 2 后半段实现，并通过集中配置显式开启：
+流式输出通过集中配置显式开启：
 
 ```json
 {
@@ -190,4 +190,4 @@ python -m Turning-Good-Agent chat
 }
 ```
 
-默认值会保持为 `false`。第一版只支持 CLI 纯文本流式输出；流式 tool calling 和 Web、微信、飞书的流式展示后续再接入。
+默认值是 `true`。CLI 会逐段打印模型返回的文本；如果模型返回 tool call 参数片段，LLM 层会先合并成完整工具调用，再交给现有 AgentLoop 执行。Web、微信、飞书的流式展示后续在 channel 阶段接入。

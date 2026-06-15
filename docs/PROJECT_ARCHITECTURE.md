@@ -156,16 +156,17 @@ Tools 当前边界：
 | 路径 | 作用 |
 | --- | --- |
 | `llm/client.py` | `LLMProvider` 协议。 |
-| `llm/types.py` | 定义 `LLMResponse`、`ToolCall`，后续补充 `LLMChunk`。 |
-| `llm/openai_compatible.py` | 基于 OpenAI Python SDK 的 OpenAI-compatible Chat Completions 接入，负责解析文本和 `tool_calls`。 |
+| `llm/types.py` | 定义 `LLMResponse`、`ToolCall` 和 `LLMChunk`。 |
+| `llm/openai_compatible.py` | 基于 OpenAI Python SDK 的 OpenAI-compatible Chat Completions 接入，负责解析文本、`tool_calls` 和流式 chunk。 |
 
 当前真实 LLM 接入边界：
 
 - `OpenAICompatibleLLM` 使用 OpenAI Python SDK 的 `client.chat.completions.create(...)`。
 - 当前只保留 `openai_compatible` 这一类接入；DeepSeek、Qwen 等兼容服务也统一通过这一路径接入。
 - 真实模型返回 `content` 为空但包含 `tool_calls` 时，不会被当作无回复；会交给 `AgentLoop` 执行工具循环。
-- 流式输出计划作为 `openai_compatible` 接入族的可选能力，通过 `settings.llm.streaming_enabled` 开启，默认关闭。
-- 第一版流式只覆盖 CLI 纯文本回复；流式 tool calling 和多 channel 流式展示后置。
+- 流式输出作为 `openai_compatible` 接入族的可选能力，通过 `settings.llm.streaming_enabled` 开启，默认开启。
+- 第一版 CLI 会逐段打印文本 delta；tool call 参数片段只在 LLM 层内部合并，完整 tool call 仍交给现有 AgentLoop 执行。
+- 多 channel 流式展示后置。
 - 当前仍缺少独立的 tool call 落盘结构，后续 observability 会继续补齐。
 
 ### 4.10 `observability/`

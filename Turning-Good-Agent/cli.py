@@ -106,8 +106,19 @@ async def chat(
         if not content:
             continue
         msg = InboundMessage.new(content, active_session_id, settings.user_id, settings.channel)
-        outbound = await runtime.run_turn(msg)
-        print(outbound.content)
+        streamed = False
+
+        def print_delta(delta: str) -> None:
+            """立即打印流式文本片段。"""
+            nonlocal streamed
+            streamed = True
+            print(delta, end="", flush=True)
+
+        outbound = await runtime.run_turn(msg, print_delta if settings.llm.streaming_enabled else None)
+        if streamed:
+            print()
+        else:
+            print(outbound.content)
         if content == "/exit":
             break
         if content == "/new":
