@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 建立最小可运行的 CLI-first Agent Runtime，完成会话、状态机、JSON 存储、FakeLLM、基础 tools、短期压缩和可观测性。
+**Goal:** 建立最小可运行的 CLI-first Agent Runtime，完成会话、状态机、JSON 存储、基础 tools、短期压缩和可观测性。
 
-**Architecture:** Phase 1 以 `AgentRuntime` 为中心，channel 只负责收发消息。Runtime 使用 `PREPARE -> RUN -> SAVE -> COMPACT -> RESPOND -> DONE` 状态机，所有会话数据写入本地 JSON/JSONL 文件。
+**Architecture:** Phase 1 以 `AgentRuntime` 为中心，channel 只负责收发消息。Runtime 使用 `PREPARE -> RUN -> SAVE -> COMPACT -> RESPOND` 状态机，所有会话数据写入本地 JSON/JSONL 文件。
 
-**Tech Stack:** Python 3.11+、asyncio、argparse、JSON/JSONL、OpenAI-compatible HTTP、pytest 本地验证。
+**Tech Stack:** Python 3.11+、asyncio、argparse、JSON/JSONL、OpenAI-compatible 接口、pytest 本地验证。
 
 ---
 
@@ -18,8 +18,7 @@
 
 - CLI 入口
 - `InboundMessage` / `OutboundMessage`
-- 6 状态 Runtime
-- `FakeLLM`
+- 5 状态 Runtime
 - OpenAI-compatible 纯文本对话
 - `ToolRegistry` / `ToolExecutor`
 - 内置 `echo` / `now`

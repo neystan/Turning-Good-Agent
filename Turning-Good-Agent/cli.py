@@ -6,9 +6,10 @@ from uuid import uuid4
 from .bus.messages import InboundMessage
 from .config.settings import Settings
 from .llm.client import LLMProvider
-from .llm.fake import FakeLLM
 from .llm.openai_compatible import OpenAICompatibleLLM
 from .runtime.runtime import AgentRuntime
+
+OPENAI_COMPATIBLE_PROVIDER = "openai-compatible"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -18,7 +19,11 @@ def build_parser() -> argparse.ArgumentParser:
     chat = subcommands.add_parser("chat", help="启动交互式 CLI 会话")
     chat.add_argument("--session", help="会话 ID，不传则每次启动创建临时会话")
     chat.add_argument("--data-dir", help="本地数据目录，未传时读取 settings.local.json 或默认值")
-    chat.add_argument("--llm", choices=["fake", "openai-compatible"], help="LLM Provider")
+    chat.add_argument(
+        "--llm",
+        choices=["openai-compatible"],
+        help="LLM 接入类型",
+    )
     chat.add_argument("--api-key", help="真实 LLM API Key")
     chat.add_argument("--base-url", help="OpenAI-compatible API Base URL")
     chat.add_argument("--model", help="真实 LLM 模型名")
@@ -43,11 +48,17 @@ def resolve_cli_session_id(session_id: str | None) -> str:
     return session_id or f"cli-{uuid4()}"
 
 
+def resolve_provider(provider: str) -> str:
+    """将 provider 名称归一化到当前支持的实现类型。"""
+    if provider == OPENAI_COMPATIBLE_PROVIDER:
+        return OPENAI_COMPATIBLE_PROVIDER
+    return provider
+
+
 def build_llm(settings: Settings) -> LLMProvider:
     """根据集中配置创建模型 Provider。"""
-    if settings.llm.provider == "fake":
-        return FakeLLM()
-    if settings.llm.provider != "openai-compatible":
+    provider = resolve_provider(settings.llm.provider)
+    if provider != OPENAI_COMPATIBLE_PROVIDER:
         raise ValueError(f"不支持的 LLM Provider：{settings.llm.provider}")
 
     if not settings.llm.api_key:
@@ -58,6 +69,9 @@ def build_llm(settings: Settings) -> LLMProvider:
         api_key=settings.llm.api_key,
         base_url=settings.llm.base_url,
         model=settings.llm.model,
+        timeout_seconds=settings.llm.timeout_seconds,
+        max_retries=settings.llm.max_retries,
+        retry_delay_seconds=settings.llm.retry_delay_seconds,
     )
 
 

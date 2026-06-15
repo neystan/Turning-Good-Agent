@@ -214,7 +214,7 @@ class JsonlSessionStore:
 
     def _new_session_dir(self, session_id: str, created_at: str) -> Path:
         """返回新会话目录路径。"""
-        stamp = datetime.fromisoformat(created_at).astimezone(BEIJING_TZ).strftime("%Y%m%dT%H%M%S+0800")
+        stamp = datetime.fromisoformat(created_at).astimezone(BEIJING_TZ).strftime("%Y%m%d_%H%M%S")
         return self.sessions_dir / f"{stamp}_{quote(session_id, safe='')}"
 
     def _session_file(self, session_id: str) -> Path:

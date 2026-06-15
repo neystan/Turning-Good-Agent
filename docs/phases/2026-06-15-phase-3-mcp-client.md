@@ -153,5 +153,5 @@ class McpServerSettings:
 
 - 可以连接一个 stdio MCP server。
 - 可以发现 MCP tools。
-- 可以通过真实 LLM 或 FakeLLM 路径调用 MCP tool。
+- 可以通过真实 LLM 路径调用 MCP tool。
 - MCP 失败不影响内置工具注册。

@@ -4,7 +4,7 @@
 
 ## 1. 项目定位
 
-Turning-Good-Agent 是一个轻量 Runtime-first 通用 Agent。当前仓库处于 MVP 阶段，主路径是 CLI 对话、会话存储、短期压缩、基础工具调用和 OpenAI-compatible 纯文本模型接入。
+Turning-Good-Agent 是一个轻量 Runtime-first 通用 Agent。当前仓库处于 MVP 阶段，主路径是 CLI 对话、会话存储、短期压缩、基础工具调用，以及基于 OpenAI Python SDK 的 OpenAI-compatible LLM 接入。
 
 当前运行入口：
 
@@ -14,8 +14,8 @@ python -m Turning-Good-Agent chat
 
 当前真实模型能力：
 
-- `FakeLLM`：本地开发与工具调用模拟
-- `OpenAI-compatible`：真实 LLM 纯文本对话，暂未接入真实 tool calling
+- `OpenAI-compatible`：真实 LLM 对话
+- OpenAI-compatible tool calling：`AgentLoop` 已支持 assistant tool call 与 tool result 工作消息回注
 
 ## 2. 顶层目录与文件
 
@@ -76,10 +76,10 @@ python -m Turning-Good-Agent chat
 
 | 路径 | 作用 |
 | --- | --- |
-| `runtime/state.py` | 定义 6 状态状态机：`PREPARE -> RUN -> SAVE -> COMPACT -> RESPOND -> DONE`。 |
+| `runtime/state.py` | 定义 5 状态状态机：`PREPARE -> RUN -> SAVE -> COMPACT -> RESPOND`。 |
 | `runtime/runtime.py` | `AgentRuntime` 总控，串联会话、上下文、AgentLoop、存储、压缩、trace 和响应。 |
 | `runtime/turn_context.py` | 单轮运行上下文，保存 state、history、model messages、tool calls、token usage 等中间状态。 |
-| `runtime/agent_loop.py` | LLM 与 tools 的调用循环。当前 FakeLLM 可模拟工具调用，真实 LLM tool calling 尚未完成。 |
+| `runtime/agent_loop.py` | LLM 与 tools 的调用循环，负责追加 assistant tool call 和 tool result working messages。 |
 
 ### 4.5 `sessions/`
 
@@ -148,8 +148,14 @@ python -m Turning-Good-Agent chat
 | --- | --- |
 | `llm/client.py` | `LLMProvider` 协议。 |
 | `llm/types.py` | 定义 `LLMResponse` 和 `ToolCall`。 |
-| `llm/fake.py` | 本地 FakeLLM，支持简单工具调用模拟。 |
-| `llm/openai_compatible.py` | OpenAI-compatible Chat Completions 纯文本接入。 |
+| `llm/openai_compatible.py` | 基于 OpenAI Python SDK 的 OpenAI-compatible Chat Completions 接入，负责解析文本和 `tool_calls`。 |
+
+当前真实 LLM 接入边界：
+
+- `OpenAICompatibleLLM` 使用 OpenAI Python SDK 的 `client.chat.completions.create(...)`。
+- 当前只保留 `openai_compatible` 这一类接入；DeepSeek、Qwen 等兼容服务也统一通过这一路径接入。
+- 真实模型返回 `content` 为空但包含 `tool_calls` 时，不会被当作无回复；会交给 `AgentLoop` 执行工具循环。
+- 当前仍缺少独立的 tool call 落盘结构，后续 observability 会继续补齐。
 
 ### 4.10 `observability/`
 

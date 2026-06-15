@@ -17,7 +17,7 @@ python -m Turning-Good-Agent chat
 /exit
 ```
 
-默认使用 FakeLLM，不需要 API key。
+当前默认使用 OpenAI-compatible Provider，需要在 `settings.local.json` 中配置真实模型。
 
 ## 配置
 
@@ -85,14 +85,14 @@ flowchart TD
     Run --> Save[SAVE]
     Save --> Compact[COMPACT]
     Compact --> Respond[RESPOND]
-    Respond --> Done[DONE]
+    Respond --> End[turn complete]
 
     Prepare --> Session[SessionManager + JsonlSessionStore]
     Prepare --> Memory[ShortTermMemory + ProfileMemory]
     Prepare --> Context[ContextBuilder]
 
     Run --> AgentLoop[Runtime AgentLoop]
-    AgentLoop --> LLM[FakeLLM / OpenAI-compatible LLM]
+    AgentLoop --> LLM[OpenAI-compatible LLM]
     AgentLoop --> Tools[ToolRegistry + ToolExecutor]
     Tools --> Builtins[echo / now]
 
@@ -108,7 +108,7 @@ flowchart TD
 
 ```text
 CLI 输入
--> Runtime: PREPARE -> RUN -> SAVE -> COMPACT -> RESPOND -> DONE
+-> Runtime: PREPARE -> RUN -> SAVE -> COMPACT -> RESPOND
 -> OutboundMessage
 -> CLI 输出
 ```
@@ -121,14 +121,14 @@ sessions/     会话、消息、JSONL 持久化、会话锁
 context/      system prompt、history、summary、tool schema 组装
 memory/       短期记忆压缩骨架、长期偏好骨架、事件记忆骨架
 tools/        工具抽象、注册、执行、内置工具
-llm/          LLM Provider 抽象和 FakeLLM
+llm/          LLM Provider 抽象和 OpenAI-compatible 实现
 observability trace 和 token 记录
 proactive/    主动能力扩展入口
 ```
 
 ## 使用真实 LLM 测试
 
-默认仍使用 `FakeLLM`，不需要 API key。要访问真实模型，使用 OpenAI-compatible Provider：
+当前使用 OpenAI-compatible Provider。真实 LLM 接入已经迁移到 OpenAI Python SDK，并支持基础 tool calling。
 
 在 `settings.local.json` 中填写：
 
@@ -143,10 +143,12 @@ proactive/    主动能力扩展入口
 }
 ```
 
+如果你接的是 DeepSeek、Qwen 这类兼容 OpenAI Chat Completions 协议的服务，`provider` 仍然统一写成 `openai-compatible`，只替换 `base_url`、`model` 和 `api_key`。
+
 运行：
 
 ```bash
 python -m Turning-Good-Agent chat
 ```
 
-当前真实 LLM 只启用纯文本对话，暂不启用真实模型 tool calling。后续再把 `ToolRegistry.schemas()` 转成模型要求的 tool schema，并在 `AgentLoop` 中补齐 assistant tool_call 消息和 tool result 消息。
+当前真实 LLM 已使用 OpenAI Python SDK 的 `client.chat.completions.create(...)`，并在 `AgentLoop` 中补齐 assistant tool_call 消息和 tool result 消息。后续仍需要把 tool call 结果单独落盘到更清晰的 observability 结构中。

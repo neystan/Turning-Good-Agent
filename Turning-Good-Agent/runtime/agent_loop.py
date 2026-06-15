@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -30,11 +31,35 @@ class AgentLoop:
         working = list(messages)
         tool_records: list[dict[str, Any]] = []
         for _ in range(self.runtime.max_tool_rounds):
-            response = await self.llm.complete(working, self.tools.schemas())
+            response = await self.llm.complete(working, self.tools.openai_tools())
             if not response.tool_calls:
                 return AgentLoopResult(response.content, working, tool_records)
+            working.append(
+                {
+                    "role": "assistant",
+                    "content": response.content,
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.name,
+                                "arguments": json.dumps(call.args, ensure_ascii=False),
+                            },
+                        }
+                        for call in response.tool_calls[: self.runtime.max_tool_calls_per_round]
+                    ],
+                }
+            )
             for call in response.tool_calls[: self.runtime.max_tool_calls_per_round]:
                 record = await self.executor.run(call.name, call.args)
                 tool_records.append(record)
-                working.append({"role": "tool", "name": call.name, "content": record["content"]})
+                working.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "name": call.name,
+                        "content": record["content"],
+                    }
+                )
         return AgentLoopResult("工具调用轮数已达到上限。", working, tool_records)

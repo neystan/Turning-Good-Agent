@@ -25,3 +25,17 @@ class ToolRegistry:
             }
             for tool in self._tools.values()
         ]
+
+    def openai_tools(self) -> list[dict[str, object]]:
+        """返回 OpenAI-compatible tool schema。"""
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.input_schema,
+                },
+            }
+            for tool in self._tools.values()
+        ]

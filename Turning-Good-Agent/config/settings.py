@@ -35,10 +35,13 @@ class SessionSettings:
 class LLMSettings:
     """保存 LLM Provider 配置。"""
 
-    provider: str = "fake"
+    provider: str = "openai-compatible"
     api_key: str | None = None
     base_url: str = "https://api.openai.com/v1"
     model: str | None = None
+    timeout_seconds: float = 60.0
+    max_retries: int = 2
+    retry_delay_seconds: float = 0.5
 
 
 @dataclass(slots=True)
@@ -85,7 +88,7 @@ class Settings:
                 if key in sessions:
                     setattr(settings.sessions, key, sessions[key])
             llm = payload.get("llm", {})
-            for key in ("provider", "api_key", "base_url", "model"):
+            for key in ("provider", "api_key", "base_url", "model", "timeout_seconds", "max_retries", "retry_delay_seconds"):
                 if key in llm:
                     setattr(settings.llm, key, llm[key])
         if data_dir is not None:
@@ -105,6 +108,15 @@ class Settings:
         settings.llm.api_key = os.getenv("TGA_LLM_API_KEY") or settings.llm.api_key
         settings.llm.base_url = os.getenv("TGA_LLM_BASE_URL") or settings.llm.base_url
         settings.llm.model = os.getenv("TGA_LLM_MODEL") or settings.llm.model
+        settings.llm.timeout_seconds = float(
+            os.getenv("TGA_LLM_TIMEOUT_SECONDS", settings.llm.timeout_seconds)
+        )
+        settings.llm.max_retries = int(
+            os.getenv("TGA_LLM_MAX_RETRIES", settings.llm.max_retries)
+        )
+        settings.llm.retry_delay_seconds = float(
+            os.getenv("TGA_LLM_RETRY_DELAY_SECONDS", settings.llm.retry_delay_seconds)
+        )
         settings.memory.compact_token_threshold = int(
             os.getenv("TGA_MEMORY_COMPACT_TOKEN_THRESHOLD", settings.memory.compact_token_threshold)
         )
