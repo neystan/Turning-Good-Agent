@@ -10,7 +10,7 @@ from ..observability.trace import StateTrace
 from ..proactive.manager import ProactiveManager
 from ..sessions.manager import SessionManager
 from ..sessions.store import JsonlSessionStore
-from ..tools.builtin_tools import EchoTool, NowTool
+from ..tools.loader import ToolLoader
 from ..tools.registry import ToolRegistry
 from .agent_loop import AgentLoop
 from .state import TurnState, compact_trace_metadata, next_state, run_state, save_remaining_traces
@@ -44,8 +44,7 @@ class AgentRuntime:
         store = JsonlSessionStore(settings.data_dir)
         sessions = SessionManager(store)
         tools = ToolRegistry()
-        tools.register(EchoTool())
-        tools.register(NowTool())
+        ToolLoader().load(tools, settings)
         return cls(
             settings=settings,
             sessions=sessions,

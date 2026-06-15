@@ -13,10 +13,18 @@ class ToolExecutor:
     async def run(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         """执行单个工具，异常转为错误结果。"""
         started = time.perf_counter()
+        error = None
         try:
-            result = await self.registry.get(tool_name).run(args)
-            content = result.content
-            error = None
+            tool, normalized_args, validation_error = self.registry.prepare_call(tool_name, args)
+            if validation_error:
+                error = validation_error
+                content = f"工具 {tool_name} 参数错误：{validation_error}"
+                args = normalized_args
+            else:
+                assert tool is not None
+                args = normalized_args
+                result = await tool.run(args)
+                content = result.content if hasattr(result, "content") else str(result)
         except Exception as exc:
             error = str(exc)
             content = f"工具 {tool_name} 执行失败：{error}"

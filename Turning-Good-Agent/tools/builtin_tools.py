@@ -8,6 +8,8 @@ class EchoTool:
     """回显输入文本。"""
 
     name = "echo"
+    source = "builtin"
+    discoverable = True
     description = "回显输入文本。"
     input_schema = {
         "type": "object",
@@ -24,6 +26,8 @@ class NowTool:
     """返回当前本地时间。"""
 
     name = "now"
+    source = "builtin"
+    discoverable = True
     description = "返回当前本地时间。"
     input_schema = {"type": "object", "properties": {}}
 

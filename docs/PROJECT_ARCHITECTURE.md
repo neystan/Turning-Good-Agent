@@ -135,13 +135,13 @@ python -m Turning-Good-Agent chat
 
 | 路径 | 作用 |
 | --- | --- |
-| `tools/base.py` | 定义 `BaseTool` 协议、`ToolResult`，后续补充参数归一化和校验入口。 |
-| `tools/registry.py` | 工具注册表，输出模型可见 schema；后续集中处理 `prepare_call()` 和稳定排序。 |
+| `tools/base.py` | 定义 `BaseTool` 协议、`ToolResult`、参数归一化和 JSON Schema 校验函数。 |
+| `tools/registry.py` | 工具注册表，输出模型可见 schema，并通过 `prepare_call()` 集中处理工具查找、参数归一化、参数校验和稳定排序。 |
 | `tools/executor.py` | 工具执行器，处理调用、耗时和结果序列化。 |
-| `tools/loader.py` | 计划新增。自动扫描并加载内置工具，当前不支持 entry_points 插件。 |
+| `tools/loader.py` | 自动扫描并加载内置工具，当前不支持 entry_points 插件。 |
 | `tools/builtin_tools.py` | 当前内置 `echo` 和 `now`。 |
 
-Tools 下一步边界：
+Tools 当前边界：
 
 - 自动加载内置工具，避免每新增一个工具都修改 runtime 组装代码。
 - `ToolRegistry` 负责工具查找、参数安全转换和参数校验。

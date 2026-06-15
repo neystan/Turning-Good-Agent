@@ -157,7 +157,7 @@ python -m Turning-Good-Agent chat
 
 ## Task 3: Tool Foundation
 
-- [ ] **Step 1: 扩展 `BaseTool` 参数边界**
+- [x] **Step 1: 扩展 `BaseTool` 参数边界**
 
 目标：
 
@@ -175,7 +175,7 @@ python -m Turning-Good-Agent chat
 
 当前不引入 nanobot 的完整 `Schema` 类体系。
 
-- [ ] **Step 2: 增加 `ToolRegistry.prepare_call()`**
+- [x] **Step 2: 增加 `ToolRegistry.prepare_call()`**
 
 建议接口：
 
@@ -195,7 +195,7 @@ def prepare_call(
 - 参数校验失败时返回错误列表。
 - 成功时返回工具实例和归一化后的参数。
 
-- [ ] **Step 3: 收敛 `ToolExecutor`**
+- [x] **Step 3: 收敛 `ToolExecutor`**
 
 `ToolExecutor` 不直接 `registry.get(...).run(...)`，而是：
 
@@ -204,7 +204,7 @@ def prepare_call(
 3. 无错误时执行工具。
 4. 记录 `duration_ms` 和 `error`。
 
-- [ ] **Step 4: 增加工具稳定排序**
+- [x] **Step 4: 增加工具稳定排序**
 
 `ToolRegistry` 输出 schema 时使用稳定顺序：
 
@@ -216,7 +216,7 @@ def prepare_call(
 
 ## Task 4: Tool Loader
 
-- [ ] **Step 1: 新增 `tools/loader.py`**
+- [x] **Step 1: 新增 `tools/loader.py`**
 
 目标：
 
@@ -227,7 +227,7 @@ def prepare_call(
 - 调用 `create(settings/context)` 创建工具实例。
 - 注册进 `ToolRegistry`。
 
-- [ ] **Step 2: 给工具类增加最小 metadata**
+- [x] **Step 2: 给工具类增加最小 metadata**
 
 建议字段：
 
@@ -242,11 +242,11 @@ discoverable = True
 source = "mcp"
 ```
 
-- [ ] **Step 3: Runtime 默认使用 loader**
+- [x] **Step 3: Runtime 默认使用 loader**
 
 `AgentRuntime.create_default()` 不再手动注册每个内置工具，而是通过 `ToolLoader` 加载。
 
-- [ ] **Step 4: 明确不做插件系统**
+- [x] **Step 4: 明确不做插件系统**
 
 当前不支持：
 
