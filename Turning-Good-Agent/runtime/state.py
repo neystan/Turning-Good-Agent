@@ -208,7 +208,10 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
 
 async def respond(ctx: TurnContext) -> str:
     """构造出站消息。"""
-    ctx.outbound = OutboundMessage.new(ctx.inbound.session_id, ctx.inbound.channel, ctx.final_content)
+    if ctx.error:
+        ctx.outbound = OutboundMessage.error(ctx.inbound.session_id, ctx.inbound.channel, ctx.final_content)
+    else:
+        ctx.outbound = OutboundMessage.completed(ctx.inbound.session_id, ctx.inbound.channel, ctx.final_content)
     return "ok"
 
 

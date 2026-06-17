@@ -42,6 +42,7 @@ class OutboundMessage:
     session_id: str
     target_channel: str
     content: str
+    event_type: str = "response.completed"
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=utc_now_iso)
 
@@ -49,3 +50,41 @@ class OutboundMessage:
     def new(cls, session_id: str, target_channel: str, content: str) -> "OutboundMessage":
         """创建一条出站消息。"""
         return cls(id=str(uuid4()), session_id=session_id, target_channel=target_channel, content=content)
+
+    @classmethod
+    def started(cls, session_id: str, target_channel: str) -> "OutboundMessage":
+        """创建响应开始事件。"""
+        return cls(
+            id=str(uuid4()),
+            session_id=session_id,
+            target_channel=target_channel,
+            content="",
+            event_type="response.started",
+        )
+
+    @classmethod
+    def delta(cls, session_id: str, target_channel: str, content: str) -> "OutboundMessage":
+        """创建响应增量事件。"""
+        return cls(
+            id=str(uuid4()),
+            session_id=session_id,
+            target_channel=target_channel,
+            content=content,
+            event_type="response.delta",
+        )
+
+    @classmethod
+    def completed(cls, session_id: str, target_channel: str, content: str) -> "OutboundMessage":
+        """创建响应完成事件。"""
+        return cls.new(session_id, target_channel, content)
+
+    @classmethod
+    def error(cls, session_id: str, target_channel: str, content: str) -> "OutboundMessage":
+        """创建响应错误事件。"""
+        return cls(
+            id=str(uuid4()),
+            session_id=session_id,
+            target_channel=target_channel,
+            content=content,
+            event_type="response.error",
+        )

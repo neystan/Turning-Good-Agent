@@ -97,7 +97,7 @@ Modify: `docs/TURNING_GOOD_AGENT_SPEC.md`
 
 ## Task 1: SDK Provider Baseline
 
-- [ ] **Step 1: 增加 OpenAI SDK 依赖**
+- [x] **Step 1: 增加 OpenAI SDK 依赖**
 
 在 `pyproject.toml` 增加：
 
@@ -105,7 +105,7 @@ Modify: `docs/TURNING_GOOD_AGENT_SPEC.md`
 dependencies = ["openai>=1.0.0"]
 ```
 
-- [ ] **Step 2: 改造 `OpenAICompatibleLLM`**
+- [x] **Step 2: 改造 `OpenAICompatibleLLM`**
 
 要求：
 
@@ -126,7 +126,7 @@ response = await asyncio.to_thread(
 )
 ```
 
-- [ ] **Step 3: 本地验证**
+- [x] **Step 3: 本地验证**
 
 运行：
 
@@ -138,7 +138,7 @@ python -m Turning-Good-Agent chat
 
 ## Task 2: Response Normalization
 
-- [ ] **Step 1: 统一解析 SDK message**
+- [x] **Step 1: 统一解析 SDK message**
 
 要求：
 
@@ -147,7 +147,7 @@ python -m Turning-Good-Agent chat
 - 如果 provider 暴露 `reasoning_content`，只用于调试或后续 trace，不直接作为最终用户回复
 - 如果响应没有 `choices` 或没有 `message`，抛出清晰异常
 
-- [ ] **Step 2: 修复“看起来无回复”**
+- [x] **Step 2: 修复“看起来无回复”**
 
 当前真实对话偶发无回复的主要风险是只读取 `message.content`。Phase 2 必须保证：
 
@@ -258,7 +258,7 @@ source = "mcp"
 
 ## Task 5: Tool Schema Adapter
 
-- [ ] **Step 1: 定义 OpenAI-compatible schema 输出规则**
+- [x] **Step 1: 定义 OpenAI-compatible schema 输出规则**
 
 内部 schema：
 
@@ -283,7 +283,7 @@ source = "mcp"
 }
 ```
 
-- [ ] **Step 2: 在 `tools/registry.py` 增加清晰方法**
+- [x] **Step 2: 在 `tools/registry.py` 增加清晰方法**
 
 建议方法：
 
@@ -292,7 +292,7 @@ def openai_tools(self) -> list[dict[str, object]]:
     """返回 OpenAI-compatible tool schema。"""
 ```
 
-- [ ] **Step 3: 本地验证**
+- [x] **Step 3: 本地验证**
 
 运行：
 
@@ -310,7 +310,7 @@ time
 
 ## Task 6: Parse Real Tool Calls
 
-- [ ] **Step 1: 修改 `OpenAICompatibleLLM.complete()`**
+- [x] **Step 1: 修改 `OpenAICompatibleLLM.complete()`**
 
 要求：
 
@@ -319,7 +319,7 @@ time
 - 把每个 tool call 转成统一 `ToolCall`
 - `arguments` 必须 JSON parse，失败时返回空 dict 并保留错误 metadata
 
-- [ ] **Step 2: 统一返回**
+- [x] **Step 2: 统一返回**
 
 当模型返回工具调用时：
 
@@ -335,11 +335,11 @@ return LLMResponse(content=message.content or "")
 
 ## Task 7: AgentLoop Message Protocol
 
-- [ ] **Step 1: 保存 assistant tool call 消息**
+- [x] **Step 1: 保存 assistant tool call 消息**
 
 在执行工具前，把 assistant tool call message 追加到 `working`。
 
-- [ ] **Step 2: 保存 tool result 消息**
+- [x] **Step 2: 保存 tool result 消息**
 
 工具执行后追加：
 
@@ -352,7 +352,7 @@ return LLMResponse(content=message.content or "")
 }
 ```
 
-- [ ] **Step 3: 达到 max_tool_rounds 后返回明确文本**
+- [x] **Step 3: 达到 max_tool_rounds 后返回明确文本**
 
 继续沿用：
 
@@ -401,7 +401,7 @@ streaming_enabled: bool = False
 }
 ```
 
-默认值设为 `true`，CLI 默认启用流式打印；关闭时回退到完整回复模式。
+默认值设为 `false`，用户显式开启后 CLI 启用流式打印；关闭时回退到完整回复模式。
 
 - [x] **Step 2: 定义 `LLMChunk`**
 
@@ -442,7 +442,7 @@ client.chat.completions.create(
 - 最终仍只把完整 assistant message 写入 `messages.jsonl`
 - 如果模型返回完整 tool call，则继续交给现有工具循环执行
 
-- [ ] **Step 5: OutboundMessage 增加流式事件语义**
+- [x] **Step 5: OutboundMessage 增加流式事件语义**
 
 建议事件：
 
@@ -453,7 +453,7 @@ response.completed
 response.error
 ```
 
-当前 CLI 第一版先通过 Runtime delta 回调即时打印；统一 `OutboundMessage` 事件协议后续在 channel 阶段接入。
+当前 CLI 第一版先通过 Runtime delta 回调即时打印；`OutboundMessage` 已具备事件类型，Web、微信、飞书 channel 在后续阶段接入。
 
 - [x] **Step 6: 明确流式 tool calling 边界**
 
@@ -461,7 +461,7 @@ response.error
 
 ## Task 10: Manual Verification
 
-- [ ] **Step 1: 配置真实模型**
+- [x] **Step 1: 配置真实模型**
 
 编辑 `settings.local.json`：
 
@@ -491,14 +491,14 @@ DeepSeek 等 OpenAI-compatible 服务仍然统一配置为：
 }
 ```
 
-- [ ] **Step 2: 运行 CLI**
+- [x] **Step 2: 运行 CLI**
 
 ```bash
 cd /download/Turning-Good-Agent
 python -m Turning-Good-Agent chat
 ```
 
-- [ ] **Step 3: 手动输入**
+- [x] **Step 3: 手动输入**
 
 ```text
 现在几点？
@@ -510,7 +510,7 @@ python -m Turning-Good-Agent chat
 - CLI 返回包含当前时间的回答
 - session 目录中能看到 tool 调用记录
 
-- [ ] **Step 4: 手动验证流式开关**
+- [x] **Step 4: 手动验证流式开关**
 
 把 `settings.local.json` 改为：
 
