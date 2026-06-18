@@ -111,7 +111,6 @@ python -m Turning-Good-Agent chat
 | --- | --- |
 | `context/system_prompt.py` | MVP system prompt。 |
 | `context/builder.py` | 组装 system prompt、长期偏好、summary、tool schema、历史消息和当前用户消息。 |
-| `context/budget.py` | token 估算工具。优先使用 `tiktoken`，不可用时使用本地估算。 |
 
 ### 4.7 `memory/`
 
@@ -156,15 +155,15 @@ Tools 当前边界：
 | 路径 | 作用 |
 | --- | --- |
 | `llm/client.py` | `LLMProvider` 协议。 |
-| `llm/types.py` | 定义 `LLMResponse`、`ToolCall` 和 `LLMChunk`。 |
-| `llm/openai_compatible.py` | 基于 OpenAI Python SDK 的 OpenAI-compatible Chat Completions 接入，负责解析文本、`tool_calls` 和流式 chunk。 |
+| `llm/types.py` | 定义 `LLMResponse`、`LLMUsage`、`ToolCall` 和 `LLMChunk`。 |
+| `llm/openai_compatible.py` | 基于 OpenAI Python SDK 的 OpenAI-compatible Chat Completions 接入，负责解析文本、`tool_calls`、usage 和流式 chunk。 |
 
 当前真实 LLM 接入边界：
 
 - `OpenAICompatibleLLM` 使用 OpenAI Python SDK 的 `client.chat.completions.create(...)`。
 - 当前只保留 `openai_compatible` 这一类接入；DeepSeek、Qwen 等兼容服务也统一通过这一路径接入。
 - 真实模型返回 `content` 为空但包含 `tool_calls` 时，不会被当作无回复；会交给 `AgentLoop` 执行工具循环。
-- 流式输出作为 `openai_compatible` 接入族的可选能力，通过 `settings.llm.streaming_enabled` 开启，默认开启。
+- 流式输出作为 `openai_compatible` 接入族的可选能力，通过 `settings.llm.streaming_enabled` 开启，默认关闭。
 - 第一版 CLI 会逐段打印文本 delta；tool call 参数片段只在 LLM 层内部合并，完整 tool call 仍交给现有 AgentLoop 执行。
 - 多 channel 流式展示后置。
 - 当前仍缺少独立的 tool call 落盘结构，后续 observability 会继续补齐。
@@ -176,7 +175,11 @@ Tools 当前边界：
 | 路径 | 作用 |
 | --- | --- |
 | `observability/trace.py` | 定义状态级 trace 记录。 |
-| `observability/token_monitor.py` | 计算并记录每轮 token 使用数据。 |
+| `observability/token_monitor.py` | 归一化每轮 token、压缩和工具调用统计，强制使用真实 LLM usage。 |
+
+消息级 `token_count` 同样来自真实 usage：用户消息写入本轮 `input_tokens`，助手消息写入本轮 `output_tokens`。`input_tokens` 是完整模型输入，不是用户文本自身 token。
+
+`turn_traces.jsonl` 由 `JsonlSessionStore.save_turn_traces()` 在单轮结束后批量写入，文件格式仍保持一行一个状态，便于后续观测面板按状态时间线读取。
 
 当前 COMPACT 公开观测字段只有：
 

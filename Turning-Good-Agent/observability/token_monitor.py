@@ -1,24 +1,34 @@
-from ..context.budget import estimate_tokens
+from ..llm.types import LLMUsage
 
 
 class TokenMonitor:
     """记录单轮和会话累计 token 使用量。"""
 
-    def record(
+    def record_llm_usage(
         self,
-        input_text: str,
-        output_text: str,
-        compacted: bool,
+        usage: LLMUsage,
         previous_total_tokens: int,
-    ) -> dict[str, int]:
-        """返回本轮 token 和会话累计 token。"""
-        input_tokens = estimate_tokens(input_text)
-        output_tokens = estimate_tokens(output_text)
-        turn_total = input_tokens + output_tokens
+        compacted: bool = False,
+        compacted_message_count: int = 0,
+        compacted_token_count: int = 0,
+        raw_window_message_count: int = 0,
+        raw_window_token_count: int = 0,
+        tool_call_count: int = 0,
+        tool_names: list[str] | None = None,
+    ) -> dict[str, int | list[str]]:
+        """使用模型真实 usage 生成完整 token 记录。"""
+        if usage.total_tokens <= 0:
+            raise ValueError("LLM usage 缺少有效 total_tokens。")
         return {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "turn_total_tokens": turn_total,
-            "total_tokens": previous_total_tokens + turn_total,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "turn_total_tokens": usage.total_tokens,
+            "total_tokens": previous_total_tokens + usage.total_tokens,
             "compacted": int(compacted),
+            "compacted_message_count": compacted_message_count,
+            "compacted_token_count": compacted_token_count,
+            "raw_window_message_count": raw_window_message_count,
+            "raw_window_token_count": raw_window_token_count,
+            "tool_call_count": tool_call_count,
+            "tool_names": tool_names or [],
         }

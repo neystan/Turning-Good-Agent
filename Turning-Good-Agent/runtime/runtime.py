@@ -66,8 +66,7 @@ class AgentRuntime:
                     event = await run_state(self, ctx)
                 except Exception as exc:
                     ctx.error = str(exc)
-                    if not ctx.final_content:
-                        ctx.final_content = f"请求失败：{ctx.error}"
+                    ctx.final_content = f"请求失败：{ctx.error}"
                     event = "error"
                 duration_ms = (time.perf_counter() - started) * 1000
                 metadata = {}

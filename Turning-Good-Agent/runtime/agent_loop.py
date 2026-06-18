@@ -6,7 +6,7 @@ from typing import Any
 
 from ..config.settings import RuntimeSettings
 from ..llm.client import LLMProvider
-from ..llm.types import LLMResponse
+from ..llm.types import LLMResponse, LLMUsage
 from ..tools.executor import ToolExecutor
 from ..tools.registry import ToolRegistry
 
@@ -18,6 +18,7 @@ class AgentLoopResult:
     final_content: str
     messages: list[dict[str, Any]]
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    usage: LLMUsage | None = None
 
 
 class AgentLoop:
@@ -44,10 +45,12 @@ class AgentLoop:
         """运行模型调用和工具循环直到得到最终文本。"""
         working = list(messages)
         tool_records: list[dict[str, Any]] = []
+        usage = LLMUsage()
         for _ in range(self.runtime.max_tool_rounds):
             response = await self._complete(working, self.tools.openai_tools(), on_delta)
+            usage = usage.add(response.usage)
             if not response.tool_calls:
-                return AgentLoopResult(response.content, working, tool_records)
+                return AgentLoopResult(response.content, working, tool_records, usage)
             working.append(
                 {
                     "role": "assistant",
@@ -76,7 +79,7 @@ class AgentLoop:
                         "content": record["content"],
                     }
                 )
-        return AgentLoopResult("工具调用轮数已达到上限。", working, tool_records)
+        return AgentLoopResult("工具调用轮数已达到上限。", working, tool_records, usage)
 
     async def _complete(
         self,
@@ -90,7 +93,9 @@ class AgentLoop:
 
         content_parts: list[str] = []
         tool_calls = []
+        usage = LLMUsage()
         async for chunk in self.llm.stream(messages, tools):
+            usage = usage.add(chunk.usage)
             if chunk.delta_text:
                 content_parts.append(chunk.delta_text)
                 if on_delta is not None:
@@ -99,4 +104,4 @@ class AgentLoop:
                         await emitted
             if chunk.tool_calls:
                 tool_calls = chunk.tool_calls
-        return LLMResponse(content="".join(content_parts), tool_calls=tool_calls)
+        return LLMResponse(content="".join(content_parts), tool_calls=tool_calls, usage=usage)

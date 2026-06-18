@@ -7,7 +7,6 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from ..bus.messages import utc_now_iso
-from ..context.budget import estimate_tokens
 from .types import MessageRecord, Session
 
 
@@ -78,7 +77,6 @@ class JsonlSessionStore:
         """保存一条会话消息。"""
         now = utc_now_iso()
         metadata = metadata or {}
-        counted_tokens = token_count if token_count > 0 else estimate_tokens(content)
         record = MessageRecord(
             id=str(uuid4()),
             session_id=session_id,
@@ -86,7 +84,7 @@ class JsonlSessionStore:
             content=content,
             name=name,
             tool_call_id=tool_call_id,
-            token_count=counted_tokens,
+            token_count=token_count,
             created_at=now,
             metadata=metadata,
         )
@@ -123,19 +121,15 @@ class JsonlSessionStore:
 
     async def save_trace(self, trace: Any) -> None:
         """保存单条状态 trace。"""
-        self._append_jsonl(
-            self._traces_file(trace.session_id),
-            {
-                "id": str(uuid4()),
-                "turn_id": trace.turn_id,
-                "session_id": trace.session_id,
-                "state": trace.state,
-                "duration_ms": trace.duration_ms,
-                "event": trace.event,
-                "error": trace.error,
-                "metadata": getattr(trace, "metadata", {}),
-            },
-        )
+        await self.save_turn_traces([trace])
+
+    async def save_turn_traces(self, traces: list[Any]) -> None:
+        """批量保存同一轮状态 trace。"""
+        if not traces:
+            return
+        session_id = traces[0].session_id
+        rows = [self._trace_to_dict(trace) for trace in traces]
+        self._append_jsonl_rows(self._traces_file(session_id), rows)
 
     async def save_token_usage(self, turn_id: str, session_id: str, usage: dict[str, Any]) -> None:
         """保存单轮 token 使用量。"""
@@ -183,9 +177,16 @@ class JsonlSessionStore:
 
     def _append_jsonl(self, path: Path, row: dict[str, Any]) -> None:
         """向 JSONL 文件追加一行。"""
+        self._append_jsonl_rows(path, [row])
+
+    def _append_jsonl_rows(self, path: Path, rows: list[dict[str, Any]]) -> None:
+        """向 JSONL 文件批量追加多行。"""
+        if not rows:
+            return
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as file:
-            file.write(json.dumps(row, ensure_ascii=False) + "\n")
+            for row in rows:
+                file.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     def _read_jsonl(self, path: Path) -> list[dict[str, Any]]:
         """读取 JSONL 文件，不存在时返回空列表。"""
@@ -293,6 +294,19 @@ class JsonlSessionStore:
             "token_count": record.token_count,
             "created_at": record.created_at,
             "metadata": record.metadata,
+        }
+
+    def _trace_to_dict(self, trace: Any) -> dict[str, Any]:
+        """将状态 trace 转换为可写入 JSONL 的字典。"""
+        return {
+            "id": str(uuid4()),
+            "turn_id": trace.turn_id,
+            "session_id": trace.session_id,
+            "state": trace.state,
+            "duration_ms": trace.duration_ms,
+            "event": trace.event,
+            "error": trace.error,
+            "metadata": getattr(trace, "metadata", {}),
         }
 
     def _dict_to_message(self, row: dict[str, Any]) -> MessageRecord:

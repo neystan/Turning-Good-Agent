@@ -52,7 +52,6 @@ Turning-Good-Agent/
 
   context/
     builder.py
-    budget.py
     system_prompt.py
 
   llm/
@@ -128,7 +127,7 @@ PREPARE -> RUN -> SAVE -> COMPACT -> RESPOND -> DONE
 - 保存当前 user / assistant 消息
 - 记录本轮 token 基础数据
 - 判断本轮结束后是否需要压缩
-- 保存 SAVE 之前已经产生的 trace
+- 单轮结束后批量保存 trace
 
 #### COMPACT
 
@@ -188,6 +187,8 @@ data/
 - `summary`
 - `metadata`
 
+Runtime 在单轮结束后通过 `save_turn_traces()` 批量写入本轮 trace，文件格式仍保持一行一个状态。
+
 #### messages.jsonl
 
 逐条保存：
@@ -196,6 +197,8 @@ data/
 - `content`
 - `token_count`
 - `created_at`
+
+`token_count` 只来自 LLM SDK 返回的真实 usage。本轮用户消息写入 `input_tokens`，助手消息写入 `output_tokens`，两条消息相加等于本轮 `turn_total_tokens`。这里的 `input_tokens` 包含 system prompt、历史上下文、工具 schema 等完整模型输入，不等同于用户本句话的纯文本 token。
 
 #### turn_traces.jsonl
 
@@ -220,6 +223,10 @@ data/
 - `compacted_token_count`
 - `raw_window_message_count`
 - `raw_window_token_count`
+- `tool_call_count`
+- `tool_names`
+
+Slash command 快捷路径不调用 LLM，因此不写入 `messages.jsonl` 和 `token_usage.jsonl`。
 
 ## 6. 短期记忆与 COMPACT 策略
 

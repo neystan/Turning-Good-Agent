@@ -1,4 +1,3 @@
-from ..context.budget import estimate_tokens
 from ..sessions.types import MessageRecord
 
 
@@ -36,8 +35,8 @@ class ShortTermMemory:
         return "\n".join(parts)
 
     def count_tokens(self, messages: list[MessageRecord]) -> int:
-        """统计消息 token，优先使用持久化 token_count。"""
-        return sum(item.token_count if item.token_count > 0 else estimate_tokens(item.content) for item in messages)
+        """统计消息持久化的真实 token 权重。"""
+        return sum(item.token_count for item in messages)
 
     def complete_turns(self, messages: list[MessageRecord]) -> list[list[MessageRecord]]:
         """按 user/assistant 组合提取完整对话。"""

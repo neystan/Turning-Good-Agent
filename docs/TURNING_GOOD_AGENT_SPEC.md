@@ -105,14 +105,14 @@ PREPARE -> RUN -> SAVE -> COMPACT -> RESPOND
 
 - 保存当前 user message
 - 保存当前 assistant message
-- 保存 SAVE 前已产生的 trace
-- 计算本轮 token usage 基础数据
-- 判断是否需要进入压缩
+- 生成本轮 token usage 基础数据
+- 不做压缩判定
 
 ### COMPACT
 
 职责：
 
+- 基于保存后的完整历史判断是否需要压缩
 - 基于保存后的完整历史执行压缩
 - 更新 `summary`
 - 更新内部压缩游标
@@ -192,6 +192,8 @@ CLI / Web / WeChat / Feishu
 - `token_count`
 - `created_at`
 
+`token_count` 只来自 LLM SDK 返回的真实 usage。本轮用户消息写入 `input_tokens`，助手消息写入 `output_tokens`，两条消息相加等于本轮 `turn_total_tokens`。这里的 `input_tokens` 包含 system prompt、历史上下文、工具 schema 等完整模型输入，不等同于用户本句话的纯文本 token。
+
 `turn_traces.jsonl` 保存状态流转：
 
 - `turn_id`
@@ -201,6 +203,8 @@ CLI / Web / WeChat / Feishu
 - `event`
 - `error`
 - `metadata`
+
+Runtime 在单轮结束后通过 `save_turn_traces()` 批量写入本轮 trace，文件格式仍保持一行一个状态。
 
 `token_usage.jsonl` 保存 token 与压缩观测：
 
@@ -213,6 +217,11 @@ CLI / Web / WeChat / Feishu
 - `compacted_token_count`
 - `raw_window_message_count`
 - `raw_window_token_count`
+- `tool_call_count`
+- `tool_names`
+
+token 统计必须使用 LLM SDK 返回的真实 `usage`。如果 provider 没有返回 usage，本轮会进入错误响应，不写入 `token_usage.jsonl`。
+Slash command 快捷路径不调用 LLM，因此不写入 `messages.jsonl` 和 `token_usage.jsonl`。
 
 ## 7. Memory
 

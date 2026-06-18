@@ -82,6 +82,7 @@ async def run(runtime: AgentRuntime, ctx: TurnContext) -> str:
     result = await runtime.agent_loop.run(ctx.model_messages, ctx.on_delta)
     ctx.final_content = result.final_content
     ctx.tool_calls = result.tool_calls
+    ctx.llm_usage = result.usage
     return "ok"
 
 
@@ -92,36 +93,21 @@ async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
         ctx.saved_trace_count = len(ctx.trace)
         return "ok"
     previous_total = int((ctx.session.metadata if ctx.session else {}).get("session_total_tokens", 0))
-    input_tokens = runtime.token_monitor.record(ctx.inbound.content, "", False, 0)["input_tokens"]
-    output_tokens = runtime.token_monitor.record("", ctx.final_content, False, 0)["output_tokens"]
-    await runtime.sessions.save_user_message(session_id, ctx.inbound.content, input_tokens)
-    await runtime.sessions.save_assistant_message(session_id, ctx.final_content, output_tokens)
-    ctx.compact_stats = await build_compaction_stats(runtime, session_id)
-    ctx.should_compact = bool(ctx.compact_stats["should_compact"])
-    usage = runtime.token_monitor.record(
-        ctx.inbound.content,
-        ctx.final_content,
-        ctx.should_compact,
-        previous_total,
+    if ctx.llm_usage is None:
+        raise RuntimeError("本轮 LLM 响应缺少 usage，无法写入 token_usage.jsonl。")
+    usage = runtime.token_monitor.record_llm_usage(
+        ctx.llm_usage,
+        previous_total_tokens=previous_total,
+        tool_call_count=len(ctx.tool_calls),
+        tool_names=[record["tool_name"] for record in ctx.tool_calls],
     )
-    usage.update(
-        {
-            "compacted_message_count": 0,
-            "compacted_token_count": 0,
-            "raw_window_message_count": 0,
-            "raw_window_token_count": 0,
-            "tool_call_count": len(ctx.tool_calls),
-            "tool_names": [record["tool_name"] for record in ctx.tool_calls],
-        }
-    )
+    await runtime.sessions.save_user_message(session_id, ctx.inbound.content, int(usage["input_tokens"]))
+    await runtime.sessions.save_assistant_message(session_id, ctx.final_content, int(usage["output_tokens"]))
     ctx.token_usage = usage
     await runtime.sessions.store.update_metadata(
         session_id,
         {"session_total_tokens": usage["total_tokens"]},
     )
-    for trace in ctx.trace:
-        await runtime.sessions.store.save_trace(trace)
-    ctx.saved_trace_count = len(ctx.trace)
     await runtime.proactive.emit(CONVERSATION_COMPLETED, {"session_id": session_id, "turn_id": ctx.turn_id})
     return "ok"
 
@@ -133,17 +119,17 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
     if ctx.session is None:
         await runtime.sessions.store.save_token_usage(ctx.turn_id, ctx.inbound.session_id, ctx.token_usage)
         return "ok"
-    if not ctx.compact_stats:
-        ctx.compact_stats = await build_compaction_stats(runtime, ctx.session.id)
+    ctx.compact_stats = await build_compaction_stats(runtime, ctx.session.id)
+    ctx.should_compact = bool(ctx.compact_stats["should_compact"])
     if not ctx.should_compact:
-        ctx.token_usage.update(
-            {
-                "compacted": 0,
-                "compacted_message_count": 0,
-                "compacted_token_count": 0,
-                "raw_window_message_count": int(ctx.compact_stats["raw_window_message_count"]),
-                "raw_window_token_count": int(ctx.compact_stats["raw_window_token_count"]),
-            }
+        ctx.token_usage = build_token_usage(
+            runtime,
+            ctx,
+            compacted=False,
+            compacted_message_count=0,
+            compacted_token_count=0,
+            raw_window_message_count=int(ctx.compact_stats["raw_window_message_count"]),
+            raw_window_token_count=int(ctx.compact_stats["raw_window_token_count"]),
         )
         await runtime.sessions.store.save_token_usage(ctx.turn_id, ctx.inbound.session_id, ctx.token_usage)
         return "ok"
@@ -158,14 +144,14 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
     compact_source = uncompacted_history[: len(uncompacted_history) - len(recent_history)]
     compact_until = compacted_count + len(compact_source)
     if not compact_source:
-        ctx.token_usage.update(
-            {
-                "compacted": 0,
-                "compacted_message_count": 0,
-                "compacted_token_count": 0,
-                "raw_window_message_count": int(ctx.compact_stats["raw_window_message_count"]),
-                "raw_window_token_count": int(ctx.compact_stats["raw_window_token_count"]),
-            }
+        ctx.token_usage = build_token_usage(
+            runtime,
+            ctx,
+            compacted=False,
+            compacted_message_count=0,
+            compacted_token_count=0,
+            raw_window_message_count=int(ctx.compact_stats["raw_window_message_count"]),
+            raw_window_token_count=int(ctx.compact_stats["raw_window_token_count"]),
         )
         await runtime.sessions.store.save_token_usage(ctx.turn_id, ctx.inbound.session_id, ctx.token_usage)
         return "ok"
@@ -193,14 +179,14 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
             "raw_window_token_count": raw_window_token_count,
         }
     )
-    ctx.token_usage.update(
-        {
-            "compacted": 1,
-            "compacted_message_count": len(compact_source),
-            "compacted_token_count": compacted_token_count,
-            "raw_window_message_count": len(recent_history),
-            "raw_window_token_count": raw_window_token_count,
-        }
+    ctx.token_usage = build_token_usage(
+        runtime,
+        ctx,
+        compacted=True,
+        compacted_message_count=len(compact_source),
+        compacted_token_count=compacted_token_count,
+        raw_window_message_count=len(recent_history),
+        raw_window_token_count=raw_window_token_count,
     )
     await runtime.sessions.store.save_token_usage(ctx.turn_id, ctx.inbound.session_id, ctx.token_usage)
     return "ok"
@@ -219,9 +205,37 @@ async def save_remaining_traces(runtime: AgentRuntime, ctx: TurnContext) -> None
     """补保存 SAVE 后才产生的状态 trace。"""
     if ctx.shortcut_response is not None:
         return
-    for trace in ctx.trace[ctx.saved_trace_count:]:
-        await runtime.sessions.store.save_trace(trace)
+    await runtime.sessions.store.save_turn_traces(ctx.trace[ctx.saved_trace_count:])
     ctx.saved_trace_count = len(ctx.trace)
+
+
+def build_token_usage(
+    runtime: AgentRuntime,
+    ctx: TurnContext,
+    compacted: bool,
+    compacted_message_count: int,
+    compacted_token_count: int,
+    raw_window_message_count: int,
+    raw_window_token_count: int,
+) -> dict[str, int | list[str]]:
+    """用真实 LLM usage 生成当前 turn 的完整 token 记录。"""
+    if ctx.llm_usage is None:
+        raise RuntimeError("本轮 LLM 响应缺少 usage，无法写入 token_usage.jsonl。")
+    if ctx.token_usage:
+        previous_total = int(ctx.token_usage["total_tokens"]) - ctx.llm_usage.total_tokens
+    else:
+        previous_total = int((ctx.session.metadata if ctx.session else {}).get("session_total_tokens", 0))
+    return runtime.token_monitor.record_llm_usage(
+        ctx.llm_usage,
+        previous_total_tokens=previous_total,
+        compacted=compacted,
+        compacted_message_count=compacted_message_count,
+        compacted_token_count=compacted_token_count,
+        raw_window_message_count=raw_window_message_count,
+        raw_window_token_count=raw_window_token_count,
+        tool_call_count=len(ctx.tool_calls),
+        tool_names=[record["tool_name"] for record in ctx.tool_calls],
+    )
 
 
 async def build_compaction_stats(runtime: AgentRuntime, session_id: str) -> dict[str, int | bool]:

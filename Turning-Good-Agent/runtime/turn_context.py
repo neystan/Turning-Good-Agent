@@ -20,9 +20,10 @@ class TurnContext:
     final_content: str = ""
     shortcut_response: str | None = None
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    llm_usage: Any | None = None
     trace: list[Any] = field(default_factory=list)
     saved_trace_count: int = 0
-    token_usage: dict[str, int] = field(default_factory=dict)
+    token_usage: dict[str, Any] = field(default_factory=dict)
     should_compact: bool = False
     compact_stats: dict[str, Any] = field(default_factory=dict)
     outbound: OutboundMessage | None = None

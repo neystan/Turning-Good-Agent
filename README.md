@@ -97,8 +97,9 @@ flowchart TD
     Tools --> Builtins[echo / now]
 
     Save --> Trace[StateTrace]
-    Save --> Token[TokenMonitor]
+    Save --> Token[TokenMonitor usage base]
     Save --> Proactive[ProactiveManager]
+    Compact --> TokenUsage[token_usage.jsonl]
 
     Respond --> Outbound[OutboundMessage]
     Outbound --> CLIOut[CLI Output]

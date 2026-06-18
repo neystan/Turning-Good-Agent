@@ -5,7 +5,7 @@ from typing import Any
 
 from openai import APIConnectionError, APITimeoutError, BadRequestError, InternalServerError, OpenAI, RateLimitError
 
-from .types import LLMChunk, LLMResponse, ToolCall
+from .types import LLMChunk, LLMResponse, LLMUsage, ToolCall
 
 
 class OpenAICompatibleLLM:
@@ -50,6 +50,7 @@ class OpenAICompatibleLLM:
         return LLMResponse(
             content=content,
             tool_calls=self._parse_tool_calls(getattr(message, "tool_calls", None)),
+            usage=self._parse_usage(getattr(response, "usage", None)),
         )
 
     async def stream(
@@ -65,6 +66,9 @@ class OpenAICompatibleLLM:
             event = await asyncio.to_thread(self._next_stream_event, iterator)
             if event is None:
                 break
+            usage = self._parse_usage(getattr(event, "usage", None))
+            if usage is not None:
+                yield LLMChunk(usage=usage)
             choices = getattr(event, "choices", None) or []
             for choice in choices:
                 delta = getattr(choice, "delta", None)
@@ -90,12 +94,17 @@ class OpenAICompatibleLLM:
         attempt = 0
         while True:
             try:
+                payload = {
+                    "model": self.model,
+                    "messages": messages,
+                    "tools": tools or None,
+                    "stream": stream,
+                }
+                if stream:
+                    payload["stream_options"] = {"include_usage": True}
                 return await asyncio.to_thread(
                     self.client.chat.completions.create,
-                    model=self.model,
-                    messages=messages,
-                    tools=tools or None,
-                    stream=stream,
+                    **payload,
                 )
             except (APITimeoutError, APIConnectionError, RateLimitError, InternalServerError):
                 attempt += 1
@@ -134,6 +143,17 @@ class OpenAICompatibleLLM:
         except json.JSONDecodeError:
             return {}
         return parsed if isinstance(parsed, dict) else {}
+
+    def _parse_usage(self, usage: Any) -> LLMUsage | None:
+        """解析 SDK 返回的 token usage。"""
+        if usage is None:
+            return None
+        input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        total_tokens = int(getattr(usage, "total_tokens", 0) or 0)
+        if total_tokens <= 0:
+            total_tokens = input_tokens + output_tokens
+        return LLMUsage(input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens)
 
     def _merge_tool_call_deltas(self, parts: dict[int, dict[str, str]], tool_calls: Any) -> None:
         """合并流式 tool call 参数片段。"""
