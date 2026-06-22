@@ -76,7 +76,7 @@ python -m Turning-Good-Agent chat
 
 | 路径 | 作用 |
 | --- | --- |
-| `runtime/state.py` | 定义 5 状态状态机：`PREPARE -> RUN -> SAVE -> COMPACT -> RESPOND`。 |
+| `runtime/state.py` | 定义状态机：`SESSION -> COMMAND -> BUILD -> RUN -> COMPACT -> SAVE -> RESPOND`。 |
 | `runtime/runtime.py` | `AgentRuntime` 总控，串联会话、上下文、AgentLoop、存储、压缩、trace 和响应。 |
 | `runtime/turn_context.py` | 单轮运行上下文，保存 state、history、model messages、tool calls、token usage 等中间状态。 |
 | `runtime/agent_loop.py` | LLM 与 tools 的调用循环，负责追加 assistant tool call 和 tool result working messages。 |

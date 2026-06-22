@@ -4,7 +4,7 @@
 
 **Goal:** 建立本地 skills 扫描、列表、加载和注入机制，为后续自动创建 skill 和 agent 自进化打基础。
 
-**Architecture:** Skills 作为 context 能力，不直接等同于 tools。`skills/` 目录保存 `SKILL.md` 和可选资源，Runtime 在 PREPARE 阶段按需加载技能内容注入上下文。
+**Architecture:** Skills 作为 context 能力，不直接等同于 tools。`skills/` 目录保存 `SKILL.md` 和可选资源，Runtime 在 BUILD 阶段按需加载技能内容注入上下文。
 
 **Tech Stack:** Python 3.11+、Markdown 文件、JSON metadata、pathlib。
 

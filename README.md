@@ -80,26 +80,28 @@ flowchart TD
     Inbound --> Bus[AsyncMessageBus]
     Bus --> Runtime[AgentRuntime]
 
-    Runtime --> Prepare[PREPARE]
-    Prepare --> Run[RUN]
-    Run --> Save[SAVE]
-    Save --> Compact[COMPACT]
-    Compact --> Respond[RESPOND]
+    Runtime --> Session[SESSION]
+    Session --> Command[COMMAND]
+    Command --> Build[BUILD]
+    Build --> Run[RUN]
+    Run --> Compact[COMPACT]
+    Compact --> Save[SAVE]
+    Save --> Respond[RESPOND]
     Respond --> End[turn complete]
 
-    Prepare --> Session[SessionManager + JsonlSessionStore]
-    Prepare --> Memory[ShortTermMemory + ProfileMemory]
-    Prepare --> Context[ContextBuilder]
+    Session --> SessionStore[SessionManager + JsonlSessionStore]
+    Build --> Memory[ShortTermMemory + ProfileMemory]
+    Build --> Context[ContextBuilder]
 
     Run --> AgentLoop[Runtime AgentLoop]
     AgentLoop --> LLM[OpenAI-compatible LLM]
     AgentLoop --> Tools[ToolRegistry + ToolExecutor]
     Tools --> Builtins[echo / now]
 
+    Compact --> Token[TokenMonitor usage base]
     Save --> Trace[StateTrace]
-    Save --> Token[TokenMonitor usage base]
+    Save --> TokenUsage[token_usage.jsonl]
     Save --> Proactive[ProactiveManager]
-    Compact --> TokenUsage[token_usage.jsonl]
 
     Respond --> Outbound[OutboundMessage]
     Outbound --> CLIOut[CLI Output]
@@ -109,7 +111,7 @@ flowchart TD
 
 ```text
 CLI 输入
--> Runtime: PREPARE -> RUN -> SAVE -> COMPACT -> RESPOND
+-> Runtime: SESSION -> COMMAND -> BUILD -> RUN -> COMPACT -> SAVE -> RESPOND
 -> OutboundMessage
 -> CLI 输出
 ```

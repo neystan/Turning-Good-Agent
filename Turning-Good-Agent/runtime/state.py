@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from enum import Enum, auto
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
-from ..bus.messages import OutboundMessage
+from ..bus.messages import OutboundMessage, utc_now_iso
 from ..memory.short_term import ShortTermMemory
 from ..proactive.events import CONVERSATION_COMPLETED
+from ..sessions.types import MessageRecord
 
 if TYPE_CHECKING:
     from .runtime import AgentRuntime
@@ -13,20 +15,25 @@ if TYPE_CHECKING:
 
 
 class TurnState(Enum):
-    """定义单轮 Agent 执行的 5 个工作状态。"""
+    """定义单轮 Agent 执行的显式工作状态。"""
 
-    PREPARE = auto()
+    SESSION = auto()
+    COMMAND = auto()
+    BUILD = auto()
     RUN = auto()
-    SAVE = auto()
     COMPACT = auto()
+    SAVE = auto()
     RESPOND = auto()
 
 
 _TRANSITIONS: dict[tuple[TurnState, str], TurnState | None] = {
-    (TurnState.PREPARE, "ok"): TurnState.RUN,
-    (TurnState.RUN, "ok"): TurnState.SAVE,
-    (TurnState.SAVE, "ok"): TurnState.COMPACT,
-    (TurnState.COMPACT, "ok"): TurnState.RESPOND,
+    (TurnState.SESSION, "ok"): TurnState.COMMAND,
+    (TurnState.COMMAND, "ok"): TurnState.BUILD,
+    (TurnState.COMMAND, "shortcut"): TurnState.RESPOND,
+    (TurnState.BUILD, "ok"): TurnState.RUN,
+    (TurnState.RUN, "ok"): TurnState.COMPACT,
+    (TurnState.COMPACT, "ok"): TurnState.SAVE,
+    (TurnState.SAVE, "ok"): TurnState.RESPOND,
     (TurnState.RESPOND, "ok"): None,
 }
 
@@ -40,24 +47,40 @@ def next_state(state: TurnState, event: str) -> TurnState | None:
 
 async def run_state(runtime: AgentRuntime, ctx: TurnContext) -> str:
     """分发当前状态处理函数。"""
-    if ctx.state is TurnState.PREPARE:
-        return await prepare(runtime, ctx)
+    if ctx.state is TurnState.SESSION:
+        return await session(runtime)
+    if ctx.state is TurnState.COMMAND:
+        return await command(runtime, ctx)
+    if ctx.state is TurnState.BUILD:
+        return await build(runtime, ctx)
     if ctx.state is TurnState.RUN:
         return await run(runtime, ctx)
-    if ctx.state is TurnState.SAVE:
-        return await save(runtime, ctx)
     if ctx.state is TurnState.COMPACT:
         return await compact(runtime, ctx)
+    if ctx.state is TurnState.SAVE:
+        return await save(runtime, ctx)
     return await respond(ctx)
 
 
-async def prepare(runtime: AgentRuntime, ctx: TurnContext) -> str:
-    """加载会话、处理命令并构建上下文。"""
-    msg = ctx.inbound
+async def session(runtime: AgentRuntime) -> str:
+    """清理过期会话并完成会话阶段。"""
     await runtime.sessions.cleanup_expired_sessions(runtime.settings.sessions.retention_days)
+    return "ok"
+
+
+async def command(runtime: AgentRuntime, ctx: TurnContext) -> str:
+    """处理 slash command，命中后跳过模型链路。"""
+    msg = ctx.inbound
     ctx.shortcut_response = await runtime.sessions.handle_inbound_command(msg.session_id, msg)
     if ctx.shortcut_response is not None:
-        return "ok"
+        ctx.final_content = ctx.shortcut_response
+        return "shortcut"
+    return "ok"
+
+
+async def build(runtime: AgentRuntime, ctx: TurnContext) -> str:
+    """加载会话并构建模型输入上下文。"""
+    msg = ctx.inbound
     session = await runtime.sessions.load_or_create(msg.session_id, msg.user_id, msg.channel)
     ctx.session = session
 
@@ -89,37 +112,34 @@ async def run(runtime: AgentRuntime, ctx: TurnContext) -> str:
 async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
     """保存消息、trace、token，并触发主动事件。"""
     session_id = ctx.inbound.session_id
-    if ctx.shortcut_response is not None:
-        ctx.saved_trace_count = len(ctx.trace)
-        return "ok"
-    previous_total = int((ctx.session.metadata if ctx.session else {}).get("session_total_tokens", 0))
     if ctx.llm_usage is None:
         raise RuntimeError("本轮 LLM 响应缺少 usage，无法写入 token_usage.jsonl。")
-    usage = runtime.token_monitor.record_llm_usage(
-        ctx.llm_usage,
-        previous_total_tokens=previous_total,
-        tool_call_count=len(ctx.tool_calls),
-        tool_names=[record["tool_name"] for record in ctx.tool_calls],
-    )
-    await runtime.sessions.save_user_message(session_id, ctx.inbound.content, int(usage["input_tokens"]))
-    await runtime.sessions.save_assistant_message(session_id, ctx.final_content, int(usage["output_tokens"]))
-    ctx.token_usage = usage
+    if not ctx.token_usage:
+        raise RuntimeError("本轮缺少 token_usage，无法执行 SAVE。")
+    await runtime.sessions.save_user_message(session_id, ctx.inbound.content, int(ctx.token_usage["input_tokens"]))
+    await runtime.sessions.save_assistant_message(session_id, ctx.final_content, int(ctx.token_usage["output_tokens"]))
+    if ctx.session is not None:
+        await runtime.sessions.store.update_summary(session_id, ctx.session.summary)
+    compacted_count = int((ctx.session.metadata if ctx.session else {}).get("compacted_message_count", 0))
     await runtime.sessions.store.update_metadata(
         session_id,
-        {"session_total_tokens": usage["total_tokens"]},
+        {
+            "session_total_tokens": ctx.token_usage["total_tokens"],
+            "compacted_message_count": compacted_count,
+        },
     )
+    await runtime.sessions.store.save_token_usage(ctx.turn_id, session_id, ctx.token_usage)
     await runtime.proactive.emit(CONVERSATION_COMPLETED, {"session_id": session_id, "turn_id": ctx.turn_id})
     return "ok"
 
 
 async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
-    """在消息落盘后执行短期记忆压缩。"""
-    if ctx.shortcut_response is not None:
-        return "ok"
+    """在本轮运行结束后更新短期记忆压缩状态。"""
     if ctx.session is None:
-        await runtime.sessions.store.save_token_usage(ctx.turn_id, ctx.inbound.session_id, ctx.token_usage)
         return "ok"
-    ctx.compact_stats = await build_compaction_stats(runtime, ctx.session.id)
+    compacted_count = int(ctx.session.metadata.get("compacted_message_count", 0))
+    uncompacted_history = build_virtual_history(ctx)
+    ctx.compact_stats = build_compaction_stats(runtime, uncompacted_history)
     ctx.should_compact = bool(ctx.compact_stats["should_compact"])
     if not ctx.should_compact:
         ctx.token_usage = build_token_usage(
@@ -131,15 +151,11 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
             raw_window_message_count=int(ctx.compact_stats["raw_window_message_count"]),
             raw_window_token_count=int(ctx.compact_stats["raw_window_token_count"]),
         )
-        await runtime.sessions.store.save_token_usage(ctx.turn_id, ctx.inbound.session_id, ctx.token_usage)
         return "ok"
     memory = ShortTermMemory(
         compact_token_threshold=runtime.settings.memory.compact_token_threshold,
         raw_window_token_limit=runtime.settings.memory.raw_window_token_limit,
     )
-    all_history = await runtime.sessions.all_messages(ctx.session.id)
-    compacted_count = int(ctx.session.metadata.get("compacted_message_count", 0))
-    uncompacted_history = all_history[compacted_count:]
     recent_history = memory.recent_window(uncompacted_history)
     compact_source = uncompacted_history[: len(uncompacted_history) - len(recent_history)]
     compact_until = compacted_count + len(compact_source)
@@ -153,18 +169,10 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
             raw_window_message_count=int(ctx.compact_stats["raw_window_message_count"]),
             raw_window_token_count=int(ctx.compact_stats["raw_window_token_count"]),
         )
-        await runtime.sessions.store.save_token_usage(ctx.turn_id, ctx.inbound.session_id, ctx.token_usage)
         return "ok"
     summary = memory.compact(ctx.session.summary, compact_source)
     compacted_token_count = memory.count_tokens(compact_source)
     raw_window_token_count = memory.count_tokens(recent_history)
-    await runtime.sessions.store.update_summary(ctx.session.id, summary)
-    await runtime.sessions.store.update_metadata(
-        ctx.session.id,
-        {
-            "compacted_message_count": compact_until,
-        },
-    )
     ctx.session.summary = summary
     ctx.session.metadata.update(
         {
@@ -188,7 +196,6 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
         raw_window_message_count=len(recent_history),
         raw_window_token_count=raw_window_token_count,
     )
-    await runtime.sessions.store.save_token_usage(ctx.turn_id, ctx.inbound.session_id, ctx.token_usage)
     return "ok"
 
 
@@ -202,7 +209,7 @@ async def respond(ctx: TurnContext) -> str:
 
 
 async def save_remaining_traces(runtime: AgentRuntime, ctx: TurnContext) -> None:
-    """补保存 SAVE 后才产生的状态 trace。"""
+    """补保存尚未落盘的状态 trace。"""
     if ctx.shortcut_response is not None:
         return
     await runtime.sessions.store.save_turn_traces(ctx.trace[ctx.saved_trace_count:])
@@ -238,24 +245,12 @@ def build_token_usage(
     )
 
 
-async def build_compaction_stats(runtime: AgentRuntime, session_id: str) -> dict[str, int | bool]:
-    """基于保存后的未压缩历史生成压缩统计。"""
-    session = await runtime.sessions.store.load_session(session_id)
-    if session is None:
-        return {
-            "should_compact": False,
-            "compacted_message_count": 0,
-            "compacted_token_count": 0,
-            "raw_window_message_count": 0,
-            "raw_window_token_count": 0,
-        }
-    all_history = await runtime.sessions.all_messages(session_id)
-    compacted_count = int(session.metadata.get("compacted_message_count", 0))
+def build_compaction_stats(runtime: AgentRuntime, uncompacted_history: list[MessageRecord]) -> dict[str, int | bool]:
+    """基于内存中的未压缩历史生成压缩统计。"""
     memory = ShortTermMemory(
         compact_token_threshold=runtime.settings.memory.compact_token_threshold,
         raw_window_token_limit=runtime.settings.memory.raw_window_token_limit,
     )
-    uncompacted_history = all_history[compacted_count:]
     recent_history = memory.recent_window(uncompacted_history)
     compact_source = uncompacted_history[: len(uncompacted_history) - len(recent_history)]
     return {
@@ -265,6 +260,38 @@ async def build_compaction_stats(runtime: AgentRuntime, session_id: str) -> dict
         "raw_window_message_count": len(recent_history),
         "raw_window_token_count": memory.count_tokens(recent_history),
     }
+
+
+def build_virtual_history(ctx: TurnContext) -> list[MessageRecord]:
+    """返回包含本轮 user/assistant 的临时完整历史。"""
+    if ctx.llm_usage is None:
+        raise RuntimeError("本轮 LLM 响应缺少 usage，无法执行 COMPACT。")
+    now = utc_now_iso()
+    return [
+        *ctx.history,
+        MessageRecord(
+            id=str(uuid4()),
+            session_id=ctx.inbound.session_id,
+            role="user",
+            content=ctx.inbound.content,
+            name=None,
+            tool_call_id=None,
+            token_count=ctx.llm_usage.input_tokens,
+            created_at=now,
+            metadata={},
+        ),
+        MessageRecord(
+            id=str(uuid4()),
+            session_id=ctx.inbound.session_id,
+            role="assistant",
+            content=ctx.final_content,
+            name=None,
+            tool_call_id=None,
+            token_count=ctx.llm_usage.output_tokens,
+            created_at=now,
+            metadata={},
+        ),
+    ]
 
 
 def compact_trace_metadata(ctx: TurnContext) -> dict[str, int]:

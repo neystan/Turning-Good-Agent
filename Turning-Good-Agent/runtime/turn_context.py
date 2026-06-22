@@ -12,7 +12,7 @@ class TurnContext:
     """保存一轮消息处理过程中的临时状态。"""
 
     inbound: InboundMessage
-    state: TurnState = TurnState.PREPARE
+    state: TurnState = TurnState.SESSION
     turn_id: str = field(default_factory=lambda: str(uuid4()))
     session: Any | None = None
     history: list[Any] = field(default_factory=list)

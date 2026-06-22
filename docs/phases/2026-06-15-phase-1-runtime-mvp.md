@@ -4,7 +4,7 @@
 
 **Goal:** 建立最小可运行的 CLI-first Agent Runtime，完成会话、状态机、JSON 存储、基础 tools、短期压缩和可观测性。
 
-**Architecture:** Phase 1 以 `AgentRuntime` 为中心，channel 只负责收发消息。Runtime 使用 `PREPARE -> RUN -> SAVE -> COMPACT -> RESPOND` 状态机，所有会话数据写入本地 JSON/JSONL 文件。
+**Architecture:** Phase 1 以 `AgentRuntime` 为中心，channel 只负责收发消息。Runtime 当前使用 `SESSION -> COMMAND -> BUILD -> RUN -> COMPACT -> SAVE -> RESPOND` 状态机，所有会话数据写入本地 JSON/JSONL 文件。
 
 **Tech Stack:** Python 3.11+、asyncio、argparse、JSON/JSONL、OpenAI-compatible 接口、pytest 本地验证。
 
@@ -18,7 +18,7 @@
 
 - CLI 入口
 - `InboundMessage` / `OutboundMessage`
-- 5 状态 Runtime
+- 显式 Runtime 状态机
 - OpenAI-compatible 纯文本对话
 - `ToolRegistry` / `ToolExecutor`
 - 内置 `echo` / `now`

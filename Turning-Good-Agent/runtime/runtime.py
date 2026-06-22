@@ -19,7 +19,7 @@ from .turn_context import TurnContext
 
 
 class AgentRuntime:
-    """驱动单轮消息处理的 5 状态 Runtime。"""
+    """驱动单轮消息处理的状态机 Runtime。"""
 
     def __init__(
         self,
