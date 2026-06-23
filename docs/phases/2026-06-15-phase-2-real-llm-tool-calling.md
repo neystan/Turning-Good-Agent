@@ -112,14 +112,13 @@ dependencies = ["openai>=1.0.0"]
 - 使用 `OpenAI(api_key=..., base_url=...)`
 - 使用 `client.chat.completions.create(...)`
 - 保留 `model`、`messages`、`tools` 参数入口
-- SDK 调用放入线程执行，避免阻塞当前 async runtime
+- 外层保留 async 接口，内部直接调用同步 SDK
 
 建议结构：
 
 ```python
 client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-response = await asyncio.to_thread(
-    client.chat.completions.create,
+response = client.chat.completions.create(
     model=self.model,
     messages=messages,
     tools=tools or None,
@@ -373,9 +372,9 @@ tool_call_count
 tool_names
 ```
 
-- [x] **Step 2: 不扩大 session metadata**
+- [x] **Step 2: 不写入 session.json**
 
-不要把 tool call 统计写入 `session.json.metadata`。
+不要把 tool call 统计写入 `session.json`。
 
 ## Task 9: Streaming Switch
 

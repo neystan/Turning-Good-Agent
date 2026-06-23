@@ -1,4 +1,5 @@
 from ..bus.messages import InboundMessage
+from ..context.session_context import build_session_context, count_message_tokens
 from .locks import SessionLocks
 from .store import JsonlSessionStore
 from .types import MessageRecord, Session
@@ -6,6 +7,7 @@ from .types import MessageRecord, Session
 
 COMMANDS: dict[str, str] = {
     "/history": "查看当前会话的完整历史消息",
+    "/context": "查看当前会注入模型的会话上下文",
     "/clear": "清空当前会话的消息和摘要",
     "/new": "开始一个新会话，CLI 会切换到新的 session",
     "/exit": "退出当前 CLI 会话",
@@ -36,6 +38,8 @@ class SessionManager:
             if not records:
                 return "暂无历史消息。"
             return "\n".join(f"{item.role}: {item.content}" for item in records)
+        if command == "/context":
+            return await self.context_view(session_id)
         if command == "/clear":
             await self.store.clear_session(session_id)
             return "当前会话已清空。"
@@ -56,6 +60,23 @@ class SessionManager:
     def command_help(self) -> str:
         """返回可用命令说明。"""
         return "\n".join(f"{name}：{description}" for name, description in COMMANDS.items())
+
+    async def context_view(self, session_id: str) -> str:
+        """返回当前模型上下文视图。"""
+        session = await self.store.load_session(session_id)
+        if session is None:
+            return "当前会话暂无上下文。"
+        context = build_session_context(session, await self.all_messages(session_id))
+        lines = [
+            f"会话摘要：{context.summary or '无'}",
+            f"完整历史消息数：{len(context.full_history)}",
+            f"未压缩历史消息数：{len(context.uncompacted_history)}",
+            f"未压缩历史token数：{count_message_tokens(context.uncompacted_history)}",
+        ]
+        if context.uncompacted_history:
+            lines.append("未压缩历史：")
+            lines.extend(f"{item.role}: {item.content}" for item in context.uncompacted_history)
+        return "\n".join(lines)
 
     async def save_user_message(
         self,

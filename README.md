@@ -12,6 +12,7 @@ python -m Turning-Good-Agent chat
 
 ```text
 /history
+/context
 /new
 /clear
 /exit
@@ -34,10 +35,11 @@ LLMSettings      LLM Provider 配置
 
 ```text
 compact_token_threshold = 200000
-raw_window_token_limit = 20000
+recent_window_token_limit = 20000
+max_context_tokens = 300000
 ```
 
-当上次压缩后新增的原文历史超过 `200000` token 时触发压缩；压缩后只保留最近不超过 `20000` token 的完整 user/assistant 对话原文，其余旧消息进入 `summary`。
+当上次压缩后新增的原文历史超过 `200000` token 时触发压缩；压缩后只保留最近不超过 `20000` token 的完整 user/assistant 对话原文，其余旧消息进入 `summary`。`BUILD` 默认注入 `summary + uncompacted_history`，最终注入模型的上下文受 `max_context_tokens = 300000` 约束；若本轮构建时仍超过该上限，先拒绝本轮并提示上下文过大。
 
 推荐使用根目录下的 `settings.local.json` 进行本地永久配置。这个文件不会被提交到 GitHub。
 
@@ -80,16 +82,17 @@ flowchart TD
     Inbound --> Bus[AsyncMessageBus]
     Bus --> Runtime[AgentRuntime]
 
-    Runtime --> Session[SESSION]
-    Session --> Command[COMMAND]
-    Command --> Build[BUILD]
+    Runtime --> Command[COMMAND]
+    Command --> Session[SESSION]
+    Session --> Build[BUILD]
     Build --> Run[RUN]
     Run --> Compact[COMPACT]
     Compact --> Save[SAVE]
     Save --> Respond[RESPOND]
     Respond --> End[turn complete]
 
-    Session --> SessionStore[SessionManager + JsonlSessionStore]
+    Command --> SessionStore[SessionManager + JsonlSessionStore]
+    Session --> SessionStore
     Build --> Memory[ShortTermMemory + ProfileMemory]
     Build --> Context[ContextBuilder]
 
@@ -111,7 +114,7 @@ flowchart TD
 
 ```text
 CLI 输入
--> Runtime: SESSION -> COMMAND -> BUILD -> RUN -> COMPACT -> SAVE -> RESPOND
+-> Runtime: COMMAND -> SESSION -> BUILD -> RUN -> COMPACT -> SAVE -> RESPOND
 -> OutboundMessage
 -> CLI 输出
 ```
@@ -121,7 +124,7 @@ CLI 输入
 ```text
 runtime/      状态机、Runtime、AgentLoop
 sessions/     会话、消息、JSONL 持久化、会话锁
-context/      system prompt、history、summary、tool schema 组装
+context/      system prompt、summary、uncompacted history、tool schema 组装
 memory/       短期记忆压缩骨架、长期偏好骨架、事件记忆骨架
 tools/        工具抽象、注册、执行、内置工具
 llm/          LLM Provider 抽象和 OpenAI-compatible 实现

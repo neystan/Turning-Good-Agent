@@ -76,9 +76,9 @@ python -m Turning-Good-Agent chat
 
 | 路径 | 作用 |
 | --- | --- |
-| `runtime/state.py` | 定义状态机：`SESSION -> COMMAND -> BUILD -> RUN -> COMPACT -> SAVE -> RESPOND`。 |
+| `runtime/state.py` | 定义状态机：`COMMAND -> SESSION -> BUILD -> RUN -> COMPACT -> SAVE -> RESPOND`。 |
 | `runtime/runtime.py` | `AgentRuntime` 总控，串联会话、上下文、AgentLoop、存储、压缩、trace 和响应。 |
-| `runtime/turn_context.py` | 单轮运行上下文，保存 state、history、model messages、tool calls、token usage 等中间状态。 |
+| `runtime/turn_context.py` | 单轮运行上下文，保存 state、full history、uncompacted history、model messages、tool calls、token usage 等中间状态。 |
 | `runtime/agent_loop.py` | LLM 与 tools 的调用循环，负责追加 assistant tool call 和 tool result working messages。 |
 
 ### 4.5 `sessions/`
@@ -89,7 +89,7 @@ python -m Turning-Good-Agent chat
 | --- | --- |
 | `sessions/types.py` | 定义 `Session` 和 `MessageRecord`。 |
 | `sessions/store.py` | JSON/JSONL 文件存储实现。每个 session 使用独立目录。 |
-| `sessions/manager.py` | 处理 `/history`、`/clear`、`/new`、`/exit` 等会话命令。 |
+| `sessions/manager.py` | 处理 `/history`、`/context`、`/clear`、`/new`、`/exit` 等命令。 |
 | `sessions/locks.py` | 按 session_id 提供异步锁，避免同一会话并发写入。 |
 
 默认数据结构：
@@ -110,7 +110,7 @@ python -m Turning-Good-Agent chat
 | 路径 | 作用 |
 | --- | --- |
 | `context/system_prompt.py` | MVP system prompt。 |
-| `context/builder.py` | 组装 system prompt、长期偏好、summary、tool schema、历史消息和当前用户消息。 |
+| `context/builder.py` | 组装 system prompt、长期偏好、summary、tool schema、uncompacted history 和当前用户消息。 |
 
 ### 4.7 `memory/`
 
@@ -125,8 +125,10 @@ python -m Turning-Good-Agent chat
 当前短期策略：
 
 - 未压缩原文 token 超过 `compact_token_threshold` 时触发压缩
-- 压缩后保留不超过 `raw_window_token_limit` 的最近完整原文窗口
+- 压缩后保留不超过 `recent_window_token_limit` 的最近完整 user + assistant 原文窗口
 - 其余内容进入 `summary`
+- 最终模型上下文受 `max_context_tokens = 300000` 约束
+- 如果 BUILD 阶段完整上下文仍超过上限，当前策略是拒绝本轮并提示上下文过大
 
 ### 4.8 `tools/`
 
@@ -175,9 +177,9 @@ Tools 当前边界：
 | 路径 | 作用 |
 | --- | --- |
 | `observability/trace.py` | 定义状态级 trace 记录。 |
-| `observability/token_monitor.py` | 归一化每轮 token、压缩和工具调用统计，强制使用真实 LLM usage。 |
+| `observability/token_monitor.py` | 归一化每轮 LLM token 账本，强制使用真实 LLM usage。 |
 
-消息级 `token_count` 同样来自真实 usage：用户消息写入本轮 `input_tokens`，助手消息写入本轮 `output_tokens`。`input_tokens` 是完整模型输入，不是用户文本自身 token。
+消息级 `token_count` 记录当前消息自身内容的 token 权重，用于短期压缩窗口计算。`token_usage.jsonl.input_tokens` 则来自 LLM SDK usage，表示整次模型请求输入，不要求每轮单调递增。
 
 `turn_traces.jsonl` 由 `JsonlSessionStore.save_turn_traces()` 在单轮结束后批量写入，文件格式仍保持一行一个状态，便于后续观测面板按状态时间线读取。
 
@@ -188,6 +190,8 @@ Tools 当前边界：
 - `compacted_token_count`
 - `raw_window_message_count`
 - `raw_window_token_count`
+
+这些字段只写入 `turn_traces.jsonl` 的 `COMPACT.metadata`，不再重复写入 `token_usage.jsonl`。
 
 ### 4.11 `hooks/`
 

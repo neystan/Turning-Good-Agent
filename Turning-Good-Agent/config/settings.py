@@ -13,7 +13,7 @@ class RuntimeSettings:
     max_tool_rounds: int = 5
     max_tool_calls_per_round: int = 8
     turn_timeout_seconds: int = 120
-    max_context_tokens: int = 12_000
+    max_context_tokens: int = 300_000
 
 
 @dataclass(slots=True)
@@ -21,7 +21,7 @@ class MemorySettings:
     """保存短期记忆压缩参数。"""
 
     compact_token_threshold: int = 200_000
-    raw_window_token_limit: int = 20_000
+    recent_window_token_limit: int = 20_000
 
 
 @dataclass(slots=True)
@@ -81,7 +81,7 @@ class Settings:
                 if key in runtime:
                     setattr(settings.runtime, key, runtime[key])
             memory = payload.get("memory", {})
-            for key in ("compact_token_threshold", "raw_window_token_limit"):
+            for key in ("compact_token_threshold", "recent_window_token_limit"):
                 if key in memory:
                     setattr(settings.memory, key, memory[key])
             sessions = payload.get("sessions", {})
@@ -136,8 +136,8 @@ class Settings:
         settings.memory.compact_token_threshold = int(
             os.getenv("TGA_MEMORY_COMPACT_TOKEN_THRESHOLD", settings.memory.compact_token_threshold)
         )
-        settings.memory.raw_window_token_limit = int(
-            os.getenv("TGA_MEMORY_RAW_WINDOW_TOKEN_LIMIT", settings.memory.raw_window_token_limit)
+        settings.memory.recent_window_token_limit = int(
+            os.getenv("TGA_MEMORY_RECENT_WINDOW_TOKEN_LIMIT", settings.memory.recent_window_token_limit)
         )
         settings.sessions.retention_days = int(
             os.getenv("TGA_SESSION_RETENTION_DAYS", settings.sessions.retention_days)

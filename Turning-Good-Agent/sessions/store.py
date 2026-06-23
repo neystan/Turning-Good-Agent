@@ -7,6 +7,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from ..bus.messages import utc_now_iso
+from .token_counter import count_content_tokens
 from .types import MessageRecord, Session
 
 
@@ -31,7 +32,7 @@ class JsonlSessionStore:
     async def create_session(self, session_id: str, user_id: str, channel: str) -> Session:
         """创建新会话并写入独立目录。"""
         now = utc_now_iso()
-        session = Session(session_id, user_id, channel, session_id, "", now, now, {})
+        session = Session(session_id, user_id, channel, session_id, "", [], now, now)
         session_dir = self._new_session_dir(session_id, now)
         session_dir.mkdir(parents=True, exist_ok=True)
         self._write_session(session, session_dir)
@@ -110,12 +111,12 @@ class JsonlSessionStore:
         session.updated_at = utc_now_iso()
         self._write_session(session)
 
-    async def update_metadata(self, session_id: str, metadata: dict[str, Any]) -> None:
-        """合并更新会话 metadata。"""
+    async def update_uncompacted_history(self, session_id: str, history: list[MessageRecord]) -> None:
+        """更新会话未压缩上下文窗口。"""
         session = await self.load_session(session_id)
         if session is None:
             return
-        session.metadata = {**session.metadata, **metadata}
+        session.uncompacted_history = history
         session.updated_at = utc_now_iso()
         self._write_session(session)
 
@@ -136,22 +137,21 @@ class JsonlSessionStore:
         self._append_jsonl(
             self._tokens_file(session_id),
             {
-                "id": str(uuid4()),
                 "turn_id": turn_id,
-                "session_id": session_id,
                 "input_tokens": usage["input_tokens"],
                 "output_tokens": usage["output_tokens"],
                 "turn_total_tokens": usage["turn_total_tokens"],
                 "total_tokens": usage["total_tokens"],
                 "compacted": usage["compacted"],
-                "compacted_message_count": usage.get("compacted_message_count", 0),
-                "compacted_token_count": usage.get("compacted_token_count", 0),
-                "raw_window_message_count": usage.get("raw_window_message_count", 0),
-                "raw_window_token_count": usage.get("raw_window_token_count", 0),
-                "tool_call_count": usage.get("tool_call_count", 0),
-                "tool_names": usage.get("tool_names", []),
             },
         )
+
+    async def last_total_tokens(self, session_id: str) -> int:
+        """读取当前会话最后一条累计 token。"""
+        rows = self._read_jsonl(self._tokens_file(session_id))
+        if not rows:
+            return 0
+        return int(rows[-1].get("total_tokens", 0))
 
     async def count_rows(self, table: str) -> int:
         """读取指定 JSONL 文件的行数，供行为验证使用。"""
@@ -258,15 +258,19 @@ class JsonlSessionStore:
 
     def _dict_to_session(self, row: dict[str, Any]) -> Session:
         """将字典转换为 Session。"""
+        uncompacted_history = [
+            self._dict_to_message(item)
+            for item in row.get("uncompacted_history", [])
+        ]
         return Session(
             id=row["id"],
             user_id=row["user_id"],
             channel=row["channel"],
             title=row["title"],
             summary=row["summary"],
+            uncompacted_history=uncompacted_history,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
-            metadata=row.get("metadata", {}),
         )
 
     def _session_to_dict(self, session: Session) -> dict[str, Any]:
@@ -277,20 +281,27 @@ class JsonlSessionStore:
             "channel": session.channel,
             "title": session.title,
             "summary": session.summary,
+            "uncompacted_history": [
+                self._context_message_to_dict(record)
+                for record in session.uncompacted_history
+            ],
             "created_at": session.created_at,
             "updated_at": session.updated_at,
-            "metadata": session.metadata,
+        }
+
+    def _context_message_to_dict(self, record: MessageRecord) -> dict[str, str]:
+        """将上下文消息转换为最小可读字典。"""
+        return {
+            "role": record.role,
+            "content": record.content,
         }
 
     def _message_to_dict(self, record: MessageRecord) -> dict[str, Any]:
         """将 MessageRecord 转换为可写入 JSONL 的字典。"""
         return {
             "id": record.id,
-            "session_id": record.session_id,
             "role": record.role,
             "content": record.content,
-            "name": record.name,
-            "tool_call_id": record.tool_call_id,
             "token_count": record.token_count,
             "created_at": record.created_at,
             "metadata": record.metadata,
@@ -299,9 +310,7 @@ class JsonlSessionStore:
     def _trace_to_dict(self, trace: Any) -> dict[str, Any]:
         """将状态 trace 转换为可写入 JSONL 的字典。"""
         return {
-            "id": str(uuid4()),
             "turn_id": trace.turn_id,
-            "session_id": trace.session_id,
             "state": trace.state,
             "duration_ms": trace.duration_ms,
             "event": trace.event,
@@ -312,13 +321,13 @@ class JsonlSessionStore:
     def _dict_to_message(self, row: dict[str, Any]) -> MessageRecord:
         """将字典转换为 MessageRecord。"""
         return MessageRecord(
-            id=row["id"],
-            session_id=row["session_id"],
+            id=row.get("id", ""),
+            session_id=row.get("session_id", ""),
             role=row["role"],
             content=row["content"],
-            name=row["name"],
-            tool_call_id=row["tool_call_id"],
-            token_count=row["token_count"],
-            created_at=row["created_at"],
-            metadata=row["metadata"],
+            name=row.get("name"),
+            tool_call_id=row.get("tool_call_id"),
+            token_count=int(row.get("token_count", count_content_tokens(row["content"]))),
+            created_at=row.get("created_at", ""),
+            metadata=row.get("metadata", {}),
         )

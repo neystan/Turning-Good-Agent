@@ -6,11 +6,11 @@
     "max_tool_rounds": 5,
     "max_tool_calls_per_round": 8,
     "turn_timeout_seconds": 120,
-    "max_context_tokens": 12000
+    "max_context_tokens": 300000
   },
   "memory": {
     "compact_token_threshold": 200000,
-    "raw_window_token_limit": 20000
+    "recent_window_token_limit": 20000
   },
   "sessions": {
     "retention_days": 7

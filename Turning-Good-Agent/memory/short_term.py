@@ -4,8 +4,8 @@ from ..sessions.types import MessageRecord
 class ShortTermMemory:
     """管理短期历史和摘要压缩。"""
 
-    def __init__(self, compact_token_threshold: int, raw_window_token_limit: int) -> None:
-        self.raw_window_token_limit = raw_window_token_limit
+    def __init__(self, compact_token_threshold: int, recent_window_token_limit: int) -> None:
+        self.recent_window_token_limit = recent_window_token_limit
         self.compact_token_threshold = compact_token_threshold
 
     def should_compact(self, messages: list[MessageRecord]) -> bool:
@@ -18,9 +18,9 @@ class ShortTermMemory:
         total = 0
         for turn in reversed(self.complete_turns(messages)):
             turn_tokens = self.count_tokens(turn)
-            if turn_tokens > self.raw_window_token_limit:
+            if turn_tokens > self.recent_window_token_limit:
                 break
-            if total + turn_tokens > self.raw_window_token_limit:
+            if total + turn_tokens > self.recent_window_token_limit:
                 break
             selected = turn + selected
             total += turn_tokens

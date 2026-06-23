@@ -63,7 +63,7 @@ class OpenAICompatibleLLM:
         tool_call_parts: dict[int, dict[str, str]] = {}
         iterator = iter(stream)
         while True:
-            event = await asyncio.to_thread(self._next_stream_event, iterator)
+            event = self._next_stream_event(iterator)
             if event is None:
                 break
             usage = self._parse_usage(getattr(event, "usage", None))
@@ -102,10 +102,7 @@ class OpenAICompatibleLLM:
                 }
                 if stream:
                     payload["stream_options"] = {"include_usage": True}
-                return await asyncio.to_thread(
-                    self.client.chat.completions.create,
-                    **payload,
-                )
+                return self.client.chat.completions.create(**payload)
             except (APITimeoutError, APIConnectionError, RateLimitError, InternalServerError):
                 attempt += 1
                 if attempt > self.max_retries:
@@ -191,7 +188,7 @@ class OpenAICompatibleLLM:
 
     @staticmethod
     def _next_stream_event(iterator: Any) -> Any | None:
-        """在线程中读取下一个同步 stream 事件。"""
+        """读取下一个同步 stream 事件。"""
         try:
             return next(iterator)
         except StopIteration:
