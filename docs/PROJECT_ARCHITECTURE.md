@@ -118,7 +118,7 @@ python -m Turning-Good-Agent chat
 
 | 路径 | 作用 |
 | --- | --- |
-| `memory/short_term.py` | token 驱动的短期记忆压缩策略。 |
+| `memory/short_term.py` | token 驱动的短期记忆压缩策略和 LLM 摘要提示。 |
 | `memory/long_term.py` | 用户偏好/长期资料骨架。 |
 | `memory/event_memory.py` | 事件记忆骨架，后续给 dream/breakbeat 使用。 |
 
@@ -126,8 +126,10 @@ python -m Turning-Good-Agent chat
 
 - 未压缩原文 token 超过 `compact_token_threshold` 时触发压缩
 - 压缩后保留不超过 `recent_window_token_limit` 的最近完整 user + assistant 原文窗口
-- 其余内容进入 `summary`
+- 其余内容通过 LLM 生成新的 `summary`
+- 摘要调用的真实 usage 合并进发生压缩的本轮 token 账本
 - 最终模型上下文受 `max_context_tokens = 300000` 约束
+- BUILD 的上下文预算直接按 `ContextBuilder.build()` 生成的真实消息列表计算，包含 `SYSTEM_PROMPT`
 - 如果 BUILD 阶段完整上下文仍超过上限，当前策略是拒绝本轮并提示上下文过大
 
 ### 4.8 `tools/`

@@ -108,10 +108,7 @@ async def build(runtime: AgentRuntime, ctx: TurnContext) -> str:
 
 
 async def run(runtime: AgentRuntime, ctx: TurnContext) -> str:
-    """执行 shortcut 或 AgentLoop。"""
-    if ctx.shortcut_response is not None:
-        ctx.final_content = ctx.shortcut_response
-        return "ok"
+    """执行 AgentLoop。"""
     result = await runtime.agent_loop.run(ctx.model_messages, ctx.on_delta)
     ctx.final_content = result.final_content
     ctx.tool_calls = result.tool_calls
@@ -140,7 +137,8 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
         ctx.session.uncompacted_history = uncompacted_history
         ctx.token_usage = await build_token_usage(runtime, ctx, compacted=False)
         return "ok"
-    summary = memory.compact(ctx.session.summary, compact_source)
+    summary, summary_usage = await memory.compact(ctx.session.summary, compact_source, runtime.agent_loop.llm)
+    ctx.llm_usage = ctx.llm_usage.add(summary_usage)
     compacted_token_count = memory.count_tokens(compact_source)
     raw_window_token_count = memory.count_tokens(recent_history)
     ctx.session.summary = summary
@@ -311,13 +309,14 @@ def context_token_count(
     current_input: str,
 ) -> int:
     """计算本轮上下文预算权重。"""
-    fixed_text = [
-        summary,
-        runtime.profile_memory.read(),
-        current_input,
-        str(runtime.agent_loop.tools.schemas()),
-    ]
-    return count_message_tokens(uncompacted_history) + sum(len(item) for item in fixed_text if item)
+    messages = runtime.context_builder.build(
+        summary=summary,
+        history=uncompacted_history,
+        user_content=current_input,
+        tool_schemas=runtime.agent_loop.tools.schemas(),
+        profile_memory=runtime.profile_memory.read(),
+    )
+    return sum(count_content_tokens(str(message.get("content", ""))) for message in messages)
 
 
 def compact_trace_metadata(ctx: TurnContext) -> dict[str, int]:

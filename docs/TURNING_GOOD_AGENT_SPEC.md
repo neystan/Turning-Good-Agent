@@ -275,7 +275,9 @@ max_context_tokens = 300000
 - 当未压缩原文历史 token 超过阈值，触发压缩。
 - 压缩时从 `virtual_uncompacted_history` 尾部向前选择完整 user + assistant 对话对。
 - `recent_window` 累计 token 必须小于等于 `recent_window_token_limit`，默认 `20000`。
-- 更早的 `compact_source` 进入新增 summary，并 append 到旧 `summary`。
+- 更早的 `compact_source` 会和旧 `summary` 一起交给 LLM，生成新的 consolidated `summary`。
+- 摘要 LLM 调用必须返回非空文本和真实 usage；该 usage 会合并进发生压缩的本轮 `token_usage.jsonl`。
+- 如果摘要缺少 usage 或返回空文本，本轮进入错误响应，不保存新的 `summary`、消息或 token 账本。
 - 压缩在 `COMPACT` 状态执行，影响下一轮上下文。
 
 `summary` 只表示会话历史摘要，来源是用户输入和 assistant 最终回答，不包含 system prompt、长期记忆、tool schema、skills 或 MCP schema。
@@ -325,6 +327,7 @@ max_context_tokens = 300000
 - 最终发给模型的上下文受 `max_context_tokens = 300000` 约束。
 - `BUILD` 不裁剪 `uncompacted_history`，未压缩历史在压缩前必须完整注入。
 - 如果 `system prompt + long memory + tool schema + skills + MCP + summary + uncompacted_history + current input` 超过 `max_context_tokens`，当前策略是拒绝本轮并提示上下文过大。
+- `BUILD` 的上下文预算统计必须复用 `ContextBuilder.build()` 的真实输出消息，不能单独手写一份“固定文本估算”，避免漏掉 `SYSTEM_PROMPT` 等已注入内容。
 - `recent_window` 只在 `COMPACT` 需要压缩时临时计算。
 - `recent_window` 受 `recent_window_token_limit = 20000` 约束，并在压缩后写入 `session.uncompacted_history`。
 - system prompt、long memory、tool schema、skills、MCP、summary、uncompacted history、current input 都应计入上下文预算。

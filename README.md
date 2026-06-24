@@ -39,7 +39,7 @@ recent_window_token_limit = 20000
 max_context_tokens = 300000
 ```
 
-当上次压缩后新增的原文历史超过 `200000` token 时触发压缩；压缩后只保留最近不超过 `20000` token 的完整 user/assistant 对话原文，其余旧消息进入 `summary`。`BUILD` 默认注入 `summary + uncompacted_history`，最终注入模型的上下文受 `max_context_tokens = 300000` 约束；若本轮构建时仍超过该上限，先拒绝本轮并提示上下文过大。
+当上次压缩后新增的原文历史超过 `200000` token 时触发压缩；压缩后只保留最近不超过 `20000` token 的完整 user/assistant 对话原文，其余旧消息通过 LLM 生成新的 `summary`。摘要 LLM 调用必须返回真实 usage，并合并进发生压缩的本轮 `token_usage.jsonl`；若摘要缺少 usage 或为空，本轮按失败处理。`BUILD` 默认注入 `summary + uncompacted_history`，最终注入模型的上下文受 `max_context_tokens = 300000` 约束；上下文预算直接按 `ContextBuilder.build()` 生成的真实消息列表计算，包含 `SYSTEM_PROMPT`、长期偏好、工具 schema、summary、未压缩历史和当前用户输入；若本轮构建时仍超过该上限，先拒绝本轮并提示上下文过大。
 
 推荐使用根目录下的 `settings.local.json` 进行本地永久配置。这个文件不会被提交到 GitHub。
 
