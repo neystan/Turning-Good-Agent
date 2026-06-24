@@ -4,7 +4,7 @@
 
 **Goal:** 使用 OpenAI Python SDK 接入真实 LLM，并让 OpenAI-compatible 真实模型可以调用 `ToolRegistry` 中注册的工具，把 tool call 与 tool result 写入会话文件；同时为 CLI 纯文本流式输出增加可配置开关。
 
-**Architecture:** 保持 `AgentLoop` 为唯一工具调用循环。`OpenAICompatibleLLM` 使用 `client.chat.completions.create(...)` 作为真实模型调用主路径，并把 SDK 响应归一化为内部 `LLMResponse`。`ToolRegistry.schemas()` 继续作为内部工具 schema 源，新增 OpenAI-compatible schema 转换层。流式输出作为同一 LLM 接入族下的可选能力，通过 `settings.llm.streaming_enabled` 显式开启，默认关闭。
+**Architecture:** 保持 `AgentLoop` 为唯一工具调用循环。`OpenAICompatibleLLM` 使用 `AsyncOpenAI().chat.completions.create(...)` 作为真实模型调用主路径，并把 SDK 响应归一化为内部 `LLMResponse`。`ToolRegistry.schemas()` 继续作为内部工具 schema 源，新增 OpenAI-compatible schema 转换层。流式输出作为同一 LLM 接入族下的可选能力，通过 `settings.llm.streaming_enabled` 显式开启，默认关闭。
 
 **Tech Stack:** Python 3.11+、OpenAI Python SDK、OpenAI-compatible Chat Completions、asyncio、JSON/JSONL。
 
@@ -109,16 +109,16 @@ dependencies = ["openai>=1.0.0"]
 
 要求：
 
-- 使用 `OpenAI(api_key=..., base_url=...)`
+- 使用 `AsyncOpenAI(api_key=..., base_url=...)`
 - 使用 `client.chat.completions.create(...)`
 - 保留 `model`、`messages`、`tools` 参数入口
-- 外层保留 async 接口，内部直接调用同步 SDK
+- 全路径保持 async，不再在 Runtime 内包同步 SDK 调用
 
 建议结构：
 
 ```python
-client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-response = client.chat.completions.create(
+client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+response = await client.chat.completions.create(
     model=self.model,
     messages=messages,
     tools=tools or None,
@@ -316,7 +316,7 @@ time
 - 发送 `tools` 参数给 Chat Completions
 - 从响应中读取 `message.tool_calls`
 - 把每个 tool call 转成统一 `ToolCall`
-- `arguments` 必须 JSON parse，失败时返回空 dict 并保留错误 metadata
+- `arguments` 必须 JSON parse 成 object，失败时直接返回明确错误
 
 - [x] **Step 2: 统一返回**
 
@@ -431,6 +431,12 @@ client.chat.completions.create(
 
 解析 `choices[0].delta.content`，逐段产出 `LLMChunk`；如果存在 `delta.tool_calls`，在 LLM 层内部合并参数片段。
 
+当前补充约束：
+
+- 流式实现使用异步 `async for` 消费 SDK stream。
+- 如果本轮流式响应最终没有拿到有效 `usage`，则整轮按失败处理，不保存成功 assistant message。
+- tool call 参数片段只在 `finish_reason == "tool_calls"` 时组装成完整 `ToolCall`，并在组装时执行严格校验。
+
 - [x] **Step 4: AgentLoop 支持 CLI 文本流式**
 
 当 `streaming_enabled = true` 时：
@@ -526,10 +532,12 @@ python -m Turning-Good-Agent chat
 ## Completion Criteria
 
 - `OpenAICompatibleLLM` 使用 OpenAI Python SDK。
+- `OpenAICompatibleLLM` 已切换到异步 `AsyncOpenAI` 路径。
 - 真实 LLM 纯文本对话稳定返回，不静默空回复。
+- 非流式和流式都要求 provider 返回真实 `usage`；缺失时本轮失败，不写 token 账本。
 - 内置工具通过 `ToolLoader` 自动加载。
 - 工具 schema 输出稳定排序。
-- tool call 参数在执行前完成归一化和校验。
+- tool call 参数在执行前完成归一化和严格校验；非法 JSON 或缺少关键信息会直接报错。
 - 真实 LLM 可以调用 `now`。
 - 真实 LLM 可以调用 `echo`。
 - tool call 和 tool result 至少进入 `AgentLoop` working messages。

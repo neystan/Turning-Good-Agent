@@ -3,7 +3,14 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
-from openai import APIConnectionError, APITimeoutError, BadRequestError, InternalServerError, OpenAI, RateLimitError
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AsyncOpenAI,
+    BadRequestError,
+    InternalServerError,
+    RateLimitError,
+)
 
 from .types import LLMChunk, LLMResponse, LLMUsage, ToolCall
 
@@ -27,7 +34,7 @@ class OpenAICompatibleLLM:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.retry_delay_seconds = retry_delay_seconds
-        self.client = OpenAI(
+        self.client = AsyncOpenAI(
             api_key=self.api_key,
             base_url=self.base_url,
             timeout=self.timeout_seconds,
@@ -50,7 +57,7 @@ class OpenAICompatibleLLM:
         return LLMResponse(
             content=content,
             tool_calls=self._parse_tool_calls(getattr(message, "tool_calls", None)),
-            usage=self._parse_usage(getattr(response, "usage", None)),
+            usage=self._require_usage(getattr(response, "usage", None)),
         )
 
     async def stream(
@@ -61,11 +68,7 @@ class OpenAICompatibleLLM:
         """流式调用模型并产出文本增量。"""
         stream = await self._create_completion(messages, tools, stream=True)
         tool_call_parts: dict[int, dict[str, str]] = {}
-        iterator = iter(stream)
-        while True:
-            event = self._next_stream_event(iterator)
-            if event is None:
-                break
+        async for event in stream:
             usage = self._parse_usage(getattr(event, "usage", None))
             if usage is not None:
                 yield LLMChunk(usage=usage)
@@ -102,7 +105,7 @@ class OpenAICompatibleLLM:
                 }
                 if stream:
                     payload["stream_options"] = {"include_usage": True}
-                return self.client.chat.completions.create(**payload)
+                return await self.client.chat.completions.create(**payload)
             except (APITimeoutError, APIConnectionError, RateLimitError, InternalServerError):
                 attempt += 1
                 if attempt > self.max_retries:
@@ -119,17 +122,23 @@ class OpenAICompatibleLLM:
         for item in tool_calls:
             function = getattr(item, "function", None)
             if function is None:
-                continue
+                raise ValueError("模型工具调用缺少 function。")
+            call_id = str(getattr(item, "id", "") or "")
+            name = str(getattr(function, "name", "") or "")
+            if not call_id:
+                raise ValueError("模型工具调用缺少 id。")
+            if not name:
+                raise ValueError("模型工具调用缺少 function.name。")
             normalized.append(
                 ToolCall(
-                    id=str(getattr(item, "id", "")),
-                    name=str(getattr(function, "name", "")),
-                    args=self._parse_arguments(getattr(function, "arguments", "{}")),
+                    id=call_id,
+                    name=name,
+                    args=self._parse_arguments(getattr(function, "arguments", "{}"), name),
                 )
             )
         return normalized
 
-    def _parse_arguments(self, raw_arguments: Any) -> dict[str, Any]:
+    def _parse_arguments(self, raw_arguments: Any, tool_name: str) -> dict[str, Any]:
         """解析工具参数 JSON。"""
         if isinstance(raw_arguments, dict):
             return raw_arguments
@@ -137,9 +146,18 @@ class OpenAICompatibleLLM:
             return {}
         try:
             parsed = json.loads(raw_arguments)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"模型工具调用参数不是合法 JSON：{tool_name}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(f"模型工具调用参数必须是 JSON object：{tool_name}")
+        return parsed
+
+    def _require_usage(self, usage: Any) -> LLMUsage:
+        """解析并要求模型返回真实 usage。"""
+        parsed = self._parse_usage(usage)
+        if parsed is None or parsed.total_tokens <= 0:
+            raise RuntimeError("模型响应缺少 usage，无法记录 token_usage。")
+        return parsed
 
     def _parse_usage(self, usage: Any) -> LLMUsage | None:
         """解析 SDK 返回的 token usage。"""
@@ -177,19 +195,15 @@ class OpenAICompatibleLLM:
         calls: list[ToolCall] = []
         for index in sorted(parts):
             item = parts[index]
+            if not item["id"]:
+                raise ValueError("模型流式工具调用缺少 id。")
+            if not item["name"]:
+                raise ValueError("模型流式工具调用缺少 function.name。")
             calls.append(
                 ToolCall(
                     id=item["id"],
                     name=item["name"],
-                    args=self._parse_arguments(item["arguments"]),
+                    args=self._parse_arguments(item["arguments"], item["name"]),
                 )
             )
         return calls
-
-    @staticmethod
-    def _next_stream_event(iterator: Any) -> Any | None:
-        """读取下一个同步 stream 事件。"""
-        try:
-            return next(iterator)
-        except StopIteration:
-            return None

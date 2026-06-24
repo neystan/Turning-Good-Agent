@@ -184,7 +184,7 @@ tool call observability 单独落盘
 python -m Turning-Good-Agent chat
 ```
 
-当前真实 LLM 已使用 OpenAI Python SDK 的 `client.chat.completions.create(...)`，并在 `AgentLoop` 中补齐 assistant tool_call 消息和 tool result 消息。后续仍需要把 tool call 结果单独落盘到更清晰的 observability 结构中。
+当前真实 LLM 已使用 OpenAI Python SDK 的异步 client，也就是 `AsyncOpenAI().chat.completions.create(...)`，并在 `AgentLoop` 中补齐 assistant tool_call 消息和 tool result 消息。后续仍需要把 tool call 结果单独落盘到更清晰的 observability 结构中。
 
 流式输出通过集中配置显式开启：
 
@@ -197,3 +197,8 @@ python -m Turning-Good-Agent chat
 ```
 
 默认值是 `true`。CLI 会逐段打印模型返回的文本；如果模型返回 tool call 参数片段，LLM 层会先合并成完整工具调用，再交给现有 AgentLoop 执行。Web、微信、飞书的流式展示后续在 channel 阶段接入。
+
+当前 LLM 接入还有两个硬约束：
+
+- provider 必须返回真实 `usage`；无论是非流式还是流式，只要最终缺少有效 `usage`，本轮都会失败，且不会写入 `token_usage.jsonl`。
+- tool call 必须完整且参数是合法 JSON object；如果缺少 `tool_call.id`、`function.name`，或参数 JSON 非法，会直接返回错误，不再静默降级成空参数。

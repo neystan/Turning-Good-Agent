@@ -162,9 +162,11 @@ Tools 当前边界：
 
 当前真实 LLM 接入边界：
 
-- `OpenAICompatibleLLM` 使用 OpenAI Python SDK 的 `client.chat.completions.create(...)`。
+- `OpenAICompatibleLLM` 使用 OpenAI Python SDK 的异步 client，也就是 `AsyncOpenAI().chat.completions.create(...)`。
 - 当前只保留 `openai_compatible` 这一类接入；DeepSeek、Qwen 等兼容服务也统一通过这一路径接入。
 - 真实模型返回 `content` 为空但包含 `tool_calls` 时，不会被当作无回复；会交给 `AgentLoop` 执行工具循环。
+- 非流式和流式都强制要求 provider 返回真实 `usage`；如果最终缺少有效 `usage`，本轮会失败，不写入 token 账本。
+- tool call 解析是严格模式：缺少 `id`、`function.name`，或 `arguments` 不是合法 JSON object 时直接报错，不再静默降级。
 - 流式输出作为 `openai_compatible` 接入族的可选能力，通过 `settings.llm.streaming_enabled` 开启，默认关闭。
 - 第一版 CLI 会逐段打印文本 delta；tool call 参数片段只在 LLM 层内部合并，完整 tool call 仍交给现有 AgentLoop 执行。
 - 多 channel 流式展示后置。

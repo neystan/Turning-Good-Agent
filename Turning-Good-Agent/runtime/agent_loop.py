@@ -104,4 +104,6 @@ class AgentLoop:
                         await emitted
             if chunk.tool_calls:
                 tool_calls = chunk.tool_calls
+        if usage.total_tokens <= 0:
+            raise RuntimeError("流式 LLM 响应缺少 usage，无法保存本轮结果。")
         return LLMResponse(content="".join(content_parts), tool_calls=tool_calls, usage=usage)
