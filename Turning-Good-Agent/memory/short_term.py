@@ -1,4 +1,6 @@
 from ..sessions.types import MessageRecord
+from ..llm.client import LLMProvider
+from ..llm.types import LLMUsage
 
 
 class ShortTermMemory:
@@ -26,13 +28,32 @@ class ShortTermMemory:
             total += turn_tokens
         return selected
 
-    def compact(self, existing_summary: str, messages: list[MessageRecord]) -> str:
-        """生成抽取式短期摘要。"""
+    async def compact(self, existing_summary: str, messages: list[MessageRecord], llm: LLMProvider) -> tuple[str, LLMUsage]:
+        """调用 LLM 生成新的短期摘要。"""
         if not messages:
-            return existing_summary
-        parts = [existing_summary] if existing_summary else []
-        parts.extend(f"{item.role}: {item.content}" for item in messages)
-        return "\n".join(parts)
+            return existing_summary, LLMUsage()
+        response = await llm.complete(self.summary_messages(existing_summary, messages), tools=[])
+        if response.usage is None or response.usage.total_tokens <= 0:
+            raise RuntimeError("摘要 LLM 响应缺少 usage，无法保存压缩结果。")
+        summary = response.content.strip()
+        if not summary:
+            raise RuntimeError("摘要 LLM 响应为空，无法保存压缩结果。")
+        return summary, response.usage
+
+    def summary_messages(self, existing_summary: str, messages: list[MessageRecord]) -> list[dict[str, str]]:
+        """构建短期摘要专用模型消息。"""
+        source = "\n".join(f"{item.role}: {item.content}" for item in messages)
+        user_content = (
+            "请基于已有摘要和待压缩会话片段，生成新的会话摘要。\n"
+            "要求：只保留对后续对话有用的事实、偏好、约定、未完成事项和关键上下文；"
+            "去掉寒暄、重复内容和无意义细节；直接输出摘要正文。\n\n"
+            f"已有摘要：\n{existing_summary or '无'}\n\n"
+            f"待压缩会话片段：\n{source}"
+        )
+        return [
+            {"role": "system", "content": "你是 Turning Good Agent 的短期记忆摘要器。"},
+            {"role": "user", "content": user_content},
+        ]
 
     def count_tokens(self, messages: list[MessageRecord]) -> int:
         """统计消息持久化的真实 token 权重。"""

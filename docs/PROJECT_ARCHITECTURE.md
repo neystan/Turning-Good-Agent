@@ -68,7 +68,7 @@ python -m Turning-Good-Agent chat
 | --- | --- |
 | `config/settings.py` | 定义 `RuntimeSettings`、`MemorySettings`、`SessionSettings`、`LLMSettings` 和 `Settings.load()`。 |
 
-当前主配置路径是项目根目录的 `settings.local.json`。环境变量覆盖仍保留，但不是推荐主路径。
+当前配置路径只有项目根目录的 `settings.local.json`。`Settings.load()` 不再支持 `TGA_*` 环境变量覆盖。
 
 ### 4.4 `runtime/`
 
@@ -118,7 +118,7 @@ python -m Turning-Good-Agent chat
 
 | 路径 | 作用 |
 | --- | --- |
-| `memory/short_term.py` | token 驱动的短期记忆压缩策略和 LLM 摘要提示。 |
+| `memory/short_term.py` | token 驱动的短期记忆压缩策略、LLM 摘要提示和摘要 usage 校验。 |
 | `memory/long_term.py` | 用户偏好/长期资料骨架。 |
 | `memory/event_memory.py` | 事件记忆骨架，后续给 dream/breakbeat 使用。 |
 
@@ -128,6 +128,7 @@ python -m Turning-Good-Agent chat
 - 压缩后保留不超过 `recent_window_token_limit` 的最近完整 user + assistant 原文窗口
 - 其余内容通过 LLM 生成新的 `summary`
 - 摘要调用的真实 usage 合并进发生压缩的本轮 token 账本
+- 摘要调用如果缺少 usage 或返回空摘要，整轮按失败处理，不保存新摘要、消息或 token 账本
 - 最终模型上下文受 `max_context_tokens = 300000` 约束
 - BUILD 的上下文预算直接按 `ContextBuilder.build()` 生成的真实消息列表计算，包含 `SYSTEM_PROMPT`
 - 如果 BUILD 阶段完整上下文仍超过上限，当前策略是拒绝本轮并提示上下文过大
@@ -169,7 +170,7 @@ Tools 当前边界：
 - 真实模型返回 `content` 为空但包含 `tool_calls` 时，不会被当作无回复；会交给 `AgentLoop` 执行工具循环。
 - 非流式和流式都强制要求 provider 返回真实 `usage`；如果最终缺少有效 `usage`，本轮会失败，不写入 token 账本。
 - tool call 解析是严格模式：缺少 `id`、`function.name`，或 `arguments` 不是合法 JSON object 时直接报错，不再静默降级。
-- 流式输出作为 `openai_compatible` 接入族的可选能力，通过 `settings.llm.streaming_enabled` 开启，默认关闭。
+- 流式输出作为 `openai_compatible` 接入族的可选能力，通过 `settings.llm.streaming_enabled` 开启，默认开启。
 - 第一版 CLI 会逐段打印文本 delta；tool call 参数片段只在 LLM 层内部合并，完整 tool call 仍交给现有 AgentLoop 执行。
 - 多 channel 流式展示后置。
 - 当前仍缺少独立的 tool call 落盘结构，后续 observability 会继续补齐。

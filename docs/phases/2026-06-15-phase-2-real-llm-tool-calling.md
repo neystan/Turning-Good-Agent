@@ -4,7 +4,7 @@
 
 **Goal:** 使用 OpenAI Python SDK 接入真实 LLM，并让 OpenAI-compatible 真实模型可以调用 `ToolRegistry` 中注册的工具，把 tool call 与 tool result 写入会话文件；同时为 CLI 纯文本流式输出增加可配置开关。
 
-**Architecture:** 保持 `AgentLoop` 为唯一工具调用循环。`OpenAICompatibleLLM` 使用 `AsyncOpenAI().chat.completions.create(...)` 作为真实模型调用主路径，并把 SDK 响应归一化为内部 `LLMResponse`。`ToolRegistry.schemas()` 继续作为内部工具 schema 源，新增 OpenAI-compatible schema 转换层。流式输出作为同一 LLM 接入族下的可选能力，通过 `settings.llm.streaming_enabled` 显式开启，默认关闭。
+**Architecture:** 保持 `AgentLoop` 为唯一工具调用循环。`OpenAICompatibleLLM` 使用 `AsyncOpenAI().chat.completions.create(...)` 作为真实模型调用主路径，并把 SDK 响应归一化为内部 `LLMResponse`。`ToolRegistry.schemas()` 继续作为内部工具 schema 源，新增 OpenAI-compatible schema 转换层。流式输出作为同一 LLM 接入族下的可选能力，通过 `settings.llm.streaming_enabled` 显式开启，默认开启。
 
 **Tech Stack:** Python 3.11+、OpenAI Python SDK、OpenAI-compatible Chat Completions、asyncio、JSON/JSONL。
 
@@ -383,7 +383,7 @@ tool_names
 在 `LLMSettings` 中增加：
 
 ```python
-streaming_enabled: bool = False
+streaming_enabled: bool = True
 ```
 
 配置文件示例：
@@ -400,7 +400,7 @@ streaming_enabled: bool = False
 }
 ```
 
-默认值设为 `false`，用户显式开启后 CLI 启用流式打印；关闭时回退到完整回复模式。
+默认值设为 `true`，用户显式关闭后回退到完整回复模式。
 
 - [x] **Step 2: 定义 `LLMChunk`**
 
@@ -477,7 +477,7 @@ response.error
     "api_key": "你的 API Key",
     "base_url": "https://api.openai.com/v1",
     "model": "你的模型名",
-    "streaming_enabled": false
+    "streaming_enabled": true
   }
 }
 ```
@@ -491,7 +491,7 @@ DeepSeek 等 OpenAI-compatible 服务仍然统一配置为：
     "api_key": "你的 API Key",
     "base_url": "https://api.deepseek.com",
     "model": "你的模型名",
-    "streaming_enabled": false
+    "streaming_enabled": true
   }
 }
 ```

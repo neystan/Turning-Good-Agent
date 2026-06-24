@@ -339,7 +339,7 @@ settings.local.json
 
 进行本地永久配置。
 
-当前主路径是 `settings.local.json`，环境变量覆盖仍然保留，但只是可选覆盖方式，不是推荐主路径。
+当前主路径只有 `settings.local.json`。后续实现已经删除环境变量覆盖，避免同一份配置出现双入口。
 
 当前配置分组：
 

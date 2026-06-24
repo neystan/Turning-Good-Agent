@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -65,7 +64,7 @@ class Settings:
         default_session_id: str | None = None,
         local_config_path: Path | None = None,
     ) -> "Settings":
-        """从本地配置文件和环境变量加载集中配置。"""
+        """从本地配置文件加载集中配置。"""
         settings = cls()
         config_path = local_config_path or Path.cwd() / "settings.local.json"
         if config_path.exists():
@@ -105,41 +104,4 @@ class Settings:
             settings.data_dir = data_dir
         if default_session_id is not None:
             settings.default_session_id = default_session_id
-        return cls.from_env(settings)
-
-    @classmethod
-    def from_env(
-        cls,
-        settings: "Settings" | None = None,
-    ) -> "Settings":
-        """从环境变量覆盖现有配置。"""
-        settings = settings or cls()
-        settings.llm.provider = os.getenv("TGA_LLM_PROVIDER") or settings.llm.provider
-        settings.llm.api_key = os.getenv("TGA_LLM_API_KEY") or settings.llm.api_key
-        settings.llm.base_url = os.getenv("TGA_LLM_BASE_URL") or settings.llm.base_url
-        settings.llm.model = os.getenv("TGA_LLM_MODEL") or settings.llm.model
-        settings.llm.timeout_seconds = float(
-            os.getenv("TGA_LLM_TIMEOUT_SECONDS", settings.llm.timeout_seconds)
-        )
-        settings.llm.max_retries = int(
-            os.getenv("TGA_LLM_MAX_RETRIES", settings.llm.max_retries)
-        )
-        settings.llm.retry_delay_seconds = float(
-            os.getenv("TGA_LLM_RETRY_DELAY_SECONDS", settings.llm.retry_delay_seconds)
-        )
-        if "TGA_LLM_STREAMING_ENABLED" in os.environ:
-            settings.llm.streaming_enabled = os.environ["TGA_LLM_STREAMING_ENABLED"].lower() in {
-                "1",
-                "true",
-                "yes",
-            }
-        settings.memory.compact_token_threshold = int(
-            os.getenv("TGA_MEMORY_COMPACT_TOKEN_THRESHOLD", settings.memory.compact_token_threshold)
-        )
-        settings.memory.recent_window_token_limit = int(
-            os.getenv("TGA_MEMORY_RECENT_WINDOW_TOKEN_LIMIT", settings.memory.recent_window_token_limit)
-        )
-        settings.sessions.retention_days = int(
-            os.getenv("TGA_SESSION_RETENTION_DAYS", settings.sessions.retention_days)
-        )
         return settings
