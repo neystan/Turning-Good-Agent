@@ -65,14 +65,6 @@ async def run_state(runtime: AgentRuntime, ctx: TurnContext) -> str:
     return await respond(ctx)
 
 
-async def session(runtime: AgentRuntime, ctx: TurnContext) -> str:
-    """清理过期会话并加载当前会话。"""
-    msg = ctx.inbound
-    await runtime.sessions.cleanup_expired_sessions(runtime.settings.sessions.retention_days)
-    ctx.session = await runtime.sessions.load_or_create(msg.session_id, msg.user_id, msg.channel)
-    return "ok"
-
-
 async def command(runtime: AgentRuntime, ctx: TurnContext) -> str:
     """处理 slash command，命中后跳过模型链路。"""
     msg = ctx.inbound
@@ -80,6 +72,14 @@ async def command(runtime: AgentRuntime, ctx: TurnContext) -> str:
     if ctx.shortcut_response is not None:
         ctx.final_content = ctx.shortcut_response
         return "shortcut"
+    return "ok"
+
+
+async def session(runtime: AgentRuntime, ctx: TurnContext) -> str:
+    """清理过期会话并加载/创建当前会话。"""
+    msg = ctx.inbound
+    await runtime.sessions.cleanup_expired_sessions(runtime.settings.sessions.retention_days)
+    ctx.session = await runtime.sessions.load_or_create(msg.session_id, msg.user_id, msg.channel)
     return "ok"
 
 
@@ -119,36 +119,6 @@ async def run(runtime: AgentRuntime, ctx: TurnContext) -> str:
     return "ok"
 
 
-async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
-    """保存消息、trace、token，并触发主动事件。"""
-    session_id = ctx.inbound.session_id
-    if ctx.llm_usage is None:
-        raise RuntimeError("本轮 LLM 响应缺少 usage，无法写入 token_usage.jsonl。")
-    if not ctx.token_usage:
-        raise RuntimeError("本轮缺少 token_usage，无法执行 SAVE。")
-    user_record = await runtime.sessions.save_user_message(
-        session_id,
-        ctx.inbound.content,
-        count_content_tokens(ctx.inbound.content),
-    )
-    assistant_record = await runtime.sessions.save_assistant_message(
-        session_id,
-        ctx.final_content,
-        count_content_tokens(ctx.final_content),
-    )
-    if ctx.session is not None:
-        ctx.session.uncompacted_history = replace_current_turn_records(
-            ctx.session.uncompacted_history,
-            user_record,
-            assistant_record,
-        )
-        await runtime.sessions.store.update_summary(session_id, ctx.session.summary)
-        await runtime.sessions.store.update_uncompacted_history(session_id, ctx.session.uncompacted_history)
-    await runtime.sessions.store.save_token_usage(ctx.turn_id, session_id, ctx.token_usage)
-    await runtime.proactive.emit(CONVERSATION_COMPLETED, {"session_id": session_id, "turn_id": ctx.turn_id})
-    return "ok"
-
-
 async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
     """在本轮运行结束后更新短期记忆压缩状态。"""
     if ctx.session is None:
@@ -184,6 +154,36 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
         }
     )
     ctx.token_usage = await build_token_usage(runtime, ctx, compacted=True)
+    return "ok"
+
+
+async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
+    """保存消息、trace、token，并触发主动事件。"""
+    session_id = ctx.inbound.session_id
+    if ctx.llm_usage is None:
+        raise RuntimeError("本轮 LLM 响应缺少 usage，无法写入 token_usage.jsonl。")
+    if not ctx.token_usage:
+        raise RuntimeError("本轮缺少 token_usage，无法执行 SAVE。")
+    user_record = await runtime.sessions.save_user_message(
+        session_id,
+        ctx.inbound.content,
+        count_content_tokens(ctx.inbound.content),
+    )
+    assistant_record = await runtime.sessions.save_assistant_message(
+        session_id,
+        ctx.final_content,
+        count_content_tokens(ctx.final_content),
+    )
+    if ctx.session is not None:
+        ctx.session.uncompacted_history = replace_current_turn_records(
+            ctx.session.uncompacted_history,
+            user_record,
+            assistant_record,
+        )
+        await runtime.sessions.store.update_summary(session_id, ctx.session.summary)
+        await runtime.sessions.store.update_uncompacted_history(session_id, ctx.session.uncompacted_history)
+    await runtime.sessions.store.save_token_usage(ctx.turn_id, session_id, ctx.token_usage)
+    await runtime.proactive.emit(CONVERSATION_COMPLETED, {"session_id": session_id, "turn_id": ctx.turn_id})
     return "ok"
 
 
