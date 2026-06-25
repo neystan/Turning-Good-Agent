@@ -134,7 +134,7 @@ proactive/    主动能力扩展入口
 
 ## 当前阶段
 
-项目当前处于 Phase 2：真实 LLM SDK 化、Tool Calling 与 CLI 流式输出。
+项目当前处于 Phase 2 收口状态：真实 LLM SDK 化、Tool Calling 与 CLI 流式输出的代码主路径已经完成。
 
 已完成：
 
@@ -142,19 +142,23 @@ proactive/    主动能力扩展入口
 OpenAI Python SDK 接入
 openai-compatible 统一接入族
 基础 tool calling 工作消息回注
-请求失败错误回显
-可恢复 LLM 错误重试
-```
-
-下一步：
-
-```text
 tools 参数归一化和 JSON Schema 校验
 ToolRegistry.prepare_call()
 ToolLoader 自动加载内置工具
 工具 schema 稳定排序
 CLI 文本流式输出开关
-tool call observability 单独落盘
+RUN trace 中记录 tool_call_count 和 tool_names
+请求失败错误回显
+可恢复 LLM 错误重试
+```
+
+Phase 2 保留边界：
+
+```text
+tool call / tool result 不作为独立消息写入 messages.jsonl
+tool call 细节暂不单独落盘，只在 RUN trace metadata 写入最小统计
+Web、微信、飞书的流式展示后续在 channel 阶段接入
+MCP tools、skills tools、entry_points 插件不属于 Phase 2
 ```
 
 工具系统会继续保持轻量，不引入完整插件生态。当前阶段只做内置工具自动加载；MCP tools 会在 Phase 3 通过 adapter 注册进同一个 `ToolRegistry`。

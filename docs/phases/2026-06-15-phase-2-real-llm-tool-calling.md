@@ -2,13 +2,42 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 使用 OpenAI Python SDK 接入真实 LLM，并让 OpenAI-compatible 真实模型可以调用 `ToolRegistry` 中注册的工具，把 tool call 与 tool result 写入会话文件；同时为 CLI 纯文本流式输出增加可配置开关。
+**Goal:** 使用 OpenAI Python SDK 接入真实 LLM，并让 OpenAI-compatible 真实模型可以调用 `ToolRegistry` 中注册的工具；tool call 与 tool result 进入本轮 `AgentLoop` working messages，工具统计写入 `turn_traces.jsonl` 的 RUN metadata；同时为 CLI 纯文本流式输出增加可配置开关。
 
 **Architecture:** 保持 `AgentLoop` 为唯一工具调用循环。`OpenAICompatibleLLM` 使用 `AsyncOpenAI().chat.completions.create(...)` 作为真实模型调用主路径，并把 SDK 响应归一化为内部 `LLMResponse`。`ToolRegistry.schemas()` 继续作为内部工具 schema 源，新增 OpenAI-compatible schema 转换层。流式输出作为同一 LLM 接入族下的可选能力，通过 `settings.llm.streaming_enabled` 显式开启，默认开启。
 
 **Tech Stack:** Python 3.11+、OpenAI Python SDK、OpenAI-compatible Chat Completions、asyncio、JSON/JSONL。
 
 ---
+
+## Current Completion Status
+
+代码核对结论：Phase 2 主路径已经完成。
+
+已完成：
+
+- `OpenAICompatibleLLM` 使用 OpenAI Python SDK 的 `AsyncOpenAI`。
+- 非流式调用通过 `await client.chat.completions.create(...)` 执行。
+- 流式调用通过 SDK `stream=True` 和 `async for` 消费 chunk。
+- `openai-compatible` 是当前唯一 LLM 接入族；DeepSeek、Qwen 等兼容服务统一走这一 Provider 名称。
+- 非流式和流式都要求 provider 返回真实 `usage`；缺失时本轮失败，不写 token 账本。
+- tool call 解析采用严格模式，缺少 `id`、`function.name` 或参数不是合法 JSON object 时直接报错。
+- `BaseTool` 保持轻量接口，参数归一化和 JSON Schema 校验由 `tools/base.py` 的函数与 `ToolRegistry.prepare_call()` 承担。
+- `ToolLoader` 自动加载内置工具，当前内置工具为 `echo` 和 `now`。
+- 工具 schema 输出稳定排序，并通过 `openai_tools()` 转成 OpenAI-compatible schema。
+- `AgentLoop` 会把 assistant tool call message 和 tool result message 追加到本轮 working messages。
+- CLI 文本流式输出通过 `settings.llm.streaming_enabled` 控制，默认值为 `true`。
+- 最终只把完整 user/assistant 消息写入 `messages.jsonl`，不保存每个流式 chunk。
+- RUN 状态 trace metadata 记录 `tool_call_count` 和 `tool_names`。
+
+已明确的 Phase 2 边界：
+
+- tool call 和 tool result 不作为独立会话消息写入 `messages.jsonl`。
+- 当前没有独立的 tool call 明细落盘文件；只有 RUN trace 的最小统计。
+- Web、微信、飞书 channel 的流式展示不属于 Phase 2。
+- MCP tools、skills tools、Python entry_points 插件不属于 Phase 2。
+- parallel tool calls 的复杂调度不属于 Phase 2。
+- 真实 API 的手工验证依赖本地 `settings.local.json`，仓库自动测试只覆盖代码路径和 fake/mock LLM 行为。
 
 ## Scope
 
@@ -24,7 +53,7 @@
 - 工具 schema 稳定排序
 - 真实模型返回 tool_calls 的解析
 - tool call 消息和 tool result 消息进入 AgentLoop working messages
-- tool call 记录落盘到 session trace 或 messages
+- tool call 最小统计落盘到 RUN state trace metadata
 - CLI 纯文本流式输出开关
 - 非流式和流式共享最终消息落盘规则
 - 用真实模型测试 `echo` / `now`
@@ -83,9 +112,9 @@ Modify: `Turning-Good-Agent/bus/messages.py`
 
 为后续 channel 统一输出补充流式响应事件类型，例如 `response.started`、`response.delta`、`response.completed` 和 `response.error`。
 
-Modify: `Turning-Good-Agent/runtime/runtime.py`
+Modify: `Turning-Good-Agent/runtime/state.py`
 
-把本轮 tool calls 写入可观测记录，保证用户可以从文件看到调用过程。
+把本轮 tool calls 归一化为 RUN 状态 trace metadata，保证用户可以从 `turn_traces.jsonl` 看到最小调用统计。
 
 Modify: `README.md`
 
@@ -363,7 +392,7 @@ return LLMResponse(content=message.content or "")
 
 - [x] **Step 1: 在 runtime 保存 tool calls**
 
-本阶段先把 `ctx.tool_calls` 写入 trace metadata 和 token usage metadata 中的最小字段。
+本阶段先把 `ctx.tool_calls` 写入 RUN trace metadata 中的最小字段。
 
 建议字段：
 

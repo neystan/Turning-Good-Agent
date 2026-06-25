@@ -4,7 +4,7 @@
 
 ## 1. 项目定位
 
-Turning-Good-Agent 是一个轻量 Runtime-first 通用 Agent。当前仓库处于 MVP 阶段，主路径是 CLI 对话、会话存储、短期压缩、基础工具调用，以及基于 OpenAI Python SDK 的 OpenAI-compatible LLM 接入。Phase 2 后半段会在这一接入层上增加可配置的 CLI 纯文本流式输出。
+Turning-Good-Agent 是一个轻量 Runtime-first 通用 Agent。当前仓库处于 MVP 阶段，主路径是 CLI 对话、会话存储、短期压缩、基础工具调用，以及基于 OpenAI Python SDK 的 OpenAI-compatible LLM 接入。Phase 2 的真实 LLM SDK 化、基础 tool calling 和 CLI 纯文本流式输出主路径已经完成。
 
 当前运行入口：
 
@@ -16,6 +16,7 @@ python -m Turning-Good-Agent chat
 
 - `OpenAI-compatible`：真实 LLM 对话
 - OpenAI-compatible tool calling：`AgentLoop` 已支持 assistant tool call 与 tool result 工作消息回注
+- CLI 文本流式输出：通过 `settings.llm.streaming_enabled` 控制，默认开启
 
 ## 2. 顶层目录与文件
 
@@ -173,7 +174,7 @@ Tools 当前边界：
 - 流式输出作为 `openai_compatible` 接入族的可选能力，通过 `settings.llm.streaming_enabled` 开启，默认开启。
 - 第一版 CLI 会逐段打印文本 delta；tool call 参数片段只在 LLM 层内部合并，完整 tool call 仍交给现有 AgentLoop 执行。
 - 多 channel 流式展示后置。
-- 当前仍缺少独立的 tool call 落盘结构，后续 observability 会继续补齐。
+- 当前 tool call 观测只写入 `turn_traces.jsonl` 的 RUN 状态 metadata，字段为 `tool_call_count` 和 `tool_names`；尚未提供独立的 tool call 明细文件。
 
 ### 4.10 `observability/`
 
@@ -197,6 +198,13 @@ Tools 当前边界：
 - `raw_window_token_count`
 
 这些字段只写入 `turn_traces.jsonl` 的 `COMPACT.metadata`，不再重复写入 `token_usage.jsonl`。
+
+当前 RUN 公开工具观测字段只有：
+
+- `tool_call_count`
+- `tool_names`
+
+这些字段只写入 `turn_traces.jsonl` 的 `RUN.metadata`。工具调用过程中的 assistant tool call message 和 tool result message 只参与本轮 `AgentLoop` working messages，不作为独立会话消息写入 `messages.jsonl`。
 
 ### 4.11 `hooks/`
 
