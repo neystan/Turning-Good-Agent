@@ -376,6 +376,17 @@ max_context_tokens = 300000
 
 - `echo`
 - `now`
+- `list_dir`
+- `find_file`
+- `read_file`
+- `write_file`
+- `edit_file`
+- `grep`
+- `exec`
+- `write_stdin`
+- `web_search`
+- `web_fetch`
+- `weather`
 
 当前已经完成：
 
@@ -389,6 +400,7 @@ max_context_tokens = 300000
 - `ToolLoader` 已自动加载内置工具
 - 工具 schema 已稳定排序
 - 可配置 CLI 文本流式输出已接入
+- Phase 2.5 已开始补齐文件、命令、网页和天气基础工具
 
 Tools 当前约束：
 
@@ -409,12 +421,13 @@ Tools 当前约束：
   - 支持 `enabled(settings/context)`，为后续按配置启停工具留入口。
   - 当前不做 entry_points 第三方插件机制。
 - 当前不引入 nanobot 的完整 Schema 类体系；只保留最小 JSON Schema 校验函数，避免工具层过早复杂化。
+- 文件类工具统一通过 `security.py` 和 `path_utils.py` 做 workspace 路径限制、设备文件拒绝和 `.sessions` 状态文件写入保护。
+- 命令类工具统一通过 `security.py` 和 `exec_sessions.py` 做危险命令拒绝、超时、输出截断和长运行进程管理。
+- 网络类工具只允许 http/https，返回外部内容时必须把网页内容视为数据而不是指令。
 
 下一阶段要做：
 
 - 更细粒度的流式输出 trace 字段
-- tool call observability 单独明细落盘
-- tool call / tool result 的会话级查看入口
 - 更细粒度的 provider 错误信息与 trace 字段
 
 真实 LLM Provider 约束：
@@ -548,12 +561,13 @@ Main Agent
 
 1. Phase 1：Runtime MVP
 2. Phase 2：真实 LLM SDK 化、tool calling 与 CLI 文本流式输出
-3. Phase 3：MCP client MVP
-4. Phase 4：Skills 机制
-5. Phase 5：Web observability
-6. Phase 6：主动能力与长期记忆
-7. Phase 7：Multi-Agent 协作模式
-8. Phase 8：多 Channel 接入
+3. Phase 2.5：基础工具扩展
+4. Phase 3：MCP client MVP
+5. Phase 4：Skills 机制
+6. Phase 5：Web observability
+7. Phase 6：主动能力与长期记忆
+8. Phase 7：Multi-Agent 协作模式
+9. Phase 8：多 Channel 接入
 
 ## 17. 更新规则
 

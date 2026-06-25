@@ -4,7 +4,7 @@
 
 ## 1. 项目定位
 
-Turning-Good-Agent 是一个轻量 Runtime-first 通用 Agent。当前仓库处于 MVP 阶段，主路径是 CLI 对话、会话存储、短期压缩、基础工具调用，以及基于 OpenAI Python SDK 的 OpenAI-compatible LLM 接入。Phase 2 的真实 LLM SDK 化、基础 tool calling、工具观测落盘和 CLI 纯文本流式输出范围已经完成。
+Turning-Good-Agent 是一个轻量 Runtime-first 通用 Agent。当前仓库处于 MVP 阶段，主路径是 CLI 对话、会话存储、短期压缩、基础工具调用，以及基于 OpenAI Python SDK 的 OpenAI-compatible LLM 接入。Phase 2 的真实 LLM SDK 化、基础 tool calling、工具观测落盘和 CLI 纯文本流式输出范围已经完成，Phase 2.5 正在补齐文件、命令、网页和天气基础工具。
 
 当前运行入口：
 
@@ -145,7 +145,14 @@ python -m Turning-Good-Agent chat
 | `tools/registry.py` | 工具注册表，输出模型可见 schema，并通过 `prepare_call()` 集中处理工具查找、参数归一化、参数校验和稳定排序。 |
 | `tools/executor.py` | 工具执行器，处理调用、耗时和结果序列化。 |
 | `tools/loader.py` | 自动扫描并加载内置工具，当前不支持 entry_points 插件。 |
-| `tools/builtin_tools.py` | 当前内置 `echo` 和 `now`。 |
+| `tools/builtin_tools.py` | 内置 `echo` 和 `now`。 |
+| `tools/filesystem_tools.py` | 内置 `list_dir`、`find_file`、`read_file`、`write_file`、`edit_file` 和 `grep`。 |
+| `tools/shell_tools.py` | 内置受限 `exec` 和 `write_stdin`。 |
+| `tools/web_tools.py` | 内置 `web_search` 和 `web_fetch`。 |
+| `tools/info_tools.py` | 内置 `weather`。 |
+| `tools/security.py` | 文件、命令、URL 和输出截断的公共安全限制。 |
+| `tools/path_utils.py` | workspace 路径解析和路径包含判断。 |
+| `tools/exec_sessions.py` | 长运行 shell 命令 session 管理。 |
 
 Tools 当前边界：
 
@@ -154,6 +161,9 @@ Tools 当前边界：
 - `ToolExecutor` 只负责执行和异常包装。
 - 工具 schema 输出稳定排序：内置工具在前，MCP tools 在后，同组内按名称排序。
 - 暂不搬入 nanobot 的完整 Schema 类体系，先使用最小 JSON Schema 校验函数。
+- 文件工具默认限制在当前 workspace 内，拒绝危险设备路径和 `.sessions` 状态文件写入。
+- shell 工具默认执行受限命令，拦截危险模式，限制超时和输出长度。
+- web 工具只允许 http/https，并对外部内容做文本提取和输出截断。
 
 ### 4.9 `llm/`
 

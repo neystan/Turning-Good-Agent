@@ -101,7 +101,7 @@ flowchart TD
     Run --> AgentLoop[Runtime AgentLoop]
     AgentLoop --> LLM[OpenAI-compatible LLM]
     AgentLoop --> Tools[ToolRegistry + ToolExecutor]
-    Tools --> Builtins[echo / now]
+    Tools --> Builtins[echo / now / filesystem / shell / web / weather]
 
     Compact --> Token[TokenMonitor usage base]
     Save --> Trace[StateTrace]
@@ -136,7 +136,7 @@ proactive/    主动能力扩展入口
 
 ## 当前阶段
 
-项目当前处于 Phase 2 完成状态：真实 LLM SDK 化、Tool Calling、工具观测落盘与 CLI 流式输出的范围已经完成。
+项目当前处于 Phase 2.5 基础工具扩展阶段：Phase 2 的真实 LLM SDK 化、Tool Calling、工具观测落盘与 CLI 流式输出范围已经完成，当前正在补齐内置基础工具。
 
 已完成：
 
@@ -154,6 +154,9 @@ tool_calls.jsonl 工具调用明细落盘
 /tools 会话工具记录查看命令
 请求失败错误回显
 可恢复 LLM 错误重试
+文件基础工具：list_dir / find_file / read_file / write_file / edit_file / grep
+受限命令工具：exec / write_stdin
+网络与信息工具：web_search / web_fetch / weather
 ```
 
 Phase 2 保留边界：
@@ -165,7 +168,7 @@ Web、微信、飞书的流式展示后续在 channel 阶段接入
 MCP tools、skills tools、entry_points 插件不属于 Phase 2
 ```
 
-工具系统会继续保持轻量，不引入完整插件生态。当前阶段只做内置工具自动加载；MCP tools 会在 Phase 3 通过 adapter 注册进同一个 `ToolRegistry`。
+工具系统继续保持轻量，不引入完整插件生态。当前阶段只做内置工具自动加载；MCP tools 会在 Phase 3 通过 adapter 注册进同一个 `ToolRegistry`。
 
 ## 使用真实 LLM 测试
 

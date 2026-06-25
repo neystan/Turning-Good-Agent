@@ -4,6 +4,8 @@
 
 **阶段定位：** Phase 2.5 是 Phase 2 和 Phase 3 之间的工具能力补强阶段。Phase 2 已解决“模型能稳定调用工具”，Phase 3 将做 MCP client。本阶段只做内置基础工具，不引入 MCP、skills、entry_points 插件或复杂浏览器自动化。
 
+**当前状态：** 基础实现已开始，当前代码已新增 `filesystem_tools.py`、`shell_tools.py`、`web_tools.py`、`info_tools.py`、`security.py`、`path_utils.py` 和 `exec_sessions.py`。
+
 **参考实现：** 本阶段参考 `/download/nanobot/nanobot/agent/tools`，重点借鉴其文件工具、搜索工具、shell 工具、长运行 exec session、路径限制和输出截断设计。但 TGA 保持更轻的 `BaseTool` / `ToolRegistry` / `ToolLoader` 结构，不迁移 nanobot 的完整 Schema 类体系和插件体系。
 
 ---
@@ -339,3 +341,12 @@ Phase 2.5 完成时应满足：
 - `pytest -q` 通过。
 - CLI 冒烟通过。
 - 文档和代码保持一致。
+
+当前已完成：
+
+- `ToolLoader` 可以自动发现并注册本阶段新增工具。
+- 文件工具已支持 UTF-8 文本读写、精确替换、目录列表、文件查找和内容搜索。
+- shell 工具已支持一次性命令、长运行 session 和 `write_stdin` 轮询/终止。
+- web 工具已支持 http/https 抓取和 DuckDuckGo HTML 搜索。
+- `weather` 已支持通过城市名称查询当前天气。
+- 已加入危险路径、危险命令、非 HTTP URL、输出长度和 `.sessions` 写入限制。

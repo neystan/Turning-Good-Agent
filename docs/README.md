@@ -15,7 +15,7 @@
 | --- | --- | --- |
 | Phase 1 | [Runtime MVP](./phases/2026-06-15-phase-1-runtime-mvp.md) | 已基本完成 |
 | Phase 2 | [真实 LLM SDK 化、Tool Calling 与 CLI 流式输出](./phases/2026-06-15-phase-2-real-llm-tool-calling.md) | 主路径已完成 |
-| Phase 2.5 | [基础工具扩展](./phases/2026-06-25-phase-2-5-basic-tools.md) | 设计中 |
+| Phase 2.5 | [基础工具扩展](./phases/2026-06-25-phase-2-5-basic-tools.md) | 实现中 |
 | Phase 3 | [MCP Client MVP](./phases/2026-06-15-phase-3-mcp-client.md) | 计划中 |
 | Phase 4 | [Skills 机制](./phases/2026-06-15-phase-4-skills.md) | 计划中 |
 | Phase 5 | [Web 可观测面板](./phases/2026-06-15-phase-5-web-observability.md) | 计划中 |
