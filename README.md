@@ -136,7 +136,7 @@ proactive/    主动能力扩展入口
 
 ## 当前阶段
 
-项目当前处于 Phase 2 收口状态：真实 LLM SDK 化、Tool Calling 与 CLI 流式输出的代码主路径已经完成。
+项目当前处于 Phase 2 完成状态：真实 LLM SDK 化、Tool Calling、工具观测落盘与 CLI 流式输出的范围已经完成。
 
 已完成：
 
@@ -150,6 +150,8 @@ ToolLoader 自动加载内置工具
 工具 schema 稳定排序
 CLI 文本流式输出开关
 RUN trace 中记录 tool_call_count 和 tool_names
+tool_calls.jsonl 工具调用明细落盘
+/tools 会话工具记录查看命令
 请求失败错误回显
 可恢复 LLM 错误重试
 ```
@@ -190,7 +192,7 @@ MCP tools、skills tools、entry_points 插件不属于 Phase 2
 python -m Turning-Good-Agent chat
 ```
 
-当前真实 LLM 已使用 OpenAI Python SDK 的异步 client，也就是 `AsyncOpenAI().chat.completions.create(...)`，并在 `AgentLoop` 中补齐 assistant tool_call 消息和 tool result 消息。后续仍需要把 tool call 结果单独落盘到更清晰的 observability 结构中。
+当前真实 LLM 已使用 OpenAI Python SDK 的异步 client，也就是 `AsyncOpenAI().chat.completions.create(...)`，并在 `AgentLoop` 中补齐 assistant tool_call 消息和 tool result 消息。工具调用精简明细会在 `SAVE` 状态统一写入 `tool_calls.jsonl`，`/tools` 可直接查看当前会话的调用记录。
 
 流式输出通过集中配置显式开启：
 

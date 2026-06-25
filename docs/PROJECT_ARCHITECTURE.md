@@ -4,7 +4,7 @@
 
 ## 1. 项目定位
 
-Turning-Good-Agent 是一个轻量 Runtime-first 通用 Agent。当前仓库处于 MVP 阶段，主路径是 CLI 对话、会话存储、短期压缩、基础工具调用，以及基于 OpenAI Python SDK 的 OpenAI-compatible LLM 接入。Phase 2 的真实 LLM SDK 化、基础 tool calling 和 CLI 纯文本流式输出主路径已经完成。
+Turning-Good-Agent 是一个轻量 Runtime-first 通用 Agent。当前仓库处于 MVP 阶段，主路径是 CLI 对话、会话存储、短期压缩、基础工具调用，以及基于 OpenAI Python SDK 的 OpenAI-compatible LLM 接入。Phase 2 的真实 LLM SDK 化、基础 tool calling、工具观测落盘和 CLI 纯文本流式输出范围已经完成。
 
 当前运行入口：
 

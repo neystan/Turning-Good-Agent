@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 使用 OpenAI Python SDK 接入真实 LLM，并让 OpenAI-compatible 真实模型可以调用 `ToolRegistry` 中注册的工具；tool call 与 tool result 进入本轮 `AgentLoop` working messages，工具统计写入 `turn_traces.jsonl` 的 RUN metadata；同时为 CLI 纯文本流式输出增加可配置开关。
+**Goal:** 使用 OpenAI Python SDK 接入真实 LLM，并让 OpenAI-compatible 真实模型可以调用 `ToolRegistry` 中注册的工具；tool call 与 tool result 进入本轮 `AgentLoop` working messages，工具统计写入 `turn_traces.jsonl` 的 RUN metadata，精简明细写入 `tool_calls.jsonl`，并通过 `/tools` 查看；同时为 CLI 纯文本流式输出增加可配置开关。
 
 **Architecture:** 保持 `AgentLoop` 为唯一工具调用循环。`OpenAICompatibleLLM` 使用 `AsyncOpenAI().chat.completions.create(...)` 作为真实模型调用主路径，并把 SDK 响应归一化为内部 `LLMResponse`。`ToolRegistry.schemas()` 继续作为内部工具 schema 源，新增 OpenAI-compatible schema 转换层。流式输出作为同一 LLM 接入族下的可选能力，通过 `settings.llm.streaming_enabled` 显式开启，默认开启。
 
@@ -12,7 +12,7 @@
 
 ## Current Completion Status
 
-代码核对结论：Phase 2 主路径已经完成。
+代码核对结论：Phase 2 实现范围已经完成。
 
 已完成：
 
@@ -29,11 +29,12 @@
 - CLI 文本流式输出通过 `settings.llm.streaming_enabled` 控制，默认值为 `true`。
 - 最终只把完整 user/assistant 消息写入 `messages.jsonl`，不保存每个流式 chunk。
 - RUN 状态 trace metadata 记录 `tool_call_count` 和 `tool_names`。
+- `SAVE` 状态会把工具调用精简明细统一写入 `tool_calls.jsonl`。
+- `/tools` 可查看当前会话的工具调用记录。
 
 已明确的 Phase 2 边界：
 
 - tool call 和 tool result 不作为独立会话消息写入 `messages.jsonl`。
-- 当前没有独立的 tool call 明细落盘文件；只有 RUN trace 的最小统计。
 - Web、微信、飞书 channel 的流式展示不属于 Phase 2。
 - MCP tools、skills tools、Python entry_points 插件不属于 Phase 2。
 - parallel tool calls 的复杂调度不属于 Phase 2。
@@ -53,7 +54,9 @@
 - 工具 schema 稳定排序
 - 真实模型返回 tool_calls 的解析
 - tool call 消息和 tool result 消息进入 AgentLoop working messages
-- tool call 最小统计落盘到 RUN state trace metadata
+- tool call 统计写入 RUN state trace metadata
+- tool call 精简明细写入 `tool_calls.jsonl`
+- `/tools` 查看当前会话工具调用记录
 - CLI 纯文本流式输出开关
 - 非流式和流式共享最终消息落盘规则
 - 用真实模型测试 `echo` / `now`
