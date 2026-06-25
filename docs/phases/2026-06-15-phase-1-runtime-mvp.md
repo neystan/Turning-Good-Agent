@@ -24,7 +24,7 @@
 - 内置 `echo` / `now`
 - session 独立目录
 - `/history`、`/context`、`/new`、`/clear`、`/exit`
-- token 驱动短期压缩
+- token 驱动压缩触发 + LLM 摘要生成
 - COMPACT 独立状态
 - trace 和 token usage 记录
 - `settings.local.json`
@@ -44,7 +44,7 @@
 | `Turning-Good-Agent/runtime/runtime.py` | 单轮消息处理总控。 |
 | `Turning-Good-Agent/runtime/agent_loop.py` | LLM + tools 循环。 |
 | `Turning-Good-Agent/sessions/store.py` | JSON/JSONL 文件存储。 |
-| `Turning-Good-Agent/memory/short_term.py` | 短期记忆压缩。 |
+| `Turning-Good-Agent/memory/short_term.py` | 短期记忆压缩与摘要生成。 |
 | `Turning-Good-Agent/observability/trace.py` | 状态 trace。 |
 | `Turning-Good-Agent/observability/token_monitor.py` | token 记录。 |
 
@@ -89,4 +89,4 @@ token_usage.jsonl
 - 显式传 `--session` 时可恢复历史。
 - `/clear` 删除当前 session 目录。
 - 压缩统计只暴露 5 个字段。
-- `settings.local.json` 可以配置真实 LLM。
+- `settings.local.json` 是当前唯一配置入口，可以配置真实 LLM。
