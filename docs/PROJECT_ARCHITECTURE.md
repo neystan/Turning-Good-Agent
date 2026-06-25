@@ -90,7 +90,7 @@ python -m Turning-Good-Agent chat
 | --- | --- |
 | `sessions/types.py` | 定义 `Session` 和 `MessageRecord`。 |
 | `sessions/store.py` | JSON/JSONL 文件存储实现。每个 session 使用独立目录。 |
-| `sessions/manager.py` | 处理 `/history`、`/context`、`/clear`、`/new`、`/exit` 等命令。 |
+| `sessions/manager.py` | 处理 `/history`、`/context`、`/tools`、`/clear`、`/new`、`/exit` 等命令。 |
 | `sessions/locks.py` | 按 session_id 提供异步锁，避免同一会话并发写入。 |
 
 默认数据结构：
@@ -102,6 +102,7 @@ python -m Turning-Good-Agent chat
     messages.jsonl
     turn_traces.jsonl
     token_usage.jsonl
+    tool_calls.jsonl
 ```
 
 ### 4.6 `context/`
@@ -174,7 +175,7 @@ Tools 当前边界：
 - 流式输出作为 `openai_compatible` 接入族的可选能力，通过 `settings.llm.streaming_enabled` 开启，默认开启。
 - 第一版 CLI 会逐段打印文本 delta；tool call 参数片段只在 LLM 层内部合并，完整 tool call 仍交给现有 AgentLoop 执行。
 - 多 channel 流式展示后置。
-- 当前 tool call 观测只写入 `turn_traces.jsonl` 的 RUN 状态 metadata，字段为 `tool_call_count` 和 `tool_names`；尚未提供独立的 tool call 明细文件。
+- 当前 tool call 观测会写入 `turn_traces.jsonl` 的 RUN 状态 metadata，字段为 `tool_call_count` 和 `tool_names`；同时精简明细会写入 `tool_calls.jsonl`。
 
 ### 4.10 `observability/`
 
@@ -205,6 +206,17 @@ Tools 当前边界：
 - `tool_names`
 
 这些字段只写入 `turn_traces.jsonl` 的 `RUN.metadata`。工具调用过程中的 assistant tool call message 和 tool result message 只参与本轮 `AgentLoop` working messages，不作为独立会话消息写入 `messages.jsonl`。
+
+`tool_calls.jsonl` 保存每次工具调用的精简明细：
+
+- `turn_id`
+- `tool_call_id`
+- `tool_name`
+- `args`
+- `content`
+- `error`
+- `duration_ms`
+- `created_at`
 
 ### 4.11 `hooks/`
 

@@ -13,6 +13,7 @@ python -m Turning-Good-Agent chat
 ```text
 /history
 /context
+/tools
 /new
 /clear
 /exit
@@ -64,6 +65,7 @@ session.json
 messages.jsonl
 turn_traces.jsonl
 token_usage.jsonl
+tool_calls.jsonl
 ```
 
 会话生命周期规则：
@@ -156,7 +158,7 @@ Phase 2 保留边界：
 
 ```text
 tool call / tool result 不作为独立消息写入 messages.jsonl
-tool call 细节暂不单独落盘，只在 RUN trace metadata 写入最小统计
+tool call 明细写入 tool_calls.jsonl，但不作为独立对话消息进入 messages.jsonl
 Web、微信、飞书的流式展示后续在 channel 阶段接入
 MCP tools、skills tools、entry_points 插件不属于 Phase 2
 ```

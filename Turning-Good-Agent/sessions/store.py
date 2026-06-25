@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from ..bus.messages import utc_now_iso
 from .token_counter import count_content_tokens
-from .types import MessageRecord, Session
+from .types import MessageRecord, Session, ToolCallRecord
 
 
 BEIJING_TZ = timezone(timedelta(hours=8))
@@ -146,6 +146,37 @@ class JsonlSessionStore:
             },
         )
 
+    async def save_tool_calls(
+        self,
+        turn_id: str,
+        session_id: str,
+        tool_calls: list[dict[str, Any]],
+    ) -> None:
+        """批量保存单轮工具调用明细。"""
+        if not tool_calls:
+            return
+        now = utc_now_iso()
+        rows = [
+            self._tool_call_to_dict(
+                ToolCallRecord(
+                    turn_id=turn_id,
+                    tool_call_id=str(record.get("tool_call_id", "")),
+                    tool_name=str(record["tool_name"]),
+                    args=dict(record.get("args", {})),
+                    content=str(record.get("content", "")),
+                    error=record.get("error"),
+                    duration_ms=float(record.get("duration_ms", 0.0)),
+                    created_at=now,
+                )
+            )
+            for record in tool_calls
+        ]
+        self._append_jsonl_rows(self._tool_calls_file(session_id), rows)
+
+    async def all_tool_calls(self, session_id: str) -> list[ToolCallRecord]:
+        """读取指定会话的全部工具调用记录。"""
+        return [self._dict_to_tool_call(row) for row in self._read_jsonl(self._tool_calls_file(session_id))]
+
     async def last_total_tokens(self, session_id: str) -> int:
         """读取当前会话最后一条累计 token。"""
         rows = self._read_jsonl(self._tokens_file(session_id))
@@ -160,6 +191,7 @@ class JsonlSessionStore:
             "messages": "messages.jsonl",
             "turn_traces": "turn_traces.jsonl",
             "token_usage": "token_usage.jsonl",
+            "tool_calls": "tool_calls.jsonl",
         }
         if table not in paths:
             raise ValueError(f"不支持的表：{table}")
@@ -235,6 +267,10 @@ class JsonlSessionStore:
     def _tokens_file(self, session_id: str) -> Path:
         """返回 token 记录文件路径。"""
         return self._session_dir(session_id) / "token_usage.jsonl"
+
+    def _tool_calls_file(self, session_id: str) -> Path:
+        """返回工具调用记录文件路径。"""
+        return self._session_dir(session_id) / "tool_calls.jsonl"
 
     def _write_session(self, session: Session, session_dir: Path | None = None) -> None:
         """写入单个会话信息文件。"""
@@ -318,6 +354,19 @@ class JsonlSessionStore:
             "metadata": getattr(trace, "metadata", {}),
         }
 
+    def _tool_call_to_dict(self, record: ToolCallRecord) -> dict[str, Any]:
+        """将 ToolCallRecord 转换为可写入 JSONL 的字典。"""
+        return {
+            "turn_id": record.turn_id,
+            "tool_call_id": record.tool_call_id,
+            "tool_name": record.tool_name,
+            "args": record.args,
+            "content": record.content,
+            "error": record.error,
+            "duration_ms": record.duration_ms,
+            "created_at": record.created_at,
+        }
+
     def _dict_to_message(self, row: dict[str, Any]) -> MessageRecord:
         """将字典转换为 MessageRecord。"""
         return MessageRecord(
@@ -330,4 +379,17 @@ class JsonlSessionStore:
             token_count=int(row.get("token_count", count_content_tokens(row["content"]))),
             created_at=row.get("created_at", ""),
             metadata=row.get("metadata", {}),
+        )
+
+    def _dict_to_tool_call(self, row: dict[str, Any]) -> ToolCallRecord:
+        """将字典转换为 ToolCallRecord。"""
+        return ToolCallRecord(
+            turn_id=row["turn_id"],
+            tool_call_id=row["tool_call_id"],
+            tool_name=row["tool_name"],
+            args=row.get("args", {}),
+            content=row.get("content", ""),
+            error=row.get("error"),
+            duration_ms=float(row.get("duration_ms", 0.0)),
+            created_at=row.get("created_at", ""),
         )

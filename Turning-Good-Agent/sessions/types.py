@@ -29,3 +29,17 @@ class Session:
     uncompacted_history: list[MessageRecord]
     created_at: str
     updated_at: str
+
+
+@dataclass(slots=True)
+class ToolCallRecord:
+    """表示一条已持久化的工具调用记录。"""
+
+    turn_id: str
+    tool_call_id: str
+    tool_name: str
+    args: dict[str, Any]
+    content: str
+    error: str | None
+    duration_ms: float
+    created_at: str

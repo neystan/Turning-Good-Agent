@@ -180,6 +180,7 @@ async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
         )
         await runtime.sessions.store.update_summary(session_id, ctx.session.summary)
         await runtime.sessions.store.update_uncompacted_history(session_id, ctx.session.uncompacted_history)
+    await runtime.sessions.store.save_tool_calls(ctx.turn_id, session_id, ctx.tool_calls)
     await runtime.sessions.store.save_token_usage(ctx.turn_id, session_id, ctx.token_usage)
     await runtime.proactive.emit(CONVERSATION_COMPLETED, {"session_id": session_id, "turn_id": ctx.turn_id})
     return "ok"

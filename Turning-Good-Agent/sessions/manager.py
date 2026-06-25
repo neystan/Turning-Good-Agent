@@ -8,6 +8,7 @@ from .types import MessageRecord, Session
 COMMANDS: dict[str, str] = {
     "/history": "查看当前会话的完整历史消息",
     "/context": "查看当前会注入模型的会话上下文",
+    "/tools": "查看当前会话的工具调用记录",
     "/clear": "清空当前会话的消息和摘要",
     "/new": "开始一个新会话，CLI 会切换到新的 session",
     "/exit": "退出当前 CLI 会话",
@@ -40,6 +41,8 @@ class SessionManager:
             return "\n".join(f"{item.role}: {item.content}" for item in records)
         if command == "/context":
             return await self.context_view(session_id)
+        if command == "/tools":
+            return await self.tools_view(session_id)
         if command == "/clear":
             await self.store.clear_session(session_id)
             return "当前会话已清空。"
@@ -76,6 +79,22 @@ class SessionManager:
         if context.uncompacted_history:
             lines.append("未压缩历史：")
             lines.extend(f"{item.role}: {item.content}" for item in context.uncompacted_history)
+        return "\n".join(lines)
+
+    async def tools_view(self, session_id: str) -> str:
+        """返回当前会话的工具调用视图。"""
+        records = await self.store.all_tool_calls(session_id)
+        if not records:
+            return "暂无工具调用记录。"
+        lines: list[str] = []
+        for item in records:
+            lines.append(
+                f"{item.created_at} turn={item.turn_id} tool={item.tool_name} tool_call_id={item.tool_call_id}"
+            )
+            lines.append(f"args: {item.args}")
+            lines.append(f"result: {item.content}")
+            lines.append(f"error: {item.error or '无'}")
+            lines.append(f"duration_ms: {item.duration_ms:.3f}")
         return "\n".join(lines)
 
     async def save_user_message(

@@ -70,6 +70,7 @@ class AgentLoop:
             )
             for call in response.tool_calls[: self.runtime.max_tool_calls_per_round]:
                 record = await self.executor.run(call.name, call.args)
+                record["tool_call_id"] = call.id
                 tool_records.append(record)
                 working.append(
                     {
