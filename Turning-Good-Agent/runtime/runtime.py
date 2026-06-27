@@ -14,7 +14,15 @@ from ..sessions.store import JsonlSessionStore
 from ..tools.loader import ToolLoader
 from ..tools.registry import ToolRegistry
 from .agent_loop import AgentLoop
-from .state import TurnState, compact_trace_metadata, next_state, run_state, run_trace_metadata, save_remaining_traces
+from .state import (
+    TurnState,
+    compact_trace_metadata,
+    next_state,
+    run_state,
+    run_trace_metadata,
+    save_remaining_traces,
+    save_trace_metadata,
+)
 from .turn_context import TurnContext
 
 
@@ -55,7 +63,11 @@ class AgentRuntime:
             proactive=ProactiveManager(),
         )
 
-    async def run_turn(self, msg: InboundMessage, on_delta: Callable[[str], object] | None = None) -> OutboundMessage:
+    async def run_turn(
+        self,
+        msg: InboundMessage,
+        on_delta: Callable[[str], object] | None = None,
+    ) -> OutboundMessage:
         """执行一轮消息处理并返回出站消息。"""
         ctx = TurnContext(inbound=msg, on_delta=on_delta)
         lock = self.sessions.locks.lock_for(msg.session_id)
@@ -74,6 +86,8 @@ class AgentRuntime:
                     metadata = run_trace_metadata(ctx)
                 elif ctx.state is TurnState.COMPACT:
                     metadata = compact_trace_metadata(ctx)
+                elif ctx.state is TurnState.SAVE:
+                    metadata = save_trace_metadata(ctx)
                 ctx.trace.append(
                     StateTrace(ctx.turn_id, msg.session_id, ctx.state.name, duration_ms, event, ctx.error, metadata)
                 )

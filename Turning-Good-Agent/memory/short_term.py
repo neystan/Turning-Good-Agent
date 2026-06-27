@@ -56,7 +56,7 @@ class ShortTermMemory:
         ]
 
     def count_tokens(self, messages: list[MessageRecord]) -> int:
-        """统计消息持久化的真实 token 权重。"""
+        """统计消息持久化的 tokenizer token 权重。"""
         return sum(item.token_count for item in messages)
 
     def complete_turns(self, messages: list[MessageRecord]) -> list[list[MessageRecord]]:

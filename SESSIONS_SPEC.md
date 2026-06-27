@@ -14,14 +14,15 @@
     session.json
     messages.jsonl
     turn_traces.jsonl
-    token_usage.jsonl
+    true_token_usage.jsonl
+    tool_calls.jsonl
 ```
 
 说明：
 
 - `session_id` 是逻辑会话标识，用于恢复会话。
 - 目录名带北京时间，也就是东八区时间，便于人工区分多次会话。
-- `session.json` 中保存真实 `id`、`created_at`、`updated_at`、`summary`、`metadata`。
+- `session.json` 中保存真实 `id`、`created_at`、`updated_at`、`summary`、`uncompacted_history`。
 
 ## 命令语义
 

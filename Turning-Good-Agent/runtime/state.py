@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from ..bus.messages import OutboundMessage, utc_now_iso
 from ..context.session_context import build_session_context, count_message_tokens
+from ..context.system_prompt import SYSTEM_PROMPT
 from ..memory.short_term import ShortTermMemory
 from ..proactive.events import CONVERSATION_COMPLETED
 from ..sessions.types import MessageRecord
@@ -125,7 +126,7 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
     ctx.should_compact = bool(ctx.compact_stats["should_compact"])
     if not ctx.should_compact:
         ctx.session.uncompacted_history = uncompacted_history
-        ctx.token_usage = await build_token_usage(runtime, ctx, compacted=False)
+        ctx.true_token_usage = await build_true_token_usage(runtime, ctx, compacted=False)
         return "ok"
     memory = ShortTermMemory(
         compact_token_threshold=runtime.settings.memory.compact_token_threshold,
@@ -135,8 +136,9 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
     compact_source = uncompacted_history[: len(uncompacted_history) - len(recent_history)]
     if not compact_source:
         ctx.session.uncompacted_history = uncompacted_history
-        ctx.token_usage = await build_token_usage(runtime, ctx, compacted=False)
+        ctx.true_token_usage = await build_true_token_usage(runtime, ctx, compacted=False)
         return "ok"
+    print_status("正在压缩会话上下文...")
     summary, summary_usage = await memory.compact(ctx.session.summary, compact_source, runtime.agent_loop.llm)
     ctx.llm_usage = ctx.llm_usage.add(summary_usage)
     compacted_token_count = memory.count_tokens(compact_source)
@@ -151,7 +153,15 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
             "raw_window_token_count": raw_window_token_count,
         }
     )
-    ctx.token_usage = await build_token_usage(runtime, ctx, compacted=True)
+    ctx.true_token_usage = await build_true_token_usage(runtime, ctx, compacted=True)
+    print_status(
+        (
+            "压缩完成："
+            f"已压缩 {len(compact_source)} 条消息，"
+            f"压缩 {compacted_token_count} tokens，"
+            f"保留最近 {raw_window_token_count} tokens 原文。"
+        ),
+    )
     return "ok"
 
 
@@ -159,9 +169,11 @@ async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
     """保存消息、trace、token，并触发主动事件。"""
     session_id = ctx.inbound.session_id
     if ctx.llm_usage is None:
-        raise RuntimeError("本轮 LLM 响应缺少 usage，无法写入 token_usage.jsonl。")
-    if not ctx.token_usage:
-        raise RuntimeError("本轮缺少 token_usage，无法执行 SAVE。")
+        raise RuntimeError("本轮 LLM 响应缺少 usage，无法写入 true_token_usage.jsonl。")
+    if not ctx.true_token_usage:
+        raise RuntimeError("本轮缺少 true_token_usage，无法执行 SAVE。")
+    if ctx.session is not None:
+        ctx.context_tokens = save_context_token_breakdown(runtime, ctx)
     user_record = await runtime.sessions.save_user_message(
         session_id,
         ctx.inbound.content,
@@ -181,7 +193,7 @@ async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
         await runtime.sessions.store.update_summary(session_id, ctx.session.summary)
         await runtime.sessions.store.update_uncompacted_history(session_id, ctx.session.uncompacted_history)
     await runtime.sessions.store.save_tool_calls(ctx.turn_id, session_id, ctx.tool_calls)
-    await runtime.sessions.store.save_token_usage(ctx.turn_id, session_id, ctx.token_usage)
+    await runtime.sessions.store.save_true_token_usage(ctx.turn_id, session_id, ctx.true_token_usage)
     await runtime.proactive.emit(CONVERSATION_COMPLETED, {"session_id": session_id, "turn_id": ctx.turn_id})
     return "ok"
 
@@ -203,14 +215,14 @@ async def save_remaining_traces(runtime: AgentRuntime, ctx: TurnContext) -> None
     ctx.saved_trace_count = len(ctx.trace)
 
 
-async def build_token_usage(
+async def build_true_token_usage(
     runtime: AgentRuntime,
     ctx: TurnContext,
     compacted: bool,
 ) -> dict[str, int]:
     """用真实 LLM usage 生成当前 turn 的完整 token 记录。"""
     if ctx.llm_usage is None:
-        raise RuntimeError("本轮 LLM 响应缺少 usage，无法写入 token_usage.jsonl。")
+        raise RuntimeError("本轮 LLM 响应缺少 usage，无法写入 true_token_usage.jsonl。")
     previous_total = await runtime.sessions.store.last_total_tokens(ctx.inbound.session_id)
     return runtime.token_monitor.record_llm_usage(
         ctx.llm_usage,
@@ -310,25 +322,119 @@ def context_token_count(
     current_input: str,
 ) -> int:
     """计算本轮上下文预算权重。"""
-    messages = runtime.context_builder.build(
-        summary=summary,
-        history=uncompacted_history,
-        user_content=current_input,
-        tool_schemas=runtime.agent_loop.tools.schemas(),
-        profile_memory=runtime.profile_memory.read(),
+    return context_token_breakdown(runtime, summary, uncompacted_history, current_input)["current_context_tokens"]
+
+
+def context_token_breakdown(
+    runtime: AgentRuntime,
+    summary: str,
+    history: list[MessageRecord],
+    current_input: str,
+) -> dict[str, int]:
+    """返回本轮模型输入上下文 token 分解。"""
+    profile_memory = runtime.profile_memory.read()
+    tool_schemas = runtime.agent_loop.tools.schemas()
+    openai_tools = runtime.agent_loop.tools.openai_tools()
+    system_tokens = count_content_tokens(SYSTEM_PROMPT)
+    profile_memory_tokens = count_content_tokens(f"长期偏好：{profile_memory}") if profile_memory else 0
+    summary_tokens = count_content_tokens(f"会话摘要：{summary}") if summary else 0
+    history_tokens = count_message_tokens(history)
+    current_input_tokens = count_content_tokens(current_input)
+    tool_schema_tokens = 0
+    if tool_schemas:
+        tool_schema_tokens += count_content_tokens(f"可用工具：{tool_schemas}")
+    if openai_tools:
+        tool_schema_tokens += count_content_tokens(str(openai_tools))
+    current_context_tokens = (
+        system_tokens
+        + profile_memory_tokens
+        + summary_tokens
+        + history_tokens
+        + current_input_tokens
+        + tool_schema_tokens
     )
-    return sum(count_content_tokens(str(message.get("content", ""))) for message in messages)
+    return {
+        "system_tokens": system_tokens,
+        "profile_memory_tokens": profile_memory_tokens,
+        "summary_tokens": summary_tokens,
+        "history_tokens": history_tokens,
+        "current_input_tokens": current_input_tokens,
+        "tool_schema_tokens": tool_schema_tokens,
+        "current_context_tokens": current_context_tokens,
+    }
+
+
+def save_context_token_breakdown(runtime: AgentRuntime, ctx: TurnContext) -> dict[str, int]:
+    """返回 SAVE 状态的最终上下文 token 观测。"""
+    if ctx.session is None:
+        return {}
+    previous_history = history_without_current_turn(ctx.session.uncompacted_history, ctx)
+    profile_memory = runtime.profile_memory.read()
+    tool_schemas = runtime.agent_loop.tools.schemas()
+    openai_tools = runtime.agent_loop.tools.openai_tools()
+    system_tokens = count_content_tokens(SYSTEM_PROMPT)
+    profile_memory_tokens = count_content_tokens(f"长期偏好：{profile_memory}") if profile_memory else 0
+    summary_tokens = count_content_tokens(f"会话摘要：{ctx.session.summary}") if ctx.session.summary else 0
+    history_tokens = count_message_tokens(previous_history)
+    current_input_tokens = count_content_tokens(ctx.inbound.content)
+    output_tokens = count_content_tokens(ctx.final_content)
+    tool_schema_tokens = 0
+    if tool_schemas:
+        tool_schema_tokens += count_content_tokens(f"可用工具：{tool_schemas}")
+    if openai_tools:
+        tool_schema_tokens += count_content_tokens(str(openai_tools))
+    current_context_tokens = (
+        system_tokens
+        + profile_memory_tokens
+        + summary_tokens
+        + history_tokens
+        + current_input_tokens
+        + output_tokens
+        + tool_schema_tokens
+    )
+    return {
+        "system_tokens": system_tokens,
+        "profile_memory_tokens": profile_memory_tokens,
+        "summary_tokens": summary_tokens,
+        "history_tokens": history_tokens,
+        "current_input_tokens": current_input_tokens,
+        "output_tokens": output_tokens,
+        "tool_schema_tokens": tool_schema_tokens,
+        "tool_count": len(ctx.tool_calls),
+        "current_context_tokens": current_context_tokens,
+    }
+
+
+def history_without_current_turn(history: list[MessageRecord], ctx: TurnContext) -> list[MessageRecord]:
+    """从历史中移除本轮临时 user/assistant，避免 token 观测重复计数。"""
+    if len(history) < 2:
+        return history
+    tail_user = history[-2]
+    tail_assistant = history[-1]
+    if (
+        tail_user.role == "user"
+        and tail_user.content == ctx.inbound.content
+        and tail_assistant.role == "assistant"
+        and tail_assistant.content == ctx.final_content
+    ):
+        return history[:-2]
+    return history
 
 
 def compact_trace_metadata(ctx: TurnContext) -> dict[str, int]:
     """返回 COMPACT 状态需要暴露的最小监控字段。"""
     return {
-        "compacted": int(ctx.token_usage.get("compacted", 0)),
+        "compacted": int(ctx.true_token_usage.get("compacted", 0)),
         "compacted_message_count": int(ctx.compact_stats.get("compacted_message_count", 0)),
         "compacted_token_count": int(ctx.compact_stats.get("compacted_token_count", 0)),
         "raw_window_message_count": int(ctx.compact_stats.get("raw_window_message_count", 0)),
         "raw_window_token_count": int(ctx.compact_stats.get("raw_window_token_count", 0)),
     }
+
+
+def print_status(content: str) -> None:
+    """直接打印 Runtime 状态提示。"""
+    print(f"\n[系统] {content}", flush=True)
 
 
 def run_trace_metadata(ctx: TurnContext) -> dict[str, int | list[str]]:
@@ -337,3 +443,8 @@ def run_trace_metadata(ctx: TurnContext) -> dict[str, int | list[str]]:
         "tool_call_count": len(ctx.tool_calls),
         "tool_names": [record["tool_name"] for record in ctx.tool_calls],
     }
+
+
+def save_trace_metadata(ctx: TurnContext) -> dict[str, int]:
+    """返回 SAVE 状态的上下文 token 观测。"""
+    return dict(ctx.context_tokens)

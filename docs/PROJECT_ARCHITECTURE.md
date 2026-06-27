@@ -101,7 +101,7 @@ python -m Turning-Good-Agent chat
     session.json
     messages.jsonl
     turn_traces.jsonl
-    token_usage.jsonl
+    true_token_usage.jsonl
     tool_calls.jsonl
 ```
 
@@ -132,7 +132,7 @@ python -m Turning-Good-Agent chat
 - 摘要调用的真实 usage 合并进发生压缩的本轮 token 账本
 - 摘要调用如果缺少 usage 或返回空摘要，整轮按失败处理，不保存新摘要、消息或 token 账本
 - 最终模型上下文受 `max_context_tokens = 300000` 约束
-- BUILD 的上下文预算直接按 `ContextBuilder.build()` 生成的真实消息列表计算，包含 `SYSTEM_PROMPT`
+- BUILD 的上下文预算使用 tokenizer 计算，包含 `SYSTEM_PROMPT`
 - 如果 BUILD 阶段完整上下文仍超过上限，当前策略是拒绝本轮并提示上下文过大
 
 ### 4.8 `tools/`
@@ -196,7 +196,7 @@ Tools 当前边界：
 | `observability/trace.py` | 定义状态级 trace 记录。 |
 | `observability/token_monitor.py` | 归一化每轮 LLM token 账本，强制使用真实 LLM usage。 |
 
-消息级 `token_count` 记录当前消息自身内容的 token 权重，用于短期压缩窗口计算。`token_usage.jsonl.input_tokens` 则来自 LLM SDK usage，表示整次模型请求输入，不要求每轮单调递增。
+消息级 `token_count` 记录当前消息自身内容的 tokenizer token 权重，用于短期压缩窗口计算。`true_token_usage.jsonl.input_tokens` 则来自 LLM SDK usage，表示整次模型请求输入，不要求每轮单调递增。
 
 `turn_traces.jsonl` 由 `JsonlSessionStore.save_turn_traces()` 在单轮结束后批量写入，文件格式仍保持一行一个状态，便于后续观测面板按状态时间线读取。
 
@@ -208,7 +208,21 @@ Tools 当前边界：
 - `raw_window_message_count`
 - `raw_window_token_count`
 
-这些字段只写入 `turn_traces.jsonl` 的 `COMPACT.metadata`，不再重复写入 `token_usage.jsonl`。
+这些字段只写入 `turn_traces.jsonl` 的 `COMPACT.metadata`，不再重复写入 `true_token_usage.jsonl`。
+
+当前 SAVE 公开上下文观测字段：
+
+- `system_tokens`
+- `profile_memory_tokens`
+- `summary_tokens`
+- `history_tokens`
+- `current_input_tokens`
+- `output_tokens`
+- `tool_schema_tokens`
+- `tool_count`
+- `current_context_tokens`
+
+这些字段只写入 `turn_traces.jsonl` 的 `SAVE.metadata`。`SAVE` 会在 `COMPACT` 后重新计算上下文观测，因此它反映的是本轮结束后的 `summary + uncompacted_history` 状态，不包含 tool result。`history_tokens` 是本轮之前未压缩历史的 token，`current_input_tokens` 和 `output_tokens` 分别记录本轮新增输入与输出，避免重复计数。`tool_count` 是本轮实际工具调用次数，`current_context_tokens` 放在最后，表示本轮结束后的当前上下文 token 数。
 
 当前 RUN 公开工具观测字段只有：
 

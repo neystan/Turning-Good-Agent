@@ -28,5 +28,5 @@ def build_session_context(session: Session, full_history: list[MessageRecord]) -
 
 
 def count_message_tokens(messages: list[MessageRecord]) -> int:
-    """统计消息记录里的真实 token 权重。"""
+    """统计消息记录里的 tokenizer token 权重。"""
     return sum(item.token_count for item in messages)

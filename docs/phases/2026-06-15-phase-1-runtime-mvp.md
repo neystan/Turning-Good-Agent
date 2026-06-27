@@ -79,7 +79,7 @@ find .sessions -maxdepth 2 -type f | sort
 session.json
 messages.jsonl
 turn_traces.jsonl
-token_usage.jsonl
+true_token_usage.jsonl
 ```
 
 ## Completion Criteria

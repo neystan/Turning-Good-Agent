@@ -40,7 +40,7 @@ recent_window_token_limit = 20000
 max_context_tokens = 300000
 ```
 
-当上次压缩后新增的原文历史超过 `200000` token 时触发压缩；压缩后只保留最近不超过 `20000` token 的完整 user/assistant 对话原文，其余旧消息通过 LLM 生成新的 `summary`。摘要 LLM 调用必须返回真实 usage，并合并进发生压缩的本轮 `token_usage.jsonl`；若摘要缺少 usage 或为空，本轮按失败处理。`BUILD` 默认注入 `summary + uncompacted_history`，最终注入模型的上下文受 `max_context_tokens = 300000` 约束；上下文预算直接按 `ContextBuilder.build()` 生成的真实消息列表计算，包含 `SYSTEM_PROMPT`、长期偏好、工具 schema、summary、未压缩历史和当前用户输入；若本轮构建时仍超过该上限，先拒绝本轮并提示上下文过大。
+当上次压缩后新增的原文历史超过 `200000` token 时触发压缩；压缩后只保留最近不超过 `20000` token 的完整 user/assistant 对话原文，其余旧消息通过 LLM 生成新的 `summary`。摘要 LLM 调用必须返回真实 usage，并合并进发生压缩的本轮 `true_token_usage.jsonl`；若摘要缺少 usage 或为空，本轮按失败处理。`BUILD` 默认注入 `summary + uncompacted_history`，最终注入模型的上下文受 `max_context_tokens = 300000` 约束；上下文预算使用 tokenizer 计算，包含 `SYSTEM_PROMPT`、长期偏好、工具 schema、summary、未压缩历史和当前用户输入；若本轮构建时仍超过该上限，先拒绝本轮并提示上下文过大。
 
 当前配置只从根目录下的 `settings.local.json` 读取。这个文件不会被提交到 GitHub，也不再支持 `TGA_*` 环境变量覆盖。
 
@@ -64,7 +64,7 @@ cp settings.example.json settings.local.json
 session.json
 messages.jsonl
 turn_traces.jsonl
-token_usage.jsonl
+true_token_usage.jsonl
 tool_calls.jsonl
 ```
 
@@ -105,7 +105,7 @@ flowchart TD
 
     Compact --> Token[TokenMonitor usage base]
     Save --> Trace[StateTrace]
-    Save --> TokenUsage[token_usage.jsonl]
+    Save --> TokenUsage[true_token_usage.jsonl]
     Save --> Proactive[ProactiveManager]
 
     Respond --> Outbound[OutboundMessage]
@@ -211,5 +211,21 @@ python -m Turning-Good-Agent chat
 
 当前 LLM 接入还有两个硬约束：
 
-- provider 必须返回真实 `usage`；无论是非流式还是流式，只要最终缺少有效 `usage`，本轮都会失败，且不会写入 `token_usage.jsonl`。
+- provider 必须返回真实 `usage`；无论是非流式还是流式，只要最终缺少有效 `usage`，本轮都会失败，且不会写入 `true_token_usage.jsonl`。
 - tool call 必须完整且参数是合法 JSON object；如果缺少 `tool_call.id`、`function.name`，或参数 JSON 非法，会直接返回错误，不再静默降级成空参数。
+
+`SAVE.metadata` 会在本轮结束后记录上下文 token 观测，不包含 tool result：
+
+```text
+system_tokens
+profile_memory_tokens
+summary_tokens
+history_tokens
+current_input_tokens
+output_tokens
+tool_schema_tokens
+tool_count
+current_context_tokens
+```
+
+其中 `history_tokens` 是本轮之前未压缩历史的 token，`current_input_tokens` 和 `output_tokens` 分别记录本轮用户输入和助手输出，避免重复计数。`tool_count` 是本轮实际工具调用次数，`current_context_tokens` 是本轮结束后的当前上下文 token 数，字段放在最后便于人工查看。

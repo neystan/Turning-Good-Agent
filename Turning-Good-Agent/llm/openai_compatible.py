@@ -156,7 +156,7 @@ class OpenAICompatibleLLM:
         """解析并要求模型返回真实 usage。"""
         parsed = self._parse_usage(usage)
         if parsed is None or parsed.total_tokens <= 0:
-            raise RuntimeError("模型响应缺少 usage，无法记录 token_usage。")
+            raise RuntimeError("模型响应缺少 usage，无法记录 true_token_usage。")
         return parsed
 
     def _parse_usage(self, usage: Any) -> LLMUsage | None:

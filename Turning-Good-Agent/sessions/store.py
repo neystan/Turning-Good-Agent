@@ -132,10 +132,10 @@ class JsonlSessionStore:
         rows = [self._trace_to_dict(trace) for trace in traces]
         self._append_jsonl_rows(self._traces_file(session_id), rows)
 
-    async def save_token_usage(self, turn_id: str, session_id: str, usage: dict[str, Any]) -> None:
+    async def save_true_token_usage(self, turn_id: str, session_id: str, usage: dict[str, Any]) -> None:
         """保存单轮 token 使用量。"""
         self._append_jsonl(
-            self._tokens_file(session_id),
+            self._true_tokens_file(session_id),
             {
                 "turn_id": turn_id,
                 "input_tokens": usage["input_tokens"],
@@ -179,7 +179,7 @@ class JsonlSessionStore:
 
     async def last_total_tokens(self, session_id: str) -> int:
         """读取当前会话最后一条累计 token。"""
-        rows = self._read_jsonl(self._tokens_file(session_id))
+        rows = self._read_jsonl(self._true_tokens_file(session_id))
         if not rows:
             return 0
         return int(rows[-1].get("total_tokens", 0))
@@ -190,7 +190,7 @@ class JsonlSessionStore:
             "sessions": "session.json",
             "messages": "messages.jsonl",
             "turn_traces": "turn_traces.jsonl",
-            "token_usage": "token_usage.jsonl",
+            "true_token_usage": "true_token_usage.jsonl",
             "tool_calls": "tool_calls.jsonl",
         }
         if table not in paths:
@@ -264,9 +264,9 @@ class JsonlSessionStore:
         """返回状态追踪文件路径。"""
         return self._session_dir(session_id) / "turn_traces.jsonl"
 
-    def _tokens_file(self, session_id: str) -> Path:
+    def _true_tokens_file(self, session_id: str) -> Path:
         """返回 token 记录文件路径。"""
-        return self._session_dir(session_id) / "token_usage.jsonl"
+        return self._session_dir(session_id) / "true_token_usage.jsonl"
 
     def _tool_calls_file(self, session_id: str) -> Path:
         """返回工具调用记录文件路径。"""

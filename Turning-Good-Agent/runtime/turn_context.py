@@ -25,7 +25,8 @@ class TurnContext:
     llm_usage: Any | None = None
     trace: list[Any] = field(default_factory=list)
     saved_trace_count: int = 0
-    token_usage: dict[str, Any] = field(default_factory=dict)
+    true_token_usage: dict[str, Any] = field(default_factory=dict)
+    context_tokens: dict[str, Any] = field(default_factory=dict)
     should_compact: bool = False
     compact_stats: dict[str, Any] = field(default_factory=dict)
     outbound: OutboundMessage | None = None

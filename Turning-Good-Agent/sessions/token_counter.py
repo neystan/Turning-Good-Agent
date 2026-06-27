@@ -1,11 +1,11 @@
-import re
+import tiktoken
 
 
-TOKEN_PATTERN = re.compile(r"[\u4e00-\u9fff]|[A-Za-z0-9_]+|[^\s]")
+TOKEN_ENCODING = tiktoken.get_encoding("o200k_base")
 
 
 def count_content_tokens(content: str) -> int:
-    """按消息自身内容估算 token 权重。"""
+    """使用 tokenizer 计算文本 token 权重。"""
     if not content:
         return 0
-    return max(1, len(TOKEN_PATTERN.findall(content)))
+    return max(1, len(TOKEN_ENCODING.encode(content)))
