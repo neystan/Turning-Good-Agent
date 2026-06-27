@@ -2,7 +2,7 @@ import asyncio
 import html
 import re
 from typing import Any
-from urllib.parse import parse_qs, quote_plus, unquote, urlparse
+from urllib.parse import quote_plus, unquote
 from urllib.request import Request, urlopen
 
 from . import security
@@ -35,11 +35,6 @@ def _decode_redirect_url(url: str) -> str:
         match = re.search(r"/RU=([^/]+)", clean_url)
         if match:
             return unquote(match.group(1))
-    if "duckduckgo.com/l/" in clean_url:
-        parsed = urlparse(clean_url)
-        target = parse_qs(parsed.query).get("uddg", [""])[0]
-        if target:
-            return target
     return clean_url
 
 
@@ -110,7 +105,7 @@ class WebSearchTool:
     name = "web_search"
     source = "builtin"
     discoverable = True
-    description = "使用 DuckDuckGo HTML 搜索网页，返回标题片段和 URL。"
+    description = "使用 Yahoo Search 搜索网页，返回标题片段和 URL。"
     input_schema = {
         "type": "object",
         "properties": {"query": {"type": "string"}, "count": {"type": "integer", "minimum": 1, "maximum": 10}},
@@ -123,38 +118,30 @@ class WebSearchTool:
         if not query:
             return _error("query 不能为空")
         count = int(args.get("count") or 5)
-        search_urls = [
-            "https://search.yahoo.com/search?p=" + quote_plus(query),
-            "https://html.duckduckgo.com/html/?q=" + quote_plus(query),
-        ]
+        url = "https://search.yahoo.com/search?p=" + quote_plus(query)
         errors: list[str] = []
-        for url in search_urls:
-            source = urlparse(url).netloc
-            backend_errors: list[str] = []
-            for _attempt in range(_SEARCH_BACKEND_ATTEMPTS):
-                try:
-                    _content_type, body = await _fetch_url(url, 12.0, security.MAX_WEB_RESPONSE_BYTES)
-                except Exception as exc:
-                    backend_errors.append(str(exc))
-                    continue
-                if _looks_blocked(body):
-                    backend_errors.append("被搜索服务拦截")
-                    break
-                results = self._parse_results(body, count)
-                if results:
-                    return ToolResult("\n".join(results))
-                backend_errors.append("未解析到结果")
+        for _attempt in range(_SEARCH_BACKEND_ATTEMPTS):
+            try:
+                _content_type, body = await _fetch_url(url, 12.0, security.MAX_WEB_RESPONSE_BYTES)
+            except Exception as exc:
+                errors.append(str(exc))
+                continue
+            if _looks_blocked(body):
+                errors.append("被搜索服务拦截")
                 break
-            errors.append(f"{source} {'；'.join(backend_errors)}")
+            results = self._parse_results(body, count)
+            if results:
+                return ToolResult("\n".join(results))
+            errors.append("未解析到结果")
+            break
         reason = "；".join(errors) if errors else "没有可用搜索后端"
-        return ToolResult(f"未找到搜索结果：{query}\n原因：{reason}")
+        return ToolResult(f"未找到搜索结果：{query}\n原因：search.yahoo.com {reason}")
 
     @staticmethod
     def _parse_results(body: str, count: int) -> list[str]:
-        """从 DuckDuckGo HTML 中提取搜索结果。"""
+        """从 Yahoo HTML 中提取搜索结果。"""
         results: list[str] = []
-        candidates = WebSearchTool._parse_duckduckgo_results(body)
-        candidates.extend(WebSearchTool._parse_yahoo_results(body))
+        candidates = WebSearchTool._parse_yahoo_results(body)
         seen: set[str] = set()
         for url, title, snippet in candidates:
             clean_url = _decode_redirect_url(url)
@@ -172,12 +159,6 @@ class WebSearchTool:
             if len(results) >= count:
                 break
         return results
-
-    @staticmethod
-    def _parse_duckduckgo_results(body: str) -> list[tuple[str, str, str]]:
-        """解析 DuckDuckGo HTML 搜索结果。"""
-        pattern = r'<a[^>]+class="[^"]*\bresult__a\b[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)</a>'
-        return [(url, title, "") for url, title in re.findall(pattern, body)]
 
     @staticmethod
     def _parse_yahoo_results(body: str) -> list[tuple[str, str, str]]:

@@ -347,6 +347,6 @@ Phase 2.5 完成时应满足：
 - `ToolLoader` 可以自动发现并注册本阶段新增工具。
 - 文件工具已支持 UTF-8 文本读写、精确替换、目录列表、文件查找和内容搜索。
 - shell 工具已支持一次性命令、长运行 session 和 `write_stdin` 轮询/终止。
-- web 工具已支持 http/https 抓取和 DuckDuckGo HTML 搜索。
+- web 工具已支持 http/https 抓取和 Yahoo Search 搜索。
 - `weather` 已支持通过城市名称查询当前天气。
 - 已加入危险路径、危险命令、非 HTTP URL、输出长度和 `.sessions` 写入限制。
