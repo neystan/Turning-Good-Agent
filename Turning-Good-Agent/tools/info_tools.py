@@ -19,7 +19,7 @@ async def _fetch_weather(location: str) -> str:
         url = f"https://wttr.in/{quote(location)}?format=3"
         request = Request(url, headers={"User-Agent": "Turning-Good-Agent/0.1"})
         with urlopen(request, timeout=15) as response:  # nosec: 固定天气接口
-            raw = response.read(security.MAX_TOOL_OUTPUT_CHARS)
+            raw = response.read(security.MAX_OUTPUT_CHARS)
         return raw.decode("utf-8", errors="replace").strip()
 
     return await asyncio.to_thread(_load)

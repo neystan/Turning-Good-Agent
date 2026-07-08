@@ -93,7 +93,7 @@ class WebFetchTool:
         try:
             content_type, body = await _fetch_url(url, 20.0, security.MAX_WEB_RESPONSE_BYTES)
             text = _strip_html(body) if "html" in content_type.lower() or "<html" in body.lower() else body.strip()
-            max_chars = security.clamp_int(args.get("max_chars"), security.MAX_TOOL_OUTPUT_CHARS, 1000, 50_000)
+            max_chars = security.clamp_int(args.get("max_chars"), security.MAX_OUTPUT_CHARS, 1000, 50_000)
             return ToolResult(_UNTRUSTED_BANNER + "\n\n" + security.truncate_text(text, max_chars))
         except Exception as exc:
             return _error(f"抓取网页失败：{exc}")
