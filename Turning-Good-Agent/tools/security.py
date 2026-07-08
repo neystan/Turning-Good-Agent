@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 MAX_READ_CHARS = 128_000
 MAX_LIST_ENTRIES = 500
 MAX_GREP_FILE_BYTES = 2_000_000
-MAX_OUTPUT_CHARS = 20_000
+MAX_TOOL_OUTPUT_CHARS = 20_000
 MAX_WEB_RESPONSE_BYTES = 2_000_000
 DEFAULT_EXEC_TIMEOUT_SECONDS = 60
 MAX_EXEC_TIMEOUT_SECONDS = 600
@@ -60,7 +60,7 @@ _DENY_COMMAND_PATTERNS = [
 ]
 
 
-def truncate_text(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
+def truncate_text(text: str, limit: int = MAX_TOOL_OUTPUT_CHARS) -> str:
     """按字符上限截断工具输出。"""
     if len(text) <= limit:
         return text

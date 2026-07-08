@@ -77,7 +77,7 @@ class ExecTool:
                 1,
                 security.MAX_EXEC_TIMEOUT_SECONDS,
             )
-            max_output = security.clamp_int(args.get("max_output_chars"), security.MAX_OUTPUT_CHARS, 1000, 50_000)
+            max_output = security.clamp_int(args.get("max_output_chars"), security.MAX_TOOL_OUTPUT_CHARS, 1000, 50_000)
             if "yield_time_ms" in args and args.get("yield_time_ms") is not None:
                 yield_time_ms = security.clamp_int(
                     args.get("yield_time_ms"),
@@ -150,7 +150,7 @@ class WriteStdinTool:
                 str(args.get("chars") or ""),
                 bool(args.get("terminate", False)),
                 security.clamp_int(args.get("yield_time_ms"), security.DEFAULT_YIELD_TIME_MS, 0, security.MAX_YIELD_TIME_MS),
-                security.clamp_int(args.get("max_output_chars"), security.MAX_OUTPUT_CHARS, 1000, 50_000),
+                security.clamp_int(args.get("max_output_chars"), security.MAX_TOOL_OUTPUT_CHARS, 1000, 50_000),
             )
             return ToolResult(format_poll(str(args["session_id"]), poll), {"running": not poll.done})
         except KeyError:
