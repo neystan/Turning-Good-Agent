@@ -10,6 +10,8 @@ MAX_TOOL_OUTPUT_CHARS = 20_000
 MAX_WEB_RESPONSE_BYTES = 2_000_000
 DEFAULT_EXEC_TIMEOUT_SECONDS = 60
 MAX_EXEC_TIMEOUT_SECONDS = 600
+DEFAULT_YIELD_TIME_MS = 1000
+MAX_YIELD_TIME_MS = 30_000
 MAX_EXEC_SESSIONS = 8
 EXEC_IDLE_TIMEOUT_SECONDS = 1800
 
@@ -42,7 +44,7 @@ _BLOCKED_DEVICE_PATHS = {
 }
 
 _DENY_COMMAND_PATTERNS = [
-    r"\brm\s+-[rf]{1,2}\b",
+    r"\brm\s+-[^\s]*[rf][^\s]*\b",
     r"\bmkfs\b",
     r"\bdiskpart\b",
     r"\bdd\s+if=",
@@ -67,6 +69,15 @@ def truncate_text(text: str, limit: int = MAX_TOOL_OUTPUT_CHARS) -> str:
     half = limit // 2
     omitted = len(text) - limit
     return text[:half] + f"\n\n... truncated {omitted} chars ...\n\n" + text[-half:]
+
+
+def clamp_int(value: object, default: int, minimum: int, maximum: int) -> int:
+    """把整数参数限制在安全范围内。"""
+    try:
+        number = int(value) if value is not None else default
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(number, maximum))
 
 
 def is_blocked_device_path(path: str | Path) -> bool:

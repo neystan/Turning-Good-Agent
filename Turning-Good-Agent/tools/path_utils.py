@@ -23,7 +23,9 @@ def is_under(path: Path, root: Path) -> bool:
 
 def resolve_workspace_path(path: str, workspace: Path) -> Path:
     """解析 workspace 内路径并阻止目录逃逸。"""
-    raw = Path(path).expanduser()
+    if path.startswith("~"):
+        raise PermissionError("workspace 工具不支持 ~ 路径，请使用相对路径或 workspace 内绝对路径")
+    raw = Path(path)
     candidate = raw if raw.is_absolute() else workspace / raw
     resolved = candidate.resolve()
     root = workspace.resolve()

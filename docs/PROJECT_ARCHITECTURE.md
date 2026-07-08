@@ -222,7 +222,7 @@ Tools 当前边界：
 - `tool_count`
 - `current_context_tokens`
 
-这些字段只写入 `turn_traces.jsonl` 的 `SAVE.metadata`。`SAVE` 会在 `COMPACT` 后重新计算上下文观测，因此它反映的是本轮结束后的 `summary + uncompacted_history` 状态，不包含 tool result。`history_tokens` 是本轮之前未压缩历史的 token，`current_input_tokens` 和 `output_tokens` 分别记录本轮新增输入与输出，避免重复计数。`tool_count` 是本轮实际工具调用次数，`current_context_tokens` 放在最后，表示本轮结束后的当前上下文 token 数。
+这些字段只写入 `turn_traces.jsonl` 的 `SAVE.metadata`。`SAVE` 会在 `COMPACT` 后重新计算上下文观测，因此它反映的是本轮结束后的 `summary + uncompacted_history` 状态，不包含 tool result。`history_tokens` 是本轮之前未压缩历史的 token，`current_input_tokens` 和 `output_tokens` 分别记录本轮新增输入与输出。只有本轮完整 user/assistant 仍保留在 `uncompacted_history` 时，它们才计入 `current_context_tokens`；如果本轮已经被压缩进 summary，就只通过 `summary_tokens` 体现。`tool_count` 是本轮实际工具调用次数，`current_context_tokens` 放在最后，表示本轮结束后的当前上下文 token 数。
 
 当前 RUN 公开工具观测字段只有：
 

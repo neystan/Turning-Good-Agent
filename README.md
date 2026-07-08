@@ -228,4 +228,4 @@ tool_count
 current_context_tokens
 ```
 
-其中 `history_tokens` 是本轮之前未压缩历史的 token，`current_input_tokens` 和 `output_tokens` 分别记录本轮用户输入和助手输出，避免重复计数。`tool_count` 是本轮实际工具调用次数，`current_context_tokens` 是本轮结束后的当前上下文 token 数，字段放在最后便于人工查看。
+其中 `history_tokens` 是本轮之前未压缩历史的 token，`current_input_tokens` 和 `output_tokens` 分别记录本轮用户输入和助手输出。只有本轮完整 user/assistant 仍保留在 `uncompacted_history` 时，它们才计入 `current_context_tokens`；如果本轮已经被压缩进 summary，就只通过 `summary_tokens` 体现。`tool_count` 是本轮实际工具调用次数，`current_context_tokens` 是本轮结束后的当前上下文 token 数，字段放在最后便于人工查看。

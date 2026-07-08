@@ -368,7 +368,12 @@ def save_context_token_breakdown(runtime: AgentRuntime, ctx: TurnContext) -> dic
     """返回 SAVE 状态的最终上下文 token 观测。"""
     if ctx.session is None:
         return {}
-    previous_history = history_without_current_turn(ctx.session.uncompacted_history, ctx)
+    current_turn_in_context = has_current_turn(ctx.session.uncompacted_history, ctx)
+    previous_history = (
+        history_without_current_turn(ctx.session.uncompacted_history, ctx)
+        if current_turn_in_context
+        else ctx.session.uncompacted_history
+    )
     profile_memory = runtime.profile_memory.read()
     tool_schemas = runtime.agent_loop.tools.schemas()
     openai_tools = runtime.agent_loop.tools.openai_tools()
@@ -388,10 +393,10 @@ def save_context_token_breakdown(runtime: AgentRuntime, ctx: TurnContext) -> dic
         + profile_memory_tokens
         + summary_tokens
         + history_tokens
-        + current_input_tokens
-        + output_tokens
         + tool_schema_tokens
     )
+    if current_turn_in_context:
+        current_context_tokens += current_input_tokens + output_tokens
     return {
         "system_tokens": system_tokens,
         "profile_memory_tokens": profile_memory_tokens,
@@ -405,18 +410,23 @@ def save_context_token_breakdown(runtime: AgentRuntime, ctx: TurnContext) -> dic
     }
 
 
-def history_without_current_turn(history: list[MessageRecord], ctx: TurnContext) -> list[MessageRecord]:
-    """从历史中移除本轮临时 user/assistant，避免 token 观测重复计数。"""
+def has_current_turn(history: list[MessageRecord], ctx: TurnContext) -> bool:
+    """判断最终未压缩历史是否仍包含本轮 user/assistant。"""
     if len(history) < 2:
-        return history
+        return False
     tail_user = history[-2]
     tail_assistant = history[-1]
-    if (
+    return (
         tail_user.role == "user"
         and tail_user.content == ctx.inbound.content
         and tail_assistant.role == "assistant"
         and tail_assistant.content == ctx.final_content
-    ):
+    )
+
+
+def history_without_current_turn(history: list[MessageRecord], ctx: TurnContext) -> list[MessageRecord]:
+    """从历史中移除本轮临时 user/assistant，避免 token 观测重复计数。"""
+    if has_current_turn(history, ctx):
         return history[:-2]
     return history
 

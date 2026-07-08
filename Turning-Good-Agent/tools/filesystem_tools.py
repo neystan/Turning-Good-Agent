@@ -96,7 +96,7 @@ class ListDirTool(_FsTool):
     """列出目录内容。"""
 
     name = "list_dir"
-    description = "列出目录内容，支持 recursive 和 max_entries。"
+    description = "列出目录内容。"
     input_schema = {
         "type": "object",
         "properties": {
@@ -116,7 +116,7 @@ class ListDirTool(_FsTool):
             if not root.is_dir():
                 return _error(f"不是目录：{args['path']}")
             recursive = bool(args.get("recursive", False))
-            max_entries = int(args.get("max_entries") or 200)
+            max_entries = security.clamp_int(args.get("max_entries"), 200, 1, security.MAX_LIST_ENTRIES)
             items: list[str] = []
             iterator = root.rglob("*") if recursive else root.iterdir()
             for item in sorted(iterator):
@@ -125,6 +125,8 @@ class ListDirTool(_FsTool):
                 suffix = "/" if item.is_dir() else ""
                 if len(items) < max_entries:
                     items.append(self._display(item) + suffix)
+                else:
+                    break
             if not items:
                 return ToolResult("(目录为空)")
             return ToolResult("\n".join(items))
@@ -136,7 +138,7 @@ class FindFileTool(_FsTool):
     """按名称、glob 或类型查找文件。"""
 
     name = "find_file"
-    description = "按路径片段、glob 或文件类型查找文件。"
+    description = "查找文件路径。"
     input_schema = {
         "type": "object",
         "properties": {
@@ -156,7 +158,7 @@ class FindFileTool(_FsTool):
                 return _error(f"路径不存在：{args.get('path') or '.'}")
             root = target if target.is_dir() else target.parent
             query = str(args.get("query") or "").lower()
-            max_results = int(args.get("max_results") or 200)
+            max_results = security.clamp_int(args.get("max_results"), 200, 1, 1000)
             matches: list[str] = []
             for item in _iter_paths(target):
                 if not item.is_file():
@@ -181,13 +183,14 @@ class ReadFileTool(_FsTool):
     """读取 UTF-8 文本文件。"""
 
     name = "read_file"
-    description = "读取 UTF-8 文本文件，支持 offset/limit 行分页。"
+    description = "读取文本文件。"
     input_schema = {
         "type": "object",
         "properties": {
             "path": {"type": "string"},
             "offset": {"type": "integer", "minimum": 1},
             "limit": {"type": "integer", "minimum": 1, "maximum": 2000},
+            "show_line_numbers": {"type": "boolean"},
         },
         "required": ["path"],
     }
@@ -208,14 +211,16 @@ class ReadFileTool(_FsTool):
                 return _error(f"拒绝读取二进制文件：{args['path']}")
             text = raw.decode("utf-8").replace("\r\n", "\n")
             lines = text.splitlines()
-            offset = max(1, int(args.get("offset") or 1))
-            limit = int(args.get("limit") or 200)
+            offset = security.clamp_int(args.get("offset"), 1, 1, 1_000_000)
+            limit = security.clamp_int(args.get("limit"), 200, 1, 2000)
             start = offset - 1
             if start >= len(lines) and lines:
                 return _error(f"offset 超出文件行数：{len(lines)}")
             selected = lines[start : start + limit]
-            numbered = [f"{start + index + 1}| {line}" for index, line in enumerate(selected)]
-            content = "\n".join(numbered) if numbered else "(空文件)"
+            show_line_numbers = bool(args.get("show_line_numbers", False))
+            if show_line_numbers:
+                selected = [f"{start + index + 1}| {line}" for index, line in enumerate(selected)]
+            content = "\n".join(selected) if selected else "(空文件)"
             return ToolResult(security.truncate_text(content, security.MAX_READ_CHARS))
         except UnicodeDecodeError:
             return _error(f"文件不是 UTF-8 文本：{args.get('path')}")
@@ -227,7 +232,7 @@ class WriteFileTool(_FsTool):
     """创建或覆盖写入文件。"""
 
     name = "write_file"
-    description = "创建新文件或整体覆盖写入文件。"
+    description = "写入整个文件。"
     input_schema = {
         "type": "object",
         "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
@@ -253,7 +258,7 @@ class EditFileTool(_FsTool):
     """精确替换文件文本。"""
 
     name = "edit_file"
-    description = "用 old_text/new_text 对已有文件做精确文本替换。"
+    description = "精确替换文件文本。"
     input_schema = {
         "type": "object",
         "properties": {
@@ -286,7 +291,7 @@ class EditFileTool(_FsTool):
             replace_all = bool(args.get("replace_all", False))
             if count > 1 and not replace_all:
                 return _error(f"old_text 出现 {count} 次，请提供更精确上下文或 replace_all=true")
-            updated = content.replace(old_text, new_text if replace_all else new_text, -1 if replace_all else 1)
+            updated = content.replace(old_text, new_text, -1 if replace_all else 1)
             path.write_text(updated, encoding="utf-8")
             return ToolResult(f"已编辑 {self._display(path)}，替换 {count if replace_all else 1} 处")
         except UnicodeDecodeError:
@@ -299,7 +304,7 @@ class GrepTool(_FsTool):
     """搜索文件内容。"""
 
     name = "grep"
-    description = "在文件内容中搜索文本或正则，支持 content/files_with_matches/count 输出。"
+    description = "搜索文件内容。"
     input_schema = {
         "type": "object",
         "properties": {
@@ -311,6 +316,7 @@ class GrepTool(_FsTool):
             "fixed_strings": {"type": "boolean"},
             "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"]},
             "max_results": {"type": "integer", "minimum": 1, "maximum": 1000},
+            "show_line_numbers": {"type": "boolean"},
         },
         "required": ["pattern"],
     }
@@ -326,7 +332,8 @@ class GrepTool(_FsTool):
             regex = re.compile(pattern, flags)
             root = target if target.is_dir() else target.parent
             mode = args.get("output_mode") or "files_with_matches"
-            max_results = int(args.get("max_results") or 200)
+            max_results = security.clamp_int(args.get("max_results"), 200, 1, 1000)
+            show_line_numbers = bool(args.get("show_line_numbers", False))
             results: list[str] = []
             counts: dict[str, int] = {}
             for file_path in _iter_paths(target):
@@ -351,18 +358,21 @@ class GrepTool(_FsTool):
                         continue
                     match_count += 1
                     if mode == "content":
-                        results.append(f"{display}:{line_no}\n> {line_no}| {line}")
+                        prefix = f"{display}:{line_no}" if show_line_numbers else display
+                        results.append(f"{prefix}: {line}")
                     if len(results) >= max_results and mode == "content":
                         break
                 if match_count and mode == "files_with_matches":
                     results.append(display)
                 if match_count and mode == "count":
                     counts[display] = match_count
-                if len(results) >= max_results:
+                if mode == "count" and len(counts) >= max_results:
+                    break
+                if mode != "count" and len(results) >= max_results:
                     break
             if mode == "count":
                 results = [f"{name}: {count}" for name, count in counts.items()]
-            return ToolResult(security.truncate_text("\n\n".join(results) if results else "未找到匹配"))
+            return ToolResult(security.truncate_text("\n".join(results) if results else "未找到匹配"))
         except re.error as exc:
             return _error(f"正则错误：{exc}")
         except Exception as exc:

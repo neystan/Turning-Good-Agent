@@ -13,20 +13,43 @@ def _error(message: str) -> ToolResult:
     return ToolResult(message, {"error": True})
 
 
+def _decode_output(raw: bytes) -> str:
+    """解码并去掉输出边缘空白。"""
+    return raw.decode("utf-8", errors="replace").strip()
+
+
+def _format_exec_output(stdout: bytes, stderr: bytes, exit_code: int | None) -> str:
+    """格式化普通命令输出。"""
+    output: list[str] = []
+    stdout_text = _decode_output(stdout) if stdout else ""
+    stderr_text = _decode_output(stderr) if stderr else ""
+    if stdout_text:
+        output.append(stdout_text)
+    if stderr_text:
+        output.append("STDERR:\n" + stderr_text)
+    output.append(f"Exit code: {exit_code}")
+    return "\n".join(output)
+
+
 class ExecTool:
     """执行受限 shell 命令。"""
 
     name = "exec"
     source = "builtin"
     discoverable = True
-    description = "执行受限 shell 命令，支持超时、输出截断和长运行 session。"
+    description = "执行 shell 命令。"
     input_schema = {
         "type": "object",
         "properties": {
             "command": {"type": "string"},
             "working_dir": {"type": "string"},
             "timeout": {"type": "integer", "minimum": 1, "maximum": security.MAX_EXEC_TIMEOUT_SECONDS},
-            "yield_time_ms": {"type": "integer", "minimum": 0, "maximum": 30_000},
+            "yield_time_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": security.MAX_YIELD_TIME_MS,
+                "default": security.DEFAULT_YIELD_TIME_MS,
+            },
             "max_output_chars": {"type": "integer", "minimum": 1000, "maximum": 50_000},
         },
         "required": ["command"],
@@ -48,20 +71,31 @@ class ExecTool:
             return _error(error)
         try:
             cwd = resolve_workspace_path(args.get("working_dir") or ".", self.workspace)
-            timeout = min(int(args.get("timeout") or security.DEFAULT_EXEC_TIMEOUT_SECONDS), security.MAX_EXEC_TIMEOUT_SECONDS)
-            max_output = int(args.get("max_output_chars") or security.MAX_TOOL_OUTPUT_CHARS)
+            timeout = security.clamp_int(
+                args.get("timeout"),
+                security.DEFAULT_EXEC_TIMEOUT_SECONDS,
+                1,
+                security.MAX_EXEC_TIMEOUT_SECONDS,
+            )
+            max_output = security.clamp_int(args.get("max_output_chars"), security.MAX_TOOL_OUTPUT_CHARS, 1000, 50_000)
             if "yield_time_ms" in args and args.get("yield_time_ms") is not None:
+                yield_time_ms = security.clamp_int(
+                    args.get("yield_time_ms"),
+                    security.DEFAULT_YIELD_TIME_MS,
+                    0,
+                    security.MAX_YIELD_TIME_MS,
+                )
                 session_id, poll = await DEFAULT_EXEC_SESSION_MANAGER.start(
                     command,
                     str(cwd),
                     timeout,
-                    int(args.get("yield_time_ms") or 0),
+                    yield_time_ms,
                     max_output,
                 )
                 return ToolResult(format_poll(session_id, poll), {"session_id": session_id, "running": not poll.done})
             process = await asyncio.create_subprocess_exec(
                 "/bin/bash",
-                "-lc",
+                "-c",
                 command,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
@@ -74,13 +108,7 @@ class ExecTool:
                 process.kill()
                 await process.wait()
                 return _error(f"命令超时：{timeout} 秒")
-            output = []
-            if stdout:
-                output.append(stdout.decode("utf-8", errors="replace"))
-            if stderr:
-                output.append("STDERR:\n" + stderr.decode("utf-8", errors="replace"))
-            output.append(f"Exit code: {process.returncode}")
-            return ToolResult(security.truncate_text("\n".join(output), max_output))
+            return ToolResult(security.truncate_text(_format_exec_output(stdout, stderr, process.returncode), max_output))
         except Exception as exc:
             return _error(f"执行命令失败：{exc}")
 
@@ -91,14 +119,19 @@ class WriteStdinTool:
     name = "write_stdin"
     source = "builtin"
     discoverable = True
-    description = "向 exec 返回的 session_id 写入 stdin、轮询输出或终止进程。"
+    description = "操作命令会话。"
     input_schema = {
         "type": "object",
         "properties": {
             "session_id": {"type": "string"},
             "chars": {"type": "string"},
             "terminate": {"type": "boolean"},
-            "yield_time_ms": {"type": "integer", "minimum": 0, "maximum": 30_000},
+            "yield_time_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": security.MAX_YIELD_TIME_MS,
+                "default": security.DEFAULT_YIELD_TIME_MS,
+            },
             "max_output_chars": {"type": "integer", "minimum": 1000, "maximum": 50_000},
         },
         "required": ["session_id"],
@@ -116,8 +149,8 @@ class WriteStdinTool:
                 str(args["session_id"]),
                 str(args.get("chars") or ""),
                 bool(args.get("terminate", False)),
-                int(args.get("yield_time_ms") or 0),
-                int(args.get("max_output_chars") or security.MAX_TOOL_OUTPUT_CHARS),
+                security.clamp_int(args.get("yield_time_ms"), security.DEFAULT_YIELD_TIME_MS, 0, security.MAX_YIELD_TIME_MS),
+                security.clamp_int(args.get("max_output_chars"), security.MAX_TOOL_OUTPUT_CHARS, 1000, 50_000),
             )
             return ToolResult(format_poll(str(args["session_id"]), poll), {"running": not poll.done})
         except KeyError:

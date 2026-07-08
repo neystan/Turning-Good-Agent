@@ -93,7 +93,7 @@ class WebFetchTool:
         try:
             content_type, body = await _fetch_url(url, 20.0, security.MAX_WEB_RESPONSE_BYTES)
             text = _strip_html(body) if "html" in content_type.lower() or "<html" in body.lower() else body.strip()
-            max_chars = int(args.get("max_chars") or security.MAX_TOOL_OUTPUT_CHARS)
+            max_chars = security.clamp_int(args.get("max_chars"), security.MAX_TOOL_OUTPUT_CHARS, 1000, 50_000)
             return ToolResult(_UNTRUSTED_BANNER + "\n\n" + security.truncate_text(text, max_chars))
         except Exception as exc:
             return _error(f"抓取网页失败：{exc}")
@@ -117,7 +117,7 @@ class WebSearchTool:
         query = str(args["query"]).strip()
         if not query:
             return _error("query 不能为空")
-        count = int(args.get("count") or 5)
+        count = security.clamp_int(args.get("count"), 5, 1, 10)
         url = "https://search.yahoo.com/search?p=" + quote_plus(query)
         errors: list[str] = []
         for _attempt in range(_SEARCH_BACKEND_ATTEMPTS):

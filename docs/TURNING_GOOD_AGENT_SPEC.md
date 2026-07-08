@@ -265,7 +265,7 @@ Slash command 快捷路径不调用 LLM，因此不写入 `messages.jsonl` 和 `
 - `tool_count`
 - `current_context_tokens`
 
-`SAVE` 会在 `COMPACT` 后重新计算这些字段，因此观测结果反映本轮结束后的 `summary + uncompacted_history` 状态，不包含 tool result。`history_tokens` 是本轮之前未压缩历史的 token，`current_input_tokens` 和 `output_tokens` 分别记录本轮新增输入与输出，避免重复计数。`tool_count` 是本轮实际工具调用次数。`current_context_tokens` 是本轮结束后的当前上下文 token 数，字段放在最后，方便人工查看。
+`SAVE` 会在 `COMPACT` 后重新计算这些字段，因此观测结果反映本轮结束后的 `summary + uncompacted_history` 状态，不包含 tool result。`history_tokens` 是本轮之前未压缩历史的 token，`current_input_tokens` 和 `output_tokens` 分别记录本轮新增输入与输出。只有本轮完整 user/assistant 仍保留在 `uncompacted_history` 时，它们才计入 `current_context_tokens`；如果本轮已经被压缩进 summary，就只通过 `summary_tokens` 体现。`tool_count` 是本轮实际工具调用次数。`current_context_tokens` 是本轮结束后的当前上下文 token 数，字段放在最后，方便人工查看。
 
 压缩明细只写入 `turn_traces.jsonl` 的 `COMPACT` 状态 metadata：
 

@@ -118,7 +118,7 @@ class ExecSessionManager:
                 raise RuntimeError("活跃命令会话数量已达上限")
             process = await asyncio.create_subprocess_exec(
                 "/bin/bash",
-                "-lc",
+                "-c",
                 command,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
