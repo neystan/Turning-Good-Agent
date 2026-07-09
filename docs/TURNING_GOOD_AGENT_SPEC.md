@@ -412,8 +412,8 @@ max_context_tokens = 300000
 - `AgentLoop` 已补齐 assistant tool call message 和 tool result message
 - `tool_calls.jsonl` 已落盘精简工具调用明细
 - `ToolRegistry.prepare_call()` 已集中处理工具查找、参数转换、参数校验和错误文本
-- `ToolLoader` 已自动加载内置工具
-- 工具 schema 已稳定排序
+- `ToolLoader` 已自动加载内置工具，并隔离单个坏工具模块
+- 工具 schema 已稳定排序并缓存
 - 可配置 CLI 文本流式输出已接入
 - Phase 2.5 已开始补齐文件、命令、网页和天气基础工具
 
@@ -432,13 +432,15 @@ Tools 当前约束：
 - `tools/loader.py` 自动加载内置工具：
   - 扫描 `tools/` 包中的工具类。
   - 跳过 `base.py`、`registry.py`、`executor.py`、`loader.py`、`schema.py` 等基础模块。
+  - 单个工具模块导入失败时记录错误并继续加载其他工具。
   - 只加载非抽象、可发现的工具类。
   - 支持 `enabled(settings/context)`，为后续按配置启停工具留入口。
   - 当前不做 entry_points 第三方插件机制。
 - 当前不引入 nanobot 的完整 Schema 类体系；只保留最小 JSON Schema 校验函数，避免工具层过早复杂化。
 - 文件类工具统一通过 `security.py` 和 `path_utils.py` 做 workspace 路径限制、设备文件拒绝和 `.sessions` 状态文件写入保护。
-- 命令类工具统一通过 `security.py` 和 `exec_sessions.py` 做危险命令拒绝、超时、输出截断和长运行进程管理。
+- 命令类工具统一通过 `security.py` 和 `exec_sessions.py` 做危险命令拒绝、超时、输出截断和长运行进程管理；`exec` 仅在 `background=true` 时创建长运行会话。
 - 网络类工具只允许 http/https，返回外部内容时必须把网页内容视为数据而不是指令。
+- `web_search` 首选 DuckDuckGo API，未返回可用结果时回退 Yahoo Search。
 
 下一阶段要做：
 

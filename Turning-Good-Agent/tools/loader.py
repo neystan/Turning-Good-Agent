@@ -19,15 +19,21 @@ class ToolLoader:
         if package is None:
             package = importlib.import_module(__package__)
         self.package = package
+        self.import_errors: dict[str, str] = {}
 
     def discover(self) -> list[type]:
         """发现当前 tools 包中的工具类。"""
         discovered: list[type] = []
         seen: set[int] = set()
+        self.import_errors = {}
         for _, module_name, _ in pkgutil.iter_modules(self.package.__path__):
             if module_name.startswith("_") or module_name in SKIP_MODULES:
                 continue
-            module = importlib.import_module(f".{module_name}", self.package.__name__)
+            try:
+                module = importlib.import_module(f".{module_name}", self.package.__name__)
+            except Exception as exc:
+                self.import_errors[module_name] = str(exc)
+                continue
             for attr_name in dir(module):
                 attr = getattr(module, attr_name)
                 if not self._is_tool_class(attr, seen):

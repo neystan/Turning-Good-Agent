@@ -50,6 +50,7 @@ class ExecTool:
                 "maximum": security.MAX_YIELD_TIME_MS,
                 "default": security.DEFAULT_YIELD_TIME_MS,
             },
+            "background": {"type": "boolean"},
             "max_output_chars": {"type": "integer", "minimum": 1000, "maximum": 50_000},
         },
         "required": ["command"],
@@ -78,7 +79,7 @@ class ExecTool:
                 security.MAX_EXEC_TIMEOUT_SECONDS,
             )
             max_output = security.clamp_int(args.get("max_output_chars"), security.MAX_TOOL_OUTPUT_CHARS, 1000, 50_000)
-            if "yield_time_ms" in args and args.get("yield_time_ms") is not None:
+            if bool(args.get("background", False)):
                 yield_time_ms = security.clamp_int(
                     args.get("yield_time_ms"),
                     security.DEFAULT_YIELD_TIME_MS,

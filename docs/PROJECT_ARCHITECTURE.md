@@ -142,13 +142,13 @@ python -m Turning-Good-Agent chat
 | 路径 | 作用 |
 | --- | --- |
 | `tools/base.py` | 定义 `BaseTool` 协议、`ToolResult`、参数归一化和 JSON Schema 校验函数。 |
-| `tools/registry.py` | 工具注册表，输出模型可见 schema，并通过 `prepare_call()` 集中处理工具查找、参数归一化、参数校验和稳定排序。 |
+| `tools/registry.py` | 工具注册表，输出并缓存模型可见 schema，并通过 `prepare_call()` 集中处理工具查找、参数归一化、参数校验和稳定排序。 |
 | `tools/executor.py` | 工具执行器，处理调用、耗时和结果序列化。 |
-| `tools/loader.py` | 自动扫描并加载内置工具，当前不支持 entry_points 插件。 |
+| `tools/loader.py` | 自动扫描并加载内置工具，隔离单个坏工具模块，当前不支持 entry_points 插件。 |
 | `tools/builtin_tools.py` | 内置 `echo` 和 `now`。 |
 | `tools/filesystem_tools.py` | 内置 `list_dir`、`find_file`、`read_file`、`write_file`、`edit_file` 和 `grep`。 |
-| `tools/shell_tools.py` | 内置受限 `exec` 和 `write_stdin`。 |
-| `tools/web_tools.py` | 内置 `web_search` 和 `web_fetch`。 |
+| `tools/shell_tools.py` | 内置受限 `exec` 和 `write_stdin`，`exec` 通过 `background=true` 显式创建长运行会话。 |
+| `tools/web_tools.py` | 内置 `web_search` 和 `web_fetch`，搜索首选 DuckDuckGo API，Yahoo Search 兜底。 |
 | `tools/info_tools.py` | 内置 `weather`。 |
 | `tools/security.py` | 文件、命令、URL 和输出截断的公共安全限制。 |
 | `tools/path_utils.py` | workspace 路径解析和路径包含判断。 |

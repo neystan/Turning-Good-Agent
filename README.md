@@ -146,8 +146,8 @@ openai-compatible 统一接入族
 基础 tool calling 工作消息回注
 tools 参数归一化和 JSON Schema 校验
 ToolRegistry.prepare_call()
-ToolLoader 自动加载内置工具
-工具 schema 稳定排序
+ToolLoader 自动加载内置工具，并隔离单个坏工具模块
+工具 schema 稳定排序和缓存
 CLI 文本流式输出开关
 RUN trace 中记录 tool_call_count 和 tool_names
 tool_calls.jsonl 工具调用明细落盘
@@ -156,7 +156,7 @@ tool_calls.jsonl 工具调用明细落盘
 可恢复 LLM 错误重试
 文件基础工具：list_dir / find_file / read_file / write_file / edit_file / grep
 受限命令工具：exec / write_stdin
-网络与信息工具：web_search / web_fetch / weather
+网络与信息工具：web_search / web_fetch / weather，其中 web_search 首选 DuckDuckGo API，Yahoo Search 兜底
 ```
 
 Phase 2 保留边界：

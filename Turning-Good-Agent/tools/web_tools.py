@@ -1,5 +1,6 @@
 import asyncio
 import html
+import json
 import re
 from typing import Any
 from urllib.parse import quote_plus, unquote
@@ -36,6 +37,29 @@ def _decode_redirect_url(url: str) -> str:
         if match:
             return unquote(match.group(1))
     return clean_url
+
+
+def _split_duckduckgo_text(text: str) -> tuple[str, str]:
+    """拆分 DuckDuckGo 标题和摘要。"""
+    clean_text = _compact_text(text)
+    if " - " in clean_text:
+        title, snippet = clean_text.split(" - ", 1)
+        return title.strip(), snippet.strip()
+    return clean_text, ""
+
+
+def _iter_duckduckgo_topics(items: list[Any]) -> list[dict[str, Any]]:
+    """展开 DuckDuckGo RelatedTopics。"""
+    topics: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        nested = item.get("Topics")
+        if isinstance(nested, list):
+            topics.extend(_iter_duckduckgo_topics(nested))
+            continue
+        topics.append(item)
+    return topics
 
 
 def _looks_blocked(body: str) -> bool:
@@ -126,8 +150,16 @@ class WebSearchTool:
         if not query:
             return _error("query 不能为空")
         count = security.clamp_int(args.get("count"), 5, 1, 10)
-        url = "https://search.yahoo.com/search?p=" + quote_plus(query)
         errors: list[str] = []
+        duck_results, duck_error = await self._search_duckduckgo(query, count)
+        if duck_results:
+            return ToolResult("\n".join(duck_results))
+        if duck_error:
+            errors.append(f"api.duckduckgo.com {duck_error}")
+        else:
+            errors.append("api.duckduckgo.com 未返回结果")
+
+        url = "https://search.yahoo.com/search?p=" + quote_plus(query)
         for _attempt in range(_SEARCH_BACKEND_ATTEMPTS):
             try:
                 _content_type, body = await _fetch_url(url, 12.0, security.MAX_WEB_RESPONSE_BYTES)
@@ -143,7 +175,51 @@ class WebSearchTool:
             errors.append("未解析到结果")
             break
         reason = "；".join(errors) if errors else "没有可用搜索后端"
-        return ToolResult(f"未找到搜索结果：{query}\n原因：search.yahoo.com {reason}")
+        return ToolResult(f"未找到搜索结果：{query}\n原因：{reason}")
+
+    @staticmethod
+    async def _search_duckduckgo(query: str, count: int) -> tuple[list[str], str | None]:
+        """调用 DuckDuckGo API 搜索。"""
+        url = "https://api.duckduckgo.com/?q=" + quote_plus(query) + "&format=json&no_html=1&skip_disambig=1"
+        try:
+            _content_type, body = await _fetch_url(url, 12.0, security.MAX_WEB_RESPONSE_BYTES)
+            payload = json.loads(body)
+        except Exception as exc:
+            return [], str(exc)
+
+        results: list[str] = []
+        seen: set[str] = set()
+        candidates: list[tuple[str, str, str]] = []
+        abstract_url = payload.get("AbstractURL")
+        abstract_text = payload.get("AbstractText")
+        heading = payload.get("Heading")
+        if isinstance(abstract_url, str) and isinstance(abstract_text, str) and abstract_url and abstract_text:
+            candidates.append((abstract_url, str(heading or abstract_text), abstract_text))
+        related = payload.get("RelatedTopics")
+        if isinstance(related, list):
+            for topic in _iter_duckduckgo_topics(related):
+                first_url = topic.get("FirstURL")
+                text = topic.get("Text")
+                if not isinstance(first_url, str) or not isinstance(text, str):
+                    continue
+                title, snippet = _split_duckduckgo_text(text)
+                candidates.append((first_url, title, snippet))
+
+        for url, title, snippet in candidates:
+            if url in seen:
+                continue
+            seen.add(url)
+            clean_title = _compact_text(title)
+            if not clean_title:
+                continue
+            line = f"{len(results) + 1}. {clean_title} | {url}"
+            clean_snippet = _compact_text(snippet)
+            if clean_snippet and clean_snippet != clean_title:
+                line += f" | {clean_snippet}"
+            results.append(line)
+            if len(results) >= count:
+                break
+        return results, None
 
     @staticmethod
     def _parse_results(body: str, count: int) -> list[str]:

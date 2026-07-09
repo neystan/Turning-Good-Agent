@@ -22,9 +22,9 @@
 | `write_file` | `filesystem_tools.py` | 创建新文件或整体覆盖写入。 |
 | `edit_file` | `filesystem_tools.py` | 对已有文件做精确文本替换。 |
 | `grep` | `filesystem_tools.py` | 在文件内容中搜索文本或正则。 |
-| `exec` | `shell_tools.py` | 执行受限 shell 命令。 |
+| `exec` | `shell_tools.py` | 执行受限 shell 命令；`background=true` 时创建长运行会话。 |
 | `write_stdin` | `shell_tools.py` | 与 `exec` 创建的长运行命令会话交互。 |
-| `web_search` | `web_tools.py` | 搜索网页，返回标题、摘要和 URL。 |
+| `web_search` | `web_tools.py` | 搜索网页，首选 DuckDuckGo API，Yahoo Search 兜底。 |
 | `web_fetch` | `web_tools.py` | 抓取网页正文，返回截断后的纯文本。 |
 | `weather` | `info_tools.py` | 查询指定城市天气。 |
 
@@ -227,7 +227,7 @@ EXEC_IDLE_TIMEOUT_SECONDS = 1800
 典型流程：
 
 ```text
-exec(command="python app.py", yield_time_ms=1000)
+exec(command="python app.py", background=true, yield_time_ms=1000)
   -> 返回 session_id
 
 write_stdin(session_id="abc123", chars="")
@@ -345,8 +345,10 @@ Phase 2.5 完成时应满足：
 当前已完成：
 
 - `ToolLoader` 可以自动发现并注册本阶段新增工具。
+- `ToolLoader` 会隔离单个工具模块导入失败，避免坏工具拖垮全部工具加载。
+- `ToolRegistry` 会缓存 schema 输出，注册新工具时自动刷新缓存。
 - 文件工具已支持 UTF-8 文本读写、精确替换、目录列表、文件查找和内容搜索。
-- shell 工具已支持一次性命令、长运行 session 和 `write_stdin` 轮询/终止。
-- web 工具已支持 http/https 抓取和 Yahoo Search 搜索。
+- shell 工具已支持一次性命令、显式 `background=true` 长运行 session 和 `write_stdin` 轮询/终止。
+- web 工具已支持 http/https 抓取，搜索优先使用 DuckDuckGo API，Yahoo Search 作为兜底。
 - `weather` 已支持通过城市名称查询当前天气。
 - 已加入危险路径、危险命令、非 HTTP URL、输出长度和 `.sessions` 写入限制。

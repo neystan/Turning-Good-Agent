@@ -8,10 +8,14 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._tools: dict[str, BaseTool] = {}
+        self._schemas_cache: list[dict[str, object]] | None = None
+        self._openai_tools_cache: list[dict[str, object]] | None = None
 
     def register(self, tool: BaseTool) -> None:
         """注册一个工具。"""
         self._tools[tool.name] = tool
+        self._schemas_cache = None
+        self._openai_tools_cache = None
 
     def has(self, name: str) -> bool:
         """判断工具是否已注册。"""
@@ -50,25 +54,29 @@ class ToolRegistry:
 
     def schemas(self) -> list[dict[str, object]]:
         """返回模型可见的工具 schema。"""
-        return [
-            {
-                "name": tool.name,
-                "description": tool.description,
-                "input_schema": tool.input_schema,
-            }
-            for tool in self._sorted_tools()
-        ]
+        if self._schemas_cache is None:
+            self._schemas_cache = [
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.input_schema,
+                }
+                for tool in self._sorted_tools()
+            ]
+        return self._schemas_cache
 
     def openai_tools(self) -> list[dict[str, object]]:
         """返回 OpenAI-compatible tool schema。"""
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.input_schema,
-                },
-            }
-            for tool in self._sorted_tools()
-        ]
+        if self._openai_tools_cache is None:
+            self._openai_tools_cache = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.input_schema,
+                    },
+                }
+                for tool in self._sorted_tools()
+            ]
+        return self._openai_tools_cache
