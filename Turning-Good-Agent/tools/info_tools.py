@@ -31,7 +31,7 @@ class WeatherTool:
     name = "weather"
     source = "builtin"
     discoverable = True
-    description = "查询指定城市当前天气。"
+    description = "查询天气。"
     input_schema = {
         "type": "object",
         "properties": {"location": {"type": "string", "minLength": 1}},
@@ -44,6 +44,6 @@ class WeatherTool:
         if not location:
             return _error("location 不能为空")
         try:
-            return ToolResult(await _fetch_weather(location))
+            return ToolResult(security.truncate_text(await _fetch_weather(location)))
         except Exception as exc:
             return _error(f"查询天气失败：{exc}")
