@@ -41,17 +41,23 @@ class ExecTool:
     input_schema = {
         "type": "object",
         "properties": {
-            "command": {"type": "string"},
-            "working_dir": {"type": "string"},
-            "timeout": {"type": "integer", "minimum": 1, "maximum": security.MAX_EXEC_TIMEOUT_SECONDS},
+            "command": {"type": "string", "description": "shell 命令"},
+            "working_dir": {"type": "string", "description": "工作目录"},
+            "timeout": {
+                "type": "integer",
+                "description": "超时秒数",
+                "minimum": 1,
+                "maximum": security.MAX_EXEC_TIMEOUT_SECONDS,
+            },
             "yield_time_ms": {
                 "type": "integer",
+                "description": "等待毫秒数",
                 "minimum": 0,
                 "maximum": security.MAX_YIELD_TIME_MS,
                 "default": security.DEFAULT_YIELD_TIME_MS,
             },
-            "background": {"type": "boolean"},
-            "max_output_chars": {"type": "integer", "minimum": 1000, "maximum": 50_000},
+            "background": {"type": "boolean", "description": "创建长运行会话"},
+            "max_output_chars": {"type": "integer", "description": "最大输出字符", "minimum": 1000, "maximum": 50_000},
         },
         "required": ["command"],
     }
@@ -124,16 +130,17 @@ class WriteStdinTool:
     input_schema = {
         "type": "object",
         "properties": {
-            "session_id": {"type": "string"},
-            "chars": {"type": "string"},
-            "terminate": {"type": "boolean"},
+            "session_id": {"type": "string", "description": "命令会话 ID"},
+            "chars": {"type": "string", "description": "写入内容"},
+            "terminate": {"type": "boolean", "description": "终止会话"},
             "yield_time_ms": {
                 "type": "integer",
+                "description": "等待毫秒数",
                 "minimum": 0,
                 "maximum": security.MAX_YIELD_TIME_MS,
                 "default": security.DEFAULT_YIELD_TIME_MS,
             },
-            "max_output_chars": {"type": "integer", "minimum": 1000, "maximum": 50_000},
+            "max_output_chars": {"type": "integer", "description": "最大输出字符", "minimum": 1000, "maximum": 50_000},
         },
         "required": ["session_id"],
     }

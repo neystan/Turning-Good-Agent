@@ -100,9 +100,14 @@ class ListDirTool(_FsTool):
     input_schema = {
         "type": "object",
         "properties": {
-            "path": {"type": "string"},
-            "recursive": {"type": "boolean"},
-            "max_entries": {"type": "integer", "minimum": 1, "maximum": security.MAX_LIST_ENTRIES},
+            "path": {"type": "string", "description": "目录路径"},
+            "recursive": {"type": "boolean", "description": "递归列出"},
+            "max_entries": {
+                "type": "integer",
+                "description": "最大条目数",
+                "minimum": 1,
+                "maximum": security.MAX_LIST_ENTRIES,
+            },
         },
         "required": ["path"],
     }
@@ -142,11 +147,11 @@ class FindFileTool(_FsTool):
     input_schema = {
         "type": "object",
         "properties": {
-            "path": {"type": "string"},
-            "query": {"type": "string"},
-            "glob": {"type": "string"},
-            "type": {"type": "string"},
-            "max_results": {"type": "integer", "minimum": 1, "maximum": 1000},
+            "path": {"type": "string", "description": "搜索路径"},
+            "query": {"type": "string", "description": "路径关键词"},
+            "glob": {"type": "string", "description": "文件 glob"},
+            "type": {"type": "string", "description": "文件类型"},
+            "max_results": {"type": "integer", "description": "最大结果数", "minimum": 1, "maximum": 1000},
         },
     }
 
@@ -187,10 +192,10 @@ class ReadFileTool(_FsTool):
     input_schema = {
         "type": "object",
         "properties": {
-            "path": {"type": "string"},
-            "offset": {"type": "integer", "minimum": 1},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 2000},
-            "show_line_numbers": {"type": "boolean"},
+            "path": {"type": "string", "description": "文件路径"},
+            "offset": {"type": "integer", "description": "起始行号", "minimum": 1},
+            "limit": {"type": "integer", "description": "读取行数", "minimum": 1, "maximum": 2000},
+            "show_line_numbers": {"type": "boolean", "description": "显示行号"},
         },
         "required": ["path"],
     }
@@ -235,7 +240,10 @@ class WriteFileTool(_FsTool):
     description = "写入整个文件。"
     input_schema = {
         "type": "object",
-        "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+        "properties": {
+            "path": {"type": "string", "description": "文件路径"},
+            "content": {"type": "string", "description": "写入内容"},
+        },
         "required": ["path", "content"],
     }
 
@@ -262,10 +270,10 @@ class EditFileTool(_FsTool):
     input_schema = {
         "type": "object",
         "properties": {
-            "path": {"type": "string"},
-            "old_text": {"type": "string"},
-            "new_text": {"type": "string"},
-            "replace_all": {"type": "boolean"},
+            "path": {"type": "string", "description": "文件路径"},
+            "old_text": {"type": "string", "description": "待替换文本"},
+            "new_text": {"type": "string", "description": "新文本"},
+            "replace_all": {"type": "boolean", "description": "替换全部匹配"},
         },
         "required": ["path", "old_text", "new_text"],
     }
@@ -308,15 +316,19 @@ class GrepTool(_FsTool):
     input_schema = {
         "type": "object",
         "properties": {
-            "pattern": {"type": "string", "minLength": 1},
-            "path": {"type": "string"},
-            "glob": {"type": "string"},
-            "type": {"type": "string"},
-            "case_insensitive": {"type": "boolean"},
-            "fixed_strings": {"type": "boolean"},
-            "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"]},
-            "max_results": {"type": "integer", "minimum": 1, "maximum": 1000},
-            "show_line_numbers": {"type": "boolean"},
+            "pattern": {"type": "string", "description": "搜索文本或正则", "minLength": 1},
+            "path": {"type": "string", "description": "搜索路径"},
+            "glob": {"type": "string", "description": "文件 glob"},
+            "type": {"type": "string", "description": "文件类型"},
+            "case_insensitive": {"type": "boolean", "description": "忽略大小写"},
+            "fixed_strings": {"type": "boolean", "description": "按纯文本匹配"},
+            "output_mode": {
+                "type": "string",
+                "description": "返回模式",
+                "enum": ["content", "files_with_matches", "count"],
+            },
+            "max_results": {"type": "integer", "description": "最大结果数", "minimum": 1, "maximum": 1000},
+            "show_line_numbers": {"type": "boolean", "description": "显示行号"},
         },
         "required": ["pattern"],
     }

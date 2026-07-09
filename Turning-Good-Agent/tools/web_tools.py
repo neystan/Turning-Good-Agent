@@ -111,7 +111,10 @@ class WebFetchTool:
     description = "抓取网页文本。"
     input_schema = {
         "type": "object",
-        "properties": {"url": {"type": "string"}, "max_chars": {"type": "integer", "minimum": 1000, "maximum": 50000}},
+        "properties": {
+            "url": {"type": "string", "description": "网页 URL"},
+            "max_chars": {"type": "integer", "description": "最大返回字符", "minimum": 1000, "maximum": 50000},
+        },
         "required": ["url"],
     }
 
@@ -140,7 +143,10 @@ class WebSearchTool:
     description = "搜索网页。"
     input_schema = {
         "type": "object",
-        "properties": {"query": {"type": "string"}, "count": {"type": "integer", "minimum": 1, "maximum": 10}},
+        "properties": {
+            "query": {"type": "string", "description": "搜索关键词"},
+            "count": {"type": "integer", "description": "结果数量", "minimum": 1, "maximum": 10},
+        },
         "required": ["query"],
     }
 

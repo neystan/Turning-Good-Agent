@@ -13,7 +13,7 @@ class EchoTool:
     description = "回显输入文本。"
     input_schema = {
         "type": "object",
-        "properties": {"text": {"type": "string"}},
+        "properties": {"text": {"type": "string", "description": "回显文本"}},
         "required": ["text"],
     }
 

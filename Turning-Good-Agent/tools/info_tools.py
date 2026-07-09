@@ -34,7 +34,7 @@ class WeatherTool:
     description = "查询天气。"
     input_schema = {
         "type": "object",
-        "properties": {"location": {"type": "string", "minLength": 1}},
+        "properties": {"location": {"type": "string", "description": "城市或地区", "minLength": 1}},
         "required": ["location"],
     }
 

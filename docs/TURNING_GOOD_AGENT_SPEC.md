@@ -421,6 +421,7 @@ Tools 当前约束：
 
 - `BaseTool` 保持轻量，当前仍以 `name/description/input_schema/run` 为最小工具接口。
 - 参数 schema 统一使用 JSON Schema object，当前内部字段仍为 `input_schema`。
+- schema 字段必须带极简 `description`，帮助 LLM 正确赋值，同时避免长说明浪费 token。
 - 每次执行工具前必须先做参数归一化和校验：
   - 非 object 参数直接返回可诊断错误。
   - 缺少 required 字段直接返回可诊断错误。
