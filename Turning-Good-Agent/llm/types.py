@@ -37,6 +37,7 @@ class LLMResponse:
     content: str
     tool_calls: list[ToolCall] = field(default_factory=list)
     usage: LLMUsage | None = None
+    protocol_error: str | None = None
 
 
 @dataclass(slots=True)
@@ -47,3 +48,4 @@ class LLMChunk:
     tool_calls: list[ToolCall] = field(default_factory=list)
     finish_reason: str | None = None
     usage: LLMUsage | None = None
+    protocol_error: str | None = None

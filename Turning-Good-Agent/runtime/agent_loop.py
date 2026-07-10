@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..config.settings import RuntimeSettings
+from ..context.tool_round_limit_prompt import TOOL_ROUND_LIMIT_SUMMARY_PROMPT
 from ..llm.client import LLMProvider
 from ..llm.types import LLMResponse, LLMUsage
 from ..tools.executor import ToolExecutor
@@ -23,11 +24,6 @@ class AgentLoopResult:
 
 class AgentLoop:
     """执行 LLM 对话与工具调用循环。"""
-
-    TOOL_ROUND_LIMIT_SUMMARY_PROMPT = (
-        "工具调用轮数已达到上限。请基于当前对话和已有工具结果，总结本次任务已经完成的处理结果。"
-        "不要继续调用工具，不要只说明达到上限。"
-    )
 
     def __init__(
         self,
@@ -85,10 +81,26 @@ class AgentLoop:
                         "content": record["content"],
                     }
                 )
-        working.append({"role": "system", "content": self.TOOL_ROUND_LIMIT_SUMMARY_PROMPT})
-        summary = await self._complete(working, [], on_delta)
+        working.append({"role": "system", "content": TOOL_ROUND_LIMIT_SUMMARY_PROMPT})
+        summary = await self._complete(working, [], None)
         usage = usage.add(summary.usage)
-        return AgentLoopResult(summary.content or "工具调用轮数已达到上限。", working, tool_records, usage)
+        content = summary.content.strip()
+        if summary.protocol_error or summary.tool_calls or not content:
+            content = self._tool_round_limit_fallback(tool_records)
+        if on_delta is not None:
+            emitted = on_delta(content)
+            if inspect.isawaitable(emitted):
+                await emitted
+        return AgentLoopResult(content, working, tool_records, usage)
+
+    @staticmethod
+    def _tool_round_limit_fallback(tool_records: list[dict[str, Any]]) -> str:
+        """返回工具上限后的确定性降级结果。"""
+        tool_names = ", ".join(record["tool_name"] for record in tool_records) or "无"
+        return (
+            f"工具调用轮数已达到上限，已完成 {len(tool_records)} 次工具调用（{tool_names}）。"
+            "模型未能生成最终总结，可使用 /tools 查看本轮完整工具结果。"
+        )
 
     async def _complete(
         self,
@@ -103,6 +115,7 @@ class AgentLoop:
         content_parts: list[str] = []
         tool_calls = []
         usage = LLMUsage()
+        protocol_error: str | None = None
         async for chunk in self.llm.stream(messages, tools):
             usage = usage.add(chunk.usage)
             if chunk.delta_text:
@@ -113,6 +126,13 @@ class AgentLoop:
                         await emitted
             if chunk.tool_calls:
                 tool_calls = chunk.tool_calls
+            if chunk.protocol_error:
+                protocol_error = chunk.protocol_error
         if usage.total_tokens <= 0:
             raise RuntimeError("流式 LLM 响应缺少 usage，无法保存本轮结果。")
-        return LLMResponse(content="".join(content_parts), tool_calls=tool_calls, usage=usage)
+        return LLMResponse(
+            content="".join(content_parts),
+            tool_calls=tool_calls,
+            usage=usage,
+            protocol_error=protocol_error,
+        )

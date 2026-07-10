@@ -18,6 +18,8 @@ from .types import LLMChunk, LLMResponse, LLMUsage, ToolCall
 class OpenAICompatibleLLM:
     """调用 OpenAI-compatible Chat Completions 接口。"""
 
+    _DSML_TOOL_MARKER = "｜｜DSML｜｜"
+
     def __init__(
         self,
         api_key: str,
@@ -54,10 +56,12 @@ class OpenAICompatibleLLM:
         if message is None:
             raise RuntimeError("模型响应缺少 message。")
         content = getattr(message, "content", None) or ""
+        protocol_error = self._protocol_error(content, tools)
         return LLMResponse(
             content=content,
             tool_calls=self._parse_tool_calls(getattr(message, "tool_calls", None)),
             usage=self._require_usage(getattr(response, "usage", None)),
+            protocol_error=protocol_error,
         )
 
     async def stream(
@@ -68,6 +72,7 @@ class OpenAICompatibleLLM:
         """流式调用模型并产出文本增量。"""
         stream = await self._create_completion(messages, tools, stream=True)
         tool_call_parts: dict[int, dict[str, str]] = {}
+        content_parts: list[str] = []
         async for event in stream:
             usage = self._parse_usage(getattr(event, "usage", None))
             if usage is not None:
@@ -77,6 +82,8 @@ class OpenAICompatibleLLM:
                 delta = getattr(choice, "delta", None)
                 finish_reason = getattr(choice, "finish_reason", None)
                 delta_text = getattr(delta, "content", None) or "" if delta is not None else ""
+                if delta_text:
+                    content_parts.append(delta_text)
                 if delta is not None:
                     self._merge_tool_call_deltas(tool_call_parts, getattr(delta, "tool_calls", None))
                 tool_calls = self._build_stream_tool_calls(tool_call_parts) if finish_reason == "tool_calls" else []
@@ -86,6 +93,9 @@ class OpenAICompatibleLLM:
                         tool_calls=tool_calls,
                         finish_reason=finish_reason,
                     )
+        protocol_error = self._protocol_error("".join(content_parts), tools)
+        if protocol_error is not None:
+            yield LLMChunk(protocol_error=protocol_error)
 
     async def _create_completion(
         self,
@@ -137,6 +147,12 @@ class OpenAICompatibleLLM:
                 )
             )
         return normalized
+
+    def _protocol_error(self, content: str, tools: list[dict[str, Any]]) -> str | None:
+        """识别禁用工具时泄漏的 DSML 工具调用格式。"""
+        if not tools and self._DSML_TOOL_MARKER in content:
+            return "禁用工具时返回 DSML 工具调用格式。"
+        return None
 
     def _parse_arguments(self, raw_arguments: Any, tool_name: str) -> dict[str, Any]:
         """解析工具参数 JSON。"""
