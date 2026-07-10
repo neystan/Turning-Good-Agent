@@ -24,6 +24,11 @@ class AgentLoopResult:
 class AgentLoop:
     """执行 LLM 对话与工具调用循环。"""
 
+    TOOL_ROUND_LIMIT_SUMMARY_PROMPT = (
+        "工具调用轮数已达到上限。请基于当前对话和已有工具结果，总结本次任务已经完成的处理结果。"
+        "不要继续调用工具，不要只说明达到上限。"
+    )
+
     def __init__(
         self,
         llm: LLMProvider,
@@ -80,7 +85,10 @@ class AgentLoop:
                         "content": record["content"],
                     }
                 )
-        return AgentLoopResult("工具调用轮数已达到上限。", working, tool_records, usage)
+        working.append({"role": "system", "content": self.TOOL_ROUND_LIMIT_SUMMARY_PROMPT})
+        summary = await self._complete(working, [], on_delta)
+        usage = usage.add(summary.usage)
+        return AgentLoopResult(summary.content or "工具调用轮数已达到上限。", working, tool_records, usage)
 
     async def _complete(
         self,
