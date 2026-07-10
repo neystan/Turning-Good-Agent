@@ -16,6 +16,7 @@ python -m Turning-Good-Agent chat
 
 - `OpenAI-compatible`：真实 LLM 对话
 - OpenAI-compatible tool calling：`AgentLoop` 已支持 assistant tool call 与 tool result 工作消息回注
+- 工具轮数上限：执行一次 no-tools 最终总结，异常时降级到 `/tools` 提示
 - CLI 文本流式输出：通过 `settings.llm.streaming_enabled` 控制，默认开启
 
 ## 2. 顶层目录与文件
@@ -182,10 +183,13 @@ Tools 当前边界：
 - 真实模型返回 `content` 为空但包含 `tool_calls` 时，不会被当作无回复；会交给 `AgentLoop` 执行工具循环。
 - 非流式和流式都强制要求 provider 返回真实 `usage`；如果最终缺少有效 `usage`，本轮会失败，不写入 token 账本。
 - tool call 解析是严格模式：缺少 `id`、`function.name`，或 `arguments` 不是合法 JSON object 时直接报错，不再静默降级。
+- 当禁用 tools 的最终总结请求仍返回 DSML 工具调用格式时，Provider 会标记 `protocol_error`，不把原始协议文本交给用户。
 - 流式输出作为 `openai_compatible` 接入族的可选能力，通过 `settings.llm.streaming_enabled` 开启，默认开启。
 - 第一版 CLI 会逐段打印文本 delta；tool call 参数片段只在 LLM 层内部合并，完整 tool call 仍交给现有 AgentLoop 执行。
 - 多 channel 流式展示后置。
 - 当前 tool call 观测会写入 `turn_traces.jsonl` 的 RUN 状态 metadata，字段为 `tool_call_count` 和 `tool_names`；同时精简明细会写入 `tool_calls.jsonl`。
+
+工具轮数达到 `max_tool_rounds` 后，AgentLoop 会使用已有 working messages 发起一次不携带 tools 的总结请求。该请求会先缓冲，只有返回有效自然语言时才输出；若出现 `protocol_error`、继续返回 tool call 或空文本，则降级提示用户通过 `/tools` 查看已完成调用的完整结果。
 
 ### 4.10 `observability/`
 

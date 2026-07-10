@@ -152,6 +152,7 @@ CLI 文本流式输出开关
 RUN trace 中记录 tool_call_count 和 tool_names
 tool_calls.jsonl 工具调用明细落盘
 /tools 会话工具记录查看命令
+工具轮数上限触发一次 no-tools 总结，并隔离 DSML 协议泄漏
 请求失败错误回显
 可恢复 LLM 错误重试
 文件基础工具：list_dir / find_file / read_file / write_file / edit_file / grep
@@ -196,6 +197,8 @@ python -m Turning-Good-Agent chat
 ```
 
 当前真实 LLM 已使用 OpenAI Python SDK 的异步 client，也就是 `AsyncOpenAI().chat.completions.create(...)`，并在 `AgentLoop` 中补齐 assistant tool_call 消息和 tool result 消息。工具调用精简明细会在 `SAVE` 状态统一写入 `tool_calls.jsonl`，`/tools` 可直接查看当前会话的调用记录。
+
+当工具循环达到 `max_tool_rounds` 时，AgentLoop 会基于已有 tool result 发起一次禁用 tools 的最终总结请求。最终请求若返回自然语言，则直接作为本轮回答；若 provider 返回 DSML 工具调用格式、继续返回 tool call 或空文本，则不展示原始内容，改为提示已完成工具次数并引导用户使用 `/tools` 查看完整记录。
 
 流式输出通过集中配置显式开启：
 

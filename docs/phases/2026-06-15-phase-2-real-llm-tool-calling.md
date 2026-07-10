@@ -383,12 +383,13 @@ return LLMResponse(content=message.content or "")
 }
 ```
 
-- [x] **Step 3: 达到 max_tool_rounds 后返回明确文本**
+- [x] **Step 3: 达到 max_tool_rounds 后尝试一次最终总结**
 
-继续沿用：
+工具调用轮数达到上限后，使用已有 working messages 发起一次不携带 tools 的总结请求。若返回有效自然语言，则作为最终回复；若 provider 返回 DSML 工具调用格式、继续 tool call 或空文本，则返回明确降级提示，并引导用户使用 `/tools` 查看已完成调用记录。
 
 ```text
-工具调用轮数已达到上限。
+工具调用轮数已达到上限，已完成 N 次工具调用（...）。
+模型未能生成最终总结，可使用 /tools 查看本轮完整工具结果。
 ```
 
 ## Task 8: Observability

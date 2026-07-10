@@ -131,6 +131,8 @@ COMMAND -> SESSION -> BUILD -> RUN -> COMPACT -> SAVE -> RESPOND
 - 执行 tool calling loop
 - 得到最终 assistant 回复
 
+工具循环达到 `max_tool_rounds` 时，RUN 会基于当前 working messages 发起一次不携带 tools 的最终总结请求。Provider 若在该请求中返回 DSML 工具调用格式，会归一化为 `protocol_error`；RUN 不展示该原始文本。最终请求返回 `protocol_error`、tool call 或空文本时，RUN 返回已完成工具次数和 `/tools` 查看提示。
+
 ### COMPACT
 
 职责：
