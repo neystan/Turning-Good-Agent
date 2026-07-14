@@ -1,4 +1,4 @@
-# Turning-Good-Agent Phase 6 主动能力与长期记忆 Implementation Plan
+# Turning-Good-Agent Phase 7 主动能力与长期记忆 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

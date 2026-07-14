@@ -1,7 +1,7 @@
 # Turning-Good-Agent 持续更新 Spec
 
-> Last updated: 2026-06-25
-> 状态：MVP 已可运行，真实 LLM SDK 化、基础 tool calling、LLM 摘要压缩与 CLI 流式输出主路径已完成，下一步继续补 MCP、Web observability 与更细的工具观测。
+> Last updated: 2026-07-15
+> 状态：MVP 已可运行，真实 LLM SDK 化、基础 tool calling、LLM 摘要压缩与 CLI 流式输出主路径已完成；Phase 3 轻量顺序 Hooks 设计已收口，下一步实现 3 对顺序 Hook。
 
 ## 1. 产品目标
 
@@ -447,6 +447,7 @@ Tools 当前约束：
 
 下一阶段要做：
 
+- Phase 3：先实现 turn、tool call、compact 三对轻量顺序 hook
 - 更细粒度的流式输出 trace 字段
 - 更细粒度的 provider 错误信息与 trace 字段
 
@@ -518,12 +519,28 @@ skills/
 
 ## 12. Hooks
 
-目标能力：
+第一版能力：
 
-- 顺序 hook：在固定阶段前后执行，例如 before_run、after_run、before_compact
-- 事件 hook：根据事件触发，例如 conversation_completed、tool_failed、memory_compacted
+- `before_turn / after_turn`：覆盖完整 turn，斜杠命令也会经过这对 Hook
+- `before_tool_call / after_tool_call`：覆盖工具执行前后，支持用非空字符串阻断单次工具调用
+- `before_compact / after_compact`：只在真实压缩发生时触发，把 CLI 状态展示移出 Runtime
+- 多个 Hook 按注册顺序串行执行
+- 单个 Hook 异常记录后继续，不击穿主流程
 
-当前已有 `hooks/` 骨架，后续应接入 Runtime。
+当前已有 `hooks/` 骨架，但尚未接入 Runtime。Phase 3 第一版只完成上述 3 对顺序 Hook，不建设完整 Hook 平台。
+
+设计边界：
+
+- 第一版只加载代码内显式注册的可信 hook。
+- 第一版不执行任意 shell hook、远程 hook 或第三方插件包。
+- 第一版不新增通用 `HookContext`、`HookResult` 或复杂 patch 协议，直接复用现有对象。
+- 只有 `before_turn` 和 `before_tool_call` 可以通过非空字符串表达阻断原因。
+- Core security 仍由现有工具层负责，Hook 不能绕过路径、命令、URL 和参数校验。
+- `after_turn` 可以观察本轮汇总数据，但不能替代 `.sessions` 核心 JSON/JSONL 落盘。
+- Context、LLM、SAVE、RESPOND 等更多顺序 hook 后续按真实需求增加。
+- 事件 hook 后续单独设计，首批候选为 `turn.completed`、`turn.failed`、session 生命周期和 `token.recorded`。
+
+Phase 3 设计见 `docs/phases/2026-06-15-phase-3-hooks.md`，编码步骤见 `docs/superpowers/plans/2026-07-15-phase-3-sequential-hooks.md`。
 
 ## 13. Observability
 
@@ -582,12 +599,13 @@ Main Agent
 1. Phase 1：Runtime MVP
 2. Phase 2：真实 LLM SDK 化、tool calling 与 CLI 文本流式输出
 3. Phase 2.5：基础工具扩展
-4. Phase 3：MCP client MVP
-5. Phase 4：Skills 机制
-6. Phase 5：Web observability
-7. Phase 6：主动能力与长期记忆
-8. Phase 7：Multi-Agent 协作模式
-9. Phase 8：多 Channel 接入
+4. Phase 3：Hooks Runtime Extension
+5. Phase 4：MCP client MVP
+6. Phase 5：Skills 机制
+7. Phase 6：Web observability
+8. Phase 7：主动能力与长期记忆
+9. Phase 8：Multi-Agent 协作模式
+10. Phase 9：多 Channel 接入
 
 ## 17. 更新规则
 

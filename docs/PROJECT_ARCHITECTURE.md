@@ -41,7 +41,6 @@ python -m Turning-Good-Agent chat
 | `docs/PROJECT_ARCHITECTURE.md` | 当前文档，说明真实代码结构。 |
 | `docs/phases/` | 每一阶段的项目骨架和实施计划。 |
 | `docs/archive/2026-06-11-phase-1-runtime-mvp-design.md` | Phase 1 Runtime MVP 设计快照，已归档为历史记录。 |
-| `docs/2026-06-11-turning-good-agent-mvp.md` | 早期历史实施计划。 |
 
 ## 4. `Turning-Good-Agent/` 主 Python 包
 
@@ -248,12 +247,35 @@ Tools 当前边界：
 
 ### 4.11 `hooks/`
 
-职责：hook 机制骨架。
+职责：Runtime、AgentLoop 和工具执行过程的内部扩展平面。Phase 3 第一版只把 3 对轻量顺序 hook 接入核心生命周期。
 
 | 路径 | 作用 |
 | --- | --- |
 | `hooks/events.py` | hook 事件定义骨架。 |
 | `hooks/manager.py` | hook manager 骨架。 |
+
+第一版计划调用关系：
+
+```text
+before_turn
+  Runtime state machine
+    AgentLoop: before_tool_call -> ToolExecutor -> after_tool_call
+    COMPACT:   before_compact   -> ShortTermMemory -> after_compact
+after_turn
+```
+
+架构边界：
+
+- 第一版只实现 `before_turn/after_turn`、`before_tool_call/after_tool_call`、`before_compact/after_compact`。
+- `before_turn` 和 `before_tool_call` 返回 `None` 表示继续，返回非空字符串表示阻断原因。
+- 其他 Hook 不返回控制结果；多个 Hook 按注册顺序串行执行，异常记录后继续。
+- 第一版直接复用 `TurnContext`、`ToolCall` 和现有工具记录，不增加通用 `HookContext`、`HookResult` 或 patch 协议。
+- hook 不替代 MessageBus。MessageBus 负责 channel 与 Runtime 通信，hook 负责 Runtime 内部生命周期扩展。
+- hook 不替代 tools 或 skills。tools 执行动作，skills 提供上下文指令，hook 负责在明确时机执行策略或副作用。
+- hook 不替代 `.sessions` 核心持久化。Session、message、tool call、token 和 trace 仍由现有 Store 可靠落盘。
+- 事件 hook、Context hook 和 LLM hook 在第一版顺序 hook 验证完成后按真实需求新增。
+
+参考 nanobot 的 `AgentHook` 与顺序组合方式，以及 `/download/learn-claude-code/s04_hooks` 的简单阻断语义。TGA 不复制成熟 Hook 平台的 matcher、外部脚本、远程 handler 和完整决策协议。
 
 ### 4.12 `proactive/`
 

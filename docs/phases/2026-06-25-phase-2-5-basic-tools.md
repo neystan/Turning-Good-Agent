@@ -2,7 +2,7 @@
 
 **目标：** 在 Phase 2 已完成真实 LLM tool calling 主路径后，补齐轻量通用 agent 的基础工具面，让 CLI 真实对话可以完成文件查看、文件修改、内容搜索、受限命令执行、网页信息获取和天气查询。
 
-**阶段定位：** Phase 2.5 是 Phase 2 和 Phase 3 之间的工具能力补强阶段。Phase 2 已解决“模型能稳定调用工具”，Phase 3 将做 MCP client。本阶段只做内置基础工具，不引入 MCP、skills、entry_points 插件或复杂浏览器自动化。
+**阶段定位：** Phase 2.5 是 Phase 2 和 Phase 3 之间的工具能力补强阶段。Phase 2 已解决“模型能稳定调用工具”，Phase 3 将建立 Hooks Runtime 扩展层，MCP client 顺延到 Phase 4。本阶段只做内置基础工具，不引入 MCP、skills、entry_points 插件或复杂浏览器自动化。
 
 **当前状态：** 基础实现已开始，当前代码已新增 `filesystem_tools.py`、`shell_tools.py`、`web_tools.py`、`info_tools.py`、`security.py`、`path_utils.py` 和 `exec_sessions.py`。
 

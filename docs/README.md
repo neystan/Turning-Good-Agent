@@ -16,18 +16,23 @@
 | Phase 1 | [Runtime MVP](./phases/2026-06-15-phase-1-runtime-mvp.md) | 已基本完成 |
 | Phase 2 | [真实 LLM SDK 化、Tool Calling 与 CLI 流式输出](./phases/2026-06-15-phase-2-real-llm-tool-calling.md) | 主路径已完成 |
 | Phase 2.5 | [基础工具扩展](./phases/2026-06-25-phase-2-5-basic-tools.md) | 实现中 |
-| Phase 3 | [MCP Client MVP](./phases/2026-06-15-phase-3-mcp-client.md) | 计划中 |
-| Phase 4 | [Skills 机制](./phases/2026-06-15-phase-4-skills.md) | 计划中 |
-| Phase 5 | [Web 可观测面板](./phases/2026-06-15-phase-5-web-observability.md) | 计划中 |
-| Phase 6 | [主动能力与长期记忆](./phases/2026-06-15-phase-6-proactive-memory.md) | 计划中 |
-| Phase 7 | [Multi-Agent 协作模式](./phases/2026-06-15-phase-7-multi-agent.md) | 计划中 |
-| Phase 8 | [多 Channel 接入](./phases/2026-06-15-phase-8-channel-adapters.md) | 计划中 |
+| Phase 3 | [轻量顺序 Hooks](./phases/2026-06-15-phase-3-hooks.md) | 设计已收口，待实现 |
+| Phase 4 | [MCP Client MVP](./phases/2026-06-15-phase-4-mcp-client.md) | 计划中 |
+| Phase 5 | [Skills 机制](./phases/2026-06-15-phase-5-skills.md) | 计划中 |
+| Phase 6 | [Web 可观测面板](./phases/2026-06-15-phase-6-web-observability.md) | 计划中 |
+| Phase 7 | [主动能力与长期记忆](./phases/2026-06-15-phase-7-proactive-memory.md) | 计划中 |
+| Phase 8 | [Multi-Agent 协作模式](./phases/2026-06-15-phase-8-multi-agent.md) | 计划中 |
+| Phase 9 | [多 Channel 接入](./phases/2026-06-15-phase-9-channel-adapters.md) | 计划中 |
+
+Phase 3 实施与交接：
+
+- [顺序 Hooks 实施计划](./superpowers/plans/2026-07-15-phase-3-sequential-hooks.md)
+- [派生会话 Handoff](./handoffs/2026-07-15-phase-3-hooks-derived-session-handoff.md)
 
 ## 历史文档
 
 | 文档 | 说明 |
 | --- | --- |
-| [2026-06-11-turning-good-agent-mvp.md](./2026-06-11-turning-good-agent-mvp.md) | 早期 MVP 实施计划，已归档为历史记录。 |
 | [archive/2026-06-11-phase-1-runtime-mvp-design.md](./archive/2026-06-11-phase-1-runtime-mvp-design.md) | Phase 1 Runtime MVP 的设计快照，已归档为历史记录。 |
 
 ## 维护规则

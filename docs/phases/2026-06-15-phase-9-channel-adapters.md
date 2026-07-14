@@ -1,4 +1,4 @@
-# Turning-Good-Agent Phase 8 多 Channel 接入 Implementation Plan
+# Turning-Good-Agent Phase 9 多 Channel 接入 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
