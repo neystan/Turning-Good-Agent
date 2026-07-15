@@ -4,6 +4,8 @@ from collections.abc import Callable
 from ..bus.messages import InboundMessage, OutboundMessage
 from ..config.settings import Settings
 from ..context.builder import ContextBuilder
+from ..hooks.manager import HookManager
+from ..hooks.tool_result_truncation import ToolResultTruncationHook
 from ..llm.client import LLMProvider
 from ..memory.long_term import ProfileMemory
 from ..observability.token_monitor import TokenMonitor
@@ -37,13 +39,16 @@ class AgentRuntime:
         agent_loop: AgentLoop,
         profile_memory: ProfileMemory,
         proactive: ProactiveManager,
+        hooks: HookManager,
     ) -> None:
+        """初始化 Runtime 依赖和唯一 Hook 管理器。"""
         self.settings = settings
         self.sessions = sessions
         self.context_builder = context_builder
         self.agent_loop = agent_loop
         self.profile_memory = profile_memory
         self.proactive = proactive
+        self.hooks = hooks
         self.token_monitor = TokenMonitor()
         self.last_trace: list[StateTrace] = []
 
@@ -54,13 +59,16 @@ class AgentRuntime:
         sessions = SessionManager(store)
         tools = ToolRegistry()
         ToolLoader().load(tools, settings)
+        hooks = HookManager()
+        hooks.register(ToolResultTruncationHook(settings.runtime.max_tool_result_tokens))
         return cls(
             settings=settings,
             sessions=sessions,
             context_builder=ContextBuilder(),
-            agent_loop=AgentLoop(llm, tools, settings.runtime, settings.llm.streaming_enabled),
+            agent_loop=AgentLoop(llm, tools, settings.runtime, settings.llm.streaming_enabled, hooks=hooks),
             profile_memory=ProfileMemory(),
             proactive=ProactiveManager(),
+            hooks=hooks,
         )
 
     async def run_turn(

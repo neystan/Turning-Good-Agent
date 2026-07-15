@@ -1,6 +1,9 @@
 import time
+from pathlib import Path
 from typing import Any
 
+from . import security
+from .base import BaseTool
 from .registry import ToolRegistry
 
 
@@ -8,7 +11,13 @@ class ToolExecutor:
     """执行工具并记录耗时。"""
 
     def __init__(self, registry: ToolRegistry) -> None:
+        """保存工具注册表。"""
         self.registry = registry
+
+    def precheck(self, tool: BaseTool, args: dict[str, Any]) -> str | None:
+        """在策略判断或执行前检查硬安全规则。"""
+        workspace = Path(getattr(tool, "workspace", Path.cwd())).resolve()
+        return security.validate_tool_call(tool.name, args, workspace)
 
     async def run(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         """执行单个工具，异常转为错误结果。"""
@@ -23,8 +32,13 @@ class ToolExecutor:
             else:
                 assert tool is not None
                 args = normalized_args
-                result = await tool.run(args)
-                content = result.content if hasattr(result, "content") else str(result)
+                security_error = self.precheck(tool, args)
+                if security_error:
+                    error = security_error
+                    content = f"工具 {tool_name} 安全检查失败：{security_error}"
+                else:
+                    result = await tool.run(args)
+                    content = result.content if hasattr(result, "content") else str(result)
         except Exception as exc:
             error = str(exc)
             content = f"工具 {tool_name} 执行失败：{error}"

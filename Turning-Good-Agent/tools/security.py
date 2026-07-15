@@ -1,6 +1,9 @@
 import re
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
+
+from .path_utils import resolve_workspace_path
 
 
 MAX_READ_CHARS = 128_000
@@ -133,6 +136,23 @@ def validate_http_url(url: str) -> str | None:
         return f"只允许 http/https URL，实际是：{parsed.scheme or 'none'}"
     if not parsed.netloc:
         return "URL 缺少域名"
+    return None
+
+
+def validate_tool_call(tool_name: str, args: dict[str, Any], workspace: Path) -> str | None:
+    """对标准化工具参数执行不可绕过的安全预检。"""
+    try:
+        if tool_name == "read_file":
+            return validate_read_path(resolve_workspace_path(str(args["path"]), workspace))
+        if tool_name in {"write_file", "edit_file"}:
+            return validate_write_path(resolve_workspace_path(str(args["path"]), workspace))
+        if tool_name == "exec":
+            resolve_workspace_path(str(args.get("working_dir") or "."), workspace)
+            return validate_command(str(args["command"]))
+        if tool_name == "web_fetch":
+            return validate_http_url(str(args["url"]))
+    except (KeyError, PermissionError, OSError, ValueError) as exc:
+        return str(exc)
     return None
 
 

@@ -103,7 +103,7 @@ flowchart TD
     AgentLoop --> Tools[ToolRegistry + ToolExecutor]
     Tools --> Builtins[echo / now / filesystem / shell / web / weather]
 
-    Runtime -. Phase 3 turn/compact .-> Hooks[HookManager]
+    Runtime -. Phase 3 compact .-> Hooks[HookManager]
     AgentLoop -. Phase 3 tool call .-> Hooks
 
     Compact --> Token[TokenMonitor usage base]
@@ -133,14 +133,14 @@ context/      system prompt、summary、uncompacted history、tool schema 组装
 memory/       短期记忆压缩骨架、长期偏好骨架、事件记忆骨架
 tools/        工具抽象、注册、执行、内置工具
 llm/          LLM Provider 抽象和 OpenAI-compatible 实现
-hooks/        顺序 hook 骨架，Phase 3 首版接入 turn、tool call、compact
+hooks/        CLI 审批、工具结果截断、压缩状态提示
 observability trace 和 token 记录
 proactive/    主动能力扩展入口
 ```
 
 ## 当前阶段
 
-项目当前处于 Phase 2.5 基础工具扩展阶段：Phase 2 的真实 LLM SDK 化、Tool Calling、工具观测落盘与 CLI 流式输出范围已经完成，当前正在补齐内置基础工具。
+项目当前已完成 Phase 3 三个轻量 Hook：CLI 工具审批、工具结果截断和 CLI 压缩状态提示。
 
 已完成：
 
@@ -173,9 +173,9 @@ Web、微信、飞书的流式展示后续在 channel 阶段接入
 MCP tools、skills tools、entry_points 插件不属于 Phase 2
 ```
 
-工具系统继续保持轻量，不引入完整插件生态。当前阶段只做内置工具自动加载；Phase 3 先完成 Hooks Runtime Extension，MCP tools 在 Phase 4 通过 adapter 注册进同一个 `ToolRegistry`。
+工具系统继续保持轻量，不引入完整插件生态。Phase 3 已完成 Hooks Runtime Extension；MCP tools 在 Phase 4 通过 adapter 注册进同一个 `ToolRegistry`。
 
-Phase 3 第一版只实现 `before_turn/after_turn`、`before_tool_call/after_tool_call`、`before_compact/after_compact` 三对可信进程内顺序 hook。它们用于整轮扩展、工具阻断与观测、压缩状态解耦；不改变状态机、ToolExecutor 和 `.sessions` 核心持久化。事件 hook 以及 Context、LLM 等更多顺序 hook 等真实需求出现后再单独实现。
+Phase 3 只实现三个 Hook 功能：CLI 在 `write_file`、`edit_file`、`exec`、`write_stdin` 执行前同步询问用户；工具结果在注入 LLM 前按 `max_tool_result_tokens = 8000` 截断；CLI 在真实压缩前后显示状态。审批不持久化，也不包含跨 Channel 和恢复机制。
 
 ## 使用真实 LLM 测试
 

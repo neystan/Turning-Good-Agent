@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from .bus.messages import InboundMessage
 from .config.settings import Settings
+from .hooks.cli import CliCompactStatusHook, CliToolApprovalHook
 from .llm.client import LLMProvider
 from .llm.openai_compatible import OpenAICompatibleLLM
 from .runtime.runtime import AgentRuntime
@@ -96,6 +97,8 @@ async def chat(
     if model is not None:
         settings.llm.model = model
     runtime = AgentRuntime.create_default(settings, build_llm(settings))
+    runtime.hooks.register(CliToolApprovalHook())
+    runtime.hooks.register(CliCompactStatusHook())
     configure_readline_for_unicode_input()
     print("Turning Good Agent MVP。输入 /exit 退出。")
     while True:

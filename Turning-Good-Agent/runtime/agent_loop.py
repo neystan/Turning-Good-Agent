@@ -6,11 +6,11 @@ from typing import Any
 
 from ..config.settings import RuntimeSettings
 from ..context.tool_round_limit_prompt import TOOL_ROUND_LIMIT_SUMMARY_PROMPT
+from ..hooks.manager import HookManager
 from ..llm.client import LLMProvider
-from ..llm.types import LLMResponse, LLMUsage
+from ..llm.types import LLMResponse, LLMUsage, ToolCall
 from ..tools.executor import ToolExecutor
 from ..tools.registry import ToolRegistry
-
 
 @dataclass(slots=True)
 class AgentLoopResult:
@@ -31,12 +31,15 @@ class AgentLoop:
         tools: ToolRegistry,
         runtime: RuntimeSettings,
         streaming_enabled: bool = False,
+        hooks: HookManager | None = None,
     ) -> None:
+        """初始化模型、工具执行器和 Hook 管理器。"""
         self.llm = llm
         self.tools = tools
         self.runtime = runtime
         self.executor = ToolExecutor(tools)
         self.streaming_enabled = streaming_enabled
+        self.hooks = hooks or HookManager()
 
     async def run(
         self,
@@ -52,35 +55,12 @@ class AgentLoop:
             usage = usage.add(response.usage)
             if not response.tool_calls:
                 return AgentLoopResult(response.content, working, tool_records, usage)
-            working.append(
-                {
-                    "role": "assistant",
-                    "content": response.content,
-                    "tool_calls": [
-                        {
-                            "id": call.id,
-                            "type": "function",
-                            "function": {
-                                "name": call.name,
-                                "arguments": json.dumps(call.args, ensure_ascii=False),
-                            },
-                        }
-                        for call in response.tool_calls[: self.runtime.max_tool_calls_per_round]
-                    ],
-                }
-            )
-            for call in response.tool_calls[: self.runtime.max_tool_calls_per_round]:
-                record = await self.executor.run(call.name, call.args)
-                record["tool_call_id"] = call.id
+            calls = response.tool_calls[: self.runtime.max_tool_calls_per_round]
+            working.append(self._assistant_tool_message(response.content, calls))
+            for call in calls:
+                record = await self._execute_tool_call(call)
                 tool_records.append(record)
-                working.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "name": call.name,
-                        "content": record["content"],
-                    }
-                )
+                working.append(self._tool_result_message(call, record))
         working.append({"role": "system", "content": TOOL_ROUND_LIMIT_SUMMARY_PROMPT})
         summary = await self._complete(working, [], None)
         usage = usage.add(summary.usage)
@@ -92,6 +72,85 @@ class AgentLoop:
             if inspect.isawaitable(emitted):
                 await emitted
         return AgentLoopResult(content, working, tool_records, usage)
+
+    async def _execute_tool_call(self, call: ToolCall) -> dict[str, Any]:
+        """完成单次工具校验、审批、执行和结果处理。"""
+        tool, args, validation_error = self.tools.prepare_call(call.name, call.args)
+        normalized_call = ToolCall(call.id, call.name, args)
+        if validation_error:
+            record = self._error_record(
+                normalized_call,
+                f"工具 {call.name} 参数错误：{validation_error}",
+                validation_error,
+            )
+            return await self._finalize_tool_call(normalized_call, record)
+
+        assert tool is not None
+        security_error = self.executor.precheck(tool, args)
+        if security_error:
+            record = self._error_record(
+                normalized_call,
+                f"工具 {call.name} 安全检查失败：{security_error}",
+                security_error,
+            )
+            return await self._finalize_tool_call(normalized_call, record)
+
+        block_reason = await self.hooks.run_before_tool_call(normalized_call)
+        if block_reason:
+            record = self._error_record(
+                normalized_call,
+                f"工具 {call.name} 被 Hook 阻止：{block_reason}",
+                block_reason,
+            )
+            return await self._finalize_tool_call(normalized_call, record)
+
+        record = await self.executor.run(normalized_call.name, normalized_call.args)
+        return await self._finalize_tool_call(normalized_call, record)
+
+    async def _finalize_tool_call(self, call: ToolCall, record: dict[str, Any]) -> dict[str, Any]:
+        """补齐工具调用 ID 并执行结果 Hook。"""
+        record["tool_call_id"] = call.id
+        return await self.hooks.run_after_tool_call(call, record)
+
+    @staticmethod
+    def _assistant_tool_message(content: str, calls: list[ToolCall]) -> dict[str, Any]:
+        """构造包含工具请求的 assistant 消息。"""
+        return {
+            "role": "assistant",
+            "content": content,
+            "tool_calls": [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": json.dumps(call.args, ensure_ascii=False),
+                    },
+                }
+                for call in calls
+            ],
+        }
+
+    @staticmethod
+    def _tool_result_message(call: ToolCall, record: dict[str, Any]) -> dict[str, Any]:
+        """构造注入下一轮模型调用的工具结果消息。"""
+        return {
+            "role": "tool",
+            "tool_call_id": call.id,
+            "name": call.name,
+            "content": record["content"],
+        }
+
+    @staticmethod
+    def _error_record(call: ToolCall, content: str, error: str) -> dict[str, Any]:
+        """构造兼容现有落盘格式的工具错误记录。"""
+        return {
+            "tool_name": call.name,
+            "args": dict(call.args),
+            "content": content,
+            "duration_ms": 0.0,
+            "error": error,
+        }
 
     @staticmethod
     def _tool_round_limit_fallback(tool_records: list[dict[str, Any]]) -> str:

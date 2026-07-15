@@ -1,7 +1,7 @@
 # Turning-Good-Agent 持续更新 Spec
 
 > Last updated: 2026-07-15
-> 状态：MVP 已可运行，真实 LLM SDK 化、基础 tool calling、LLM 摘要压缩与 CLI 流式输出主路径已完成；Phase 3 轻量顺序 Hooks 设计已收口，下一步实现 3 对顺序 Hook。
+> 状态：MVP 已可运行，真实 LLM SDK 化、基础 tool calling、LLM 摘要压缩、CLI 流式输出与 Phase 3 三个轻量 Hooks 已完成。
 
 ## 1. 产品目标
 
@@ -447,7 +447,7 @@ Tools 当前约束：
 
 下一阶段要做：
 
-- Phase 3：先实现 turn、tool call、compact 三对轻量顺序 hook
+- Phase 4：MCP Client MVP
 - 更细粒度的流式输出 trace 字段
 - 更细粒度的 provider 错误信息与 trace 字段
 
@@ -519,28 +519,26 @@ skills/
 
 ## 12. Hooks
 
-第一版能力：
+Phase 3 只提供三个能力：
 
-- `before_turn / after_turn`：覆盖完整 turn，斜杠命令也会经过这对 Hook
-- `before_tool_call / after_tool_call`：覆盖工具执行前后，支持用非空字符串阻断单次工具调用
-- `before_compact / after_compact`：只在真实压缩发生时触发，把 CLI 状态展示移出 Runtime
-- 多个 Hook 按注册顺序串行执行
-- 单个 Hook 异常记录后继续，不击穿主流程
+- 工具调用前：CLI 同步审批 `write_file`、`edit_file`、`exec`、`write_stdin`
+- 工具调用后：按 token 上限截断模型可见结果
+- 会话压缩前后：CLI 显示开始和完成状态
 
-当前已有 `hooks/` 骨架，但尚未接入 Runtime。Phase 3 第一版只完成上述 3 对顺序 Hook，不建设完整 Hook 平台。
+多个 Hook 按注册顺序串行执行，单个 Hook 异常记录后继续，不击穿主流程。
 
 设计边界：
 
 - 第一版只加载代码内显式注册的可信 hook。
 - 第一版不执行任意 shell hook、远程 hook 或第三方插件包。
-- 第一版不新增通用 `HookContext`、`HookResult` 或复杂 patch 协议，直接复用现有对象。
-- 只有 `before_turn` 和 `before_tool_call` 可以通过非空字符串表达阻断原因。
+- 工具 Hook 直接使用标准化 `ToolCall` 和工具记录，不依赖 `TurnContext`，也不增加专用上下文或决策对象。
+- `before_tool_call` 返回 `None` 表示允许，返回字符串表示拒绝原因。
 - Core security 仍由现有工具层负责，Hook 不能绕过路径、命令、URL 和参数校验。
-- `after_turn` 可以观察本轮汇总数据，但不能替代 `.sessions` 核心 JSON/JSONL 落盘。
-- Context、LLM、SAVE、RESPOND 等更多顺序 hook 后续按真实需求增加。
-- 事件 hook 后续单独设计，首批候选为 `turn.completed`、`turn.failed`、session 生命周期和 `token.recorded`。
+- 当前 CLI 审批立即完成，不持久化，不支持跨 Channel 和暂停恢复。
 
-Phase 3 设计见 `docs/phases/2026-06-15-phase-3-hooks.md`，编码步骤见 `docs/superpowers/plans/2026-07-15-phase-3-sequential-hooks.md`。
+Phase 3 的实现范围和验收记录见 `docs/phases/2026-06-15-phase-3-hooks.md`。
+
+工具调用先完成 Schema 标准化和 security 预检，再进行 CLI 审批；允许后由 ToolExecutor 再次执行硬安全校验。`after_tool_call` 在结果注入 LLM 前按 `max_tool_result_tokens = 8000` 统一截断。
 
 ## 13. Observability
 

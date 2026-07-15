@@ -13,6 +13,7 @@ class RuntimeSettings:
     max_tool_calls_per_round: int = 8
     turn_timeout_seconds: int = 120
     max_context_tokens: int = 300_000
+    max_tool_result_tokens: int = 8_000
 
 
 @dataclass(slots=True)
@@ -76,7 +77,13 @@ class Settings:
             if "channel" in payload:
                 settings.channel = payload["channel"]
             runtime = payload.get("runtime", {})
-            for key in ("max_tool_rounds", "max_tool_calls_per_round", "turn_timeout_seconds", "max_context_tokens"):
+            for key in (
+                "max_tool_rounds",
+                "max_tool_calls_per_round",
+                "turn_timeout_seconds",
+                "max_context_tokens",
+                "max_tool_result_tokens",
+            ):
                 if key in runtime:
                     setattr(settings.runtime, key, runtime[key])
             memory = payload.get("memory", {})

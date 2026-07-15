@@ -138,7 +138,7 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
         ctx.session.uncompacted_history = uncompacted_history
         ctx.true_token_usage = await build_true_token_usage(runtime, ctx, compacted=False)
         return "ok"
-    print_status("正在压缩会话上下文...")
+    await runtime.hooks.run_before_compact(ctx)
     summary, summary_usage = await memory.compact(ctx.session.summary, compact_source, runtime.agent_loop.llm)
     ctx.llm_usage = ctx.llm_usage.add(summary_usage)
     compacted_token_count = memory.count_tokens(compact_source)
@@ -154,14 +154,7 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
         }
     )
     ctx.true_token_usage = await build_true_token_usage(runtime, ctx, compacted=True)
-    print_status(
-        (
-            "压缩完成："
-            f"已压缩 {len(compact_source)} 条消息，"
-            f"压缩 {compacted_token_count} tokens，"
-            f"保留最近 {raw_window_token_count} tokens 原文。"
-        ),
-    )
+    await runtime.hooks.run_after_compact(ctx)
     return "ok"
 
 
@@ -209,7 +202,7 @@ async def respond(ctx: TurnContext) -> str:
 
 async def save_remaining_traces(runtime: AgentRuntime, ctx: TurnContext) -> None:
     """补保存尚未落盘的状态 trace。"""
-    if ctx.shortcut_response is not None:
+    if ctx.shortcut_response is not None or ctx.session is None:
         return
     await runtime.sessions.store.save_turn_traces(ctx.trace[ctx.saved_trace_count:])
     ctx.saved_trace_count = len(ctx.trace)
@@ -440,11 +433,6 @@ def compact_trace_metadata(ctx: TurnContext) -> dict[str, int]:
         "raw_window_message_count": int(ctx.compact_stats.get("raw_window_message_count", 0)),
         "raw_window_token_count": int(ctx.compact_stats.get("raw_window_token_count", 0)),
     }
-
-
-def print_status(content: str) -> None:
-    """直接打印 Runtime 状态提示。"""
-    print(f"\n[系统] {content}", flush=True)
 
 
 def run_trace_metadata(ctx: TurnContext) -> dict[str, int | list[str]]:

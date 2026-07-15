@@ -6,7 +6,8 @@
     "max_tool_rounds": 5,
     "max_tool_calls_per_round": 8,
     "turn_timeout_seconds": 120,
-    "max_context_tokens": 300000
+    "max_context_tokens": 300000,
+    "max_tool_result_tokens": 8000
   },
   "memory": {
     "compact_token_threshold": 200000,

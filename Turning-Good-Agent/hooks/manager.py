@@ -1,20 +1,70 @@
-from collections.abc import Awaitable, Callable
-from typing import Any
+import logging
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any
 
-Hook = Callable[[dict[str, Any]], Awaitable[None]]
+from ..llm.types import ToolCall
+from .base import AgentHook
+
+if TYPE_CHECKING:
+    from ..runtime.turn_context import TurnContext
+
+logger = logging.getLogger(__name__)
 
 
 class HookManager:
-    """注册并触发轻量事件 hook。"""
+    """按注册顺序触发进程内生命周期 Hook。"""
 
     def __init__(self) -> None:
-        self._event_hooks: dict[str, list[Hook]] = {}
+        """初始化按注册顺序保存的 Hook 列表。"""
+        self._hooks: list[AgentHook] = []
 
-    def on(self, event: str, hook: Hook) -> None:
-        """注册事件 hook。"""
-        self._event_hooks.setdefault(event, []).append(hook)
+    def register(self, hook: AgentHook) -> None:
+        """按调用顺序注册 Hook。"""
+        self._hooks.append(hook)
 
-    async def emit(self, event: str, payload: dict[str, Any]) -> None:
-        """顺序触发事件 hook。"""
-        for hook in self._event_hooks.get(event, []):
-            await hook(payload)
+    async def run_before_tool_call(self, call: ToolCall) -> str | None:
+        """执行工具前 Hook 并返回首个阻断原因。"""
+        for hook in self._hooks:
+            try:
+                reason = await hook.before_tool_call(call)
+            except Exception:
+                logger.exception("Hook %s.before_tool_call 执行失败", type(hook).__name__)
+                continue
+            if reason:
+                return str(reason)
+        return None
+
+    async def run_after_tool_call(
+        self,
+        call: ToolCall,
+        record: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """执行工具结果处理管道并返回最终记录。"""
+        current = dict(record)
+        for hook in self._hooks:
+            try:
+                updated = await hook.after_tool_call(call, dict(current))
+            except Exception:
+                logger.exception("Hook %s.after_tool_call 执行失败", type(hook).__name__)
+                continue
+            if not isinstance(updated, Mapping):
+                logger.error("Hook %s.after_tool_call 返回值不是 Mapping", type(hook).__name__)
+                continue
+            current.update(updated)
+        return current
+
+    async def run_before_compact(self, ctx: "TurnContext") -> None:
+        """执行全部压缩前 Hook。"""
+        for hook in self._hooks:
+            try:
+                await hook.before_compact(ctx)
+            except Exception:
+                logger.exception("Hook %s.before_compact 执行失败", type(hook).__name__)
+
+    async def run_after_compact(self, ctx: "TurnContext") -> None:
+        """执行全部压缩后 Hook。"""
+        for hook in self._hooks:
+            try:
+                await hook.after_compact(ctx)
+            except Exception:
+                logger.exception("Hook %s.after_compact 执行失败", type(hook).__name__)
