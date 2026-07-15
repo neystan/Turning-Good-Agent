@@ -4,3 +4,5 @@ __pycache__/
 .sessions/
 settings.local.json
 tests/
+docs/
+SESSIONS_SPEC.md
