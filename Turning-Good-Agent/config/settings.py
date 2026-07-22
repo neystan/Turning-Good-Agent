@@ -34,6 +34,15 @@ class SessionSettings:
 
 
 @dataclass(slots=True)
+class ToolPermissionSettings:
+    """保存审批类工具配置。"""
+
+    approval_required_tools: list[str] = field(
+        default_factory=lambda: ["write_file", "edit_file", "exec", "write_stdin"]
+    )
+
+
+@dataclass(slots=True)
 class LLMSettings:
     """保存 LLM Provider 配置。"""
 
@@ -58,6 +67,7 @@ class Settings:
     runtime: RuntimeSettings = field(default_factory=RuntimeSettings)
     memory: MemorySettings = field(default_factory=MemorySettings)
     sessions: SessionSettings = field(default_factory=SessionSettings)
+    tool_permissions: ToolPermissionSettings = field(default_factory=ToolPermissionSettings)
     llm: LLMSettings = field(default_factory=LLMSettings)
 
     @classmethod
@@ -98,6 +108,9 @@ class Settings:
             for key in ("retention_days",):
                 if key in sessions:
                     setattr(settings.sessions, key, sessions[key])
+            tool_permissions = payload.get("tool_permissions", {})
+            if "approval_required_tools" in tool_permissions:
+                settings.tool_permissions.approval_required_tools = tool_permissions["approval_required_tools"]
             llm = payload.get("llm", {})
             for key in (
                 "provider",

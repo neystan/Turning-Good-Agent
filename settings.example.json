@@ -16,6 +16,14 @@
   "sessions": {
     "retention_days": 7
   },
+  "tool_permissions": {
+    "approval_required_tools": [
+      "write_file",
+      "edit_file",
+      "exec",
+      "write_stdin"
+    ]
+  },
   "llm": {
     "provider": "openai-compatible",
     "api_key": "replace-with-your-key",

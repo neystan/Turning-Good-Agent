@@ -1,11 +1,12 @@
 import time
 
 from ..bus.messages import InboundMessage, OutboundMessage
-from ..channels.output import ChannelOutputRouter
+from ..channels.base import ChannelRouter
 from ..config.settings import Settings
 from ..context.builder import ContextBuilder
 from ..hooks.channel_status import ChannelStatusHook
 from ..hooks.manager import HookManager
+from ..hooks.tool_permission import ToolPermissionHook
 from ..hooks.tool_result_truncation import ToolResultTruncationHook
 from ..llm.client import LLMProvider
 from ..memory.long_term import ProfileMemory
@@ -29,6 +30,15 @@ from .state import (
 from .turn_context import TurnContext
 
 
+def validate_tool_permission_settings(tools: ToolRegistry, settings: Settings) -> None:
+    """校验审批工具均已注册且不会并行执行。"""
+    for name in settings.tool_permissions.approval_required_tools:
+        if not tools.has(name):
+            raise ValueError(f"审批工具未注册：{name}")
+        if bool(getattr(tools.get(name), "parallel_safe", False)):
+            raise ValueError(f"审批工具不能设置 parallel_safe=true：{name}")
+
+
 class AgentRuntime:
     """驱动单轮消息处理的状态机 Runtime。"""
 
@@ -50,7 +60,7 @@ class AgentRuntime:
         self.profile_memory = profile_memory
         self.proactive = proactive
         self.hooks = hooks
-        self.outputs = ChannelOutputRouter()
+        self.channel_router = ChannelRouter()
         self.token_monitor = TokenMonitor()
         self.last_trace: list[StateTrace] = []
 
@@ -61,7 +71,9 @@ class AgentRuntime:
         sessions = SessionManager(store)
         tools = ToolRegistry()
         ToolLoader().load(tools, settings)
+        validate_tool_permission_settings(tools, settings)
         hooks = HookManager()
+        hooks.register(ToolPermissionHook(frozenset(settings.tool_permissions.approval_required_tools)))
         hooks.register(ToolResultTruncationHook(settings.runtime.max_tool_result_tokens))
         hooks.register(ChannelStatusHook())
         return cls(
@@ -79,7 +91,7 @@ class AgentRuntime:
         msg: InboundMessage,
     ) -> OutboundMessage:
         """执行一轮消息处理并返回出站消息。"""
-        ctx = TurnContext(inbound=msg, output=self.outputs.create(msg.channel))
+        ctx = TurnContext(inbound=msg, channel_adapter=self.channel_router.create(msg.channel))
         lock = self.sessions.locks.lock_for(msg.session_id)
         async with lock:
             while True:
@@ -109,7 +121,7 @@ class AgentRuntime:
         self.last_trace = ctx.trace
         outbound = ctx.outbound or OutboundMessage.new(msg.session_id, msg.channel, ctx.final_content)
         if outbound.event_type == "response.error":
-            await ctx.output.on_error(outbound.content)
+            await ctx.channel_adapter.on_error(outbound.content)
         else:
-            await ctx.output.on_completed(outbound.content)
+            await ctx.channel_adapter.on_completed(outbound.content)
         return outbound

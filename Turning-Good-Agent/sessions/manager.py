@@ -9,6 +9,7 @@ COMMANDS: dict[str, str] = {
     "/history": "查看当前会话的完整历史消息",
     "/context": "查看当前会注入模型的会话上下文",
     "/tools": "查看当前会话的工具调用记录",
+    "/approve": "查看或设置当前会话工具自动审批",
     "/clear": "清空当前会话的消息和摘要",
     "/new": "开始一个新会话，CLI 会切换到新的 session",
     "/exit": "退出当前 CLI 会话",
@@ -43,6 +44,14 @@ class SessionManager:
             return await self.context_view(session_id)
         if command == "/tools":
             return await self.tools_view(session_id)
+        if command == "/approve":
+            return await self.auto_approve_status(session_id)
+        if command == "/approve on":
+            return await self.enable_auto_approve(session_id, msg.user_id, msg.channel)
+        if command == "/approve off":
+            return await self.disable_auto_approve(session_id)
+        if command.startswith("/approve"):
+            return "用法：/approve [on|off]"
         if command == "/clear":
             await self.store.clear_session(session_id)
             return "当前会话已清空。"
@@ -96,6 +105,26 @@ class SessionManager:
             lines.append(f"error: {item.error or '无'}")
             lines.append(f"duration_ms: {item.duration_ms:.3f}")
         return "\n".join(lines)
+
+    async def auto_approve_status(self, session_id: str) -> str:
+        """返回当前会话的工具自动审批状态。"""
+        session = await self.store.load_session(session_id)
+        enabled = session is not None and session.auto_approve_tools
+        return f"当前会话工具自动审批：{'已开启' if enabled else '已关闭'}。"
+
+    async def enable_auto_approve(self, session_id: str, user_id: str, channel: str) -> str:
+        """按需创建会话并开启工具自动审批。"""
+        await self.load_or_create(session_id, user_id, channel)
+        await self.store.update_auto_approve_tools(session_id, True)
+        return "当前会话已开启工具自动审批。\n审批类工具将不再逐次确认；安全检查仍然生效。"
+
+    async def disable_auto_approve(self, session_id: str) -> str:
+        """关闭已存在会话的工具自动审批。"""
+        session = await self.store.load_session(session_id)
+        if session is not None:
+            await self.store.update_auto_approve_tools(session_id, False)
+            return "当前会话已关闭工具自动审批。\n审批类工具将恢复逐次确认。"
+        return "当前会话已关闭工具自动审批。"
 
     async def save_user_message(
         self,

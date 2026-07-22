@@ -2,7 +2,7 @@ import logging
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from ..channels.output import ChannelOutput
+from ..channels.base import ChannelAdapter
 from ..llm.types import ToolCall
 from .base import AgentHook
 
@@ -23,11 +23,16 @@ class HookManager:
         """按调用顺序注册 Hook。"""
         self._hooks.append(hook)
 
-    async def run_before_tool_call(self, call: ToolCall) -> str | None:
+    async def run_before_tool_call(
+        self,
+        call: ToolCall,
+        channel_adapter: ChannelAdapter,
+        auto_approve_tools: bool,
+    ) -> str | None:
         """执行工具前 Hook 并返回首个阻断原因。"""
         for hook in self._hooks:
             try:
-                reason = await hook.before_tool_call(call)
+                reason = await hook.before_tool_call(call, channel_adapter, auto_approve_tools)
             except Exception:
                 logger.exception("Hook %s.before_tool_call 执行失败", type(hook).__name__)
                 continue
@@ -35,11 +40,11 @@ class HookManager:
                 return str(reason)
         return None
 
-    async def run_tool_started(self, call: ToolCall, output: ChannelOutput) -> None:
+    async def run_tool_started(self, call: ToolCall, channel_adapter: ChannelAdapter) -> None:
         """通知工具即将执行。"""
         for hook in self._hooks:
             try:
-                await hook.on_tool_started(call, output)
+                await hook.on_tool_started(call, channel_adapter)
             except Exception:
                 logger.exception("Hook %s.on_tool_started 执行失败", type(hook).__name__)
 

@@ -14,6 +14,7 @@ python -m Turning-Good-Agent chat
 /history
 /context
 /tools
+/approve [on|off]
 /new
 /clear
 /exit
@@ -29,6 +30,7 @@ python -m Turning-Good-Agent chat
 RuntimeSettings  Runtime 执行限制
 MemorySettings   短期记忆压缩阈值
 SessionSettings  会话保留期
+ToolPermissionSettings 审批类工具列表
 LLMSettings      LLM Provider 配置
 ```
 
@@ -74,6 +76,7 @@ tool_calls.jsonl
 1. /new 只切换到新会话，不落空会话目录
 2. /clear 会直接删除当前会话目录
 3. 会话默认保留 7 天，超期目录会在后续会话请求前被清理
+4. `auto_approve_tools` 保存在当前会话的 `session.json`，新会话默认关闭
 ```
 
 ## 整体架构
@@ -133,14 +136,14 @@ context/      system prompt、summary、uncompacted history、tool schema 组装
 memory/       短期记忆压缩骨架、长期偏好骨架、事件记忆骨架
 tools/        工具抽象、注册、执行、内置工具
 llm/          LLM Provider 抽象和 OpenAI-compatible 实现
-hooks/        CLI 审批、工具结果截断、压缩状态提示
+hooks/        会话工具权限、工具结果截断、跨 Channel 状态提示
 observability trace 和 token 记录
 proactive/    主动能力扩展入口
 ```
 
 ## 当前阶段
 
-项目当前已完成 Phase 3 三个轻量 Hook：CLI 工具审批、工具结果截断和 CLI 压缩状态提示。
+项目当前已完成 Phase 3 三个轻量 Hook：会话工具权限、工具结果截断和跨 Channel 状态提示。
 
 已完成：
 
@@ -175,7 +178,22 @@ MCP tools、skills tools、entry_points 插件不属于 Phase 2
 
 工具系统继续保持轻量，不引入完整插件生态。Phase 3 已完成 Hooks Runtime Extension；MCP tools 在 Phase 4 通过 adapter 注册进同一个 `ToolRegistry`。
 
-Phase 3 实现三个 Hook 功能：CLI 在 `write_file`、`edit_file`、`exec`、`write_stdin` 执行前同步询问用户；工具结果在注入 LLM 前按 `max_tool_result_tokens = 8000` 截断；通用 `ChannelStatusHook` 在工具开始、完成和真实压缩前后发送状态。Runtime 按 `InboundMessage.channel` 选择单轮输出实现，CLI 已显示流式文本、按调用 ID 区分的并行工具动画与状态；Web 可注册输出实现，微信和飞书当前静默且尚未接入传输层。连续的并行安全工具可通过 `parallel_tool_calls_enabled` 配置并发执行，副作用工具继续串行。审批不持久化，也不包含跨 Channel 和恢复机制。
+Phase 3 实现三个 Hook 功能：`ToolPermissionHook` 对 `write_file`、`edit_file`、`exec`、`write_stdin` 读取当前 session 的 `auto_approve_tools`；关闭时由当前 `ChannelAdapter` 请求确认，CLI 使用 `y/N`，未支持审批的 Channel 确定性拒绝。`/approve` 查看状态，`/approve on` 开启当前会话自动审批，`/approve off` 关闭它。自动审批只跳过人工确认，不能绕过 `security.py` 和 `ToolExecutor` 的二次预检；审批请求本身不持久化，也不包含跨 Channel、超时或恢复机制。工具结果在注入 LLM 前按 `max_tool_result_tokens = 8000` 截断；通用 `ChannelStatusHook` 在工具开始、完成和真实压缩前后发送状态。Runtime 按 `InboundMessage.channel` 通过 `ChannelRouter` 创建单轮 `ChannelAdapter`，CLI 已显示流式文本、按调用 ID 区分的并行工具动画与状态；Web 可注册适配器，微信和飞书当前静默且尚未接入传输层。连续的并行安全工具可通过 `parallel_tool_calls_enabled` 配置并发执行，审批类工具在启动时强制校验为非并行。
+
+审批类工具可在 `settings.local.json` 中集中配置：
+
+```json
+{
+  "tool_permissions": {
+    "approval_required_tools": [
+      "write_file",
+      "edit_file",
+      "exec",
+      "write_stdin"
+    ]
+  }
+}
+```
 
 开启并行安全工具调用：
 

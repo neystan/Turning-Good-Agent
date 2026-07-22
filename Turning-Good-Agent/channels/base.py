@@ -1,9 +1,11 @@
 from collections.abc import Callable
 from typing import Protocol
 
+from ..llm.types import ToolCall
 
-class ChannelOutput(Protocol):
-    """定义单轮 Channel 输出能力。"""
+
+class ChannelAdapter(Protocol):
+    """定义 Channel 的输出与工具审批能力。"""
 
     async def on_delta(self, text: str) -> None:
         """处理模型流式文本。"""
@@ -23,9 +25,12 @@ class ChannelOutput(Protocol):
     async def on_error(self, content: str) -> None:
         """处理本轮错误回复。"""
 
+    async def request_tool_approval(self, call: ToolCall) -> str | None:
+        """请求用户确认工具调用。"""
 
-class SilentChannelOutput:
-    """忽略中间输出的 Channel 默认实现。"""
+
+class SilentChannelAdapter:
+    """忽略中间输出并拒绝工具审批。"""
 
     async def on_delta(self, text: str) -> None:
         """忽略流式文本。"""
@@ -51,22 +56,27 @@ class SilentChannelOutput:
         """忽略错误回复。"""
         del content
 
+    async def request_tool_approval(self, call: ToolCall) -> str | None:
+        """拒绝当前 Channel 无法处理的审批请求。"""
+        del call
+        return "当前 Channel 不支持工具审批。"
 
-OutputFactory = Callable[[], ChannelOutput]
+
+AdapterFactory = Callable[[], ChannelAdapter]
 
 
-class ChannelOutputRouter:
-    """按 Channel 创建当前轮的输出实现。"""
+class ChannelRouter:
+    """按 Channel 创建当前轮的适配器。"""
 
     def __init__(self) -> None:
-        """初始化 Channel 输出工厂表。"""
-        self._factories: dict[str, OutputFactory] = {}
+        """初始化 Channel 适配器工厂表。"""
+        self._factories: dict[str, AdapterFactory] = {}
 
-    def register(self, channel: str, factory: OutputFactory) -> None:
-        """注册指定 Channel 的输出工厂。"""
+    def register(self, channel: str, factory: AdapterFactory) -> None:
+        """注册指定 Channel 的适配器工厂。"""
         self._factories[channel] = factory
 
-    def create(self, channel: str) -> ChannelOutput:
-        """创建指定 Channel 的单轮输出对象。"""
+    def create(self, channel: str) -> ChannelAdapter:
+        """创建指定 Channel 的单轮适配器。"""
         factory = self._factories.get(channel)
-        return factory() if factory is not None else SilentChannelOutput()
+        return factory() if factory is not None else SilentChannelAdapter()

@@ -32,7 +32,7 @@ class JsonlSessionStore:
     async def create_session(self, session_id: str, user_id: str, channel: str) -> Session:
         """创建新会话并写入独立目录。"""
         now = utc_now_iso()
-        session = Session(session_id, user_id, channel, session_id, "", [], now, now)
+        session = Session(session_id, user_id, channel, session_id, "", False, [], now, now)
         session_dir = self._new_session_dir(session_id, now)
         session_dir.mkdir(parents=True, exist_ok=True)
         self._write_session(session, session_dir)
@@ -108,6 +108,15 @@ class JsonlSessionStore:
         if session is None:
             return
         session.summary = summary
+        session.updated_at = utc_now_iso()
+        self._write_session(session)
+
+    async def update_auto_approve_tools(self, session_id: str, enabled: bool) -> None:
+        """更新会话工具自动审批状态。"""
+        session = await self.load_session(session_id)
+        if session is None:
+            return
+        session.auto_approve_tools = enabled
         session.updated_at = utc_now_iso()
         self._write_session(session)
 
@@ -304,6 +313,7 @@ class JsonlSessionStore:
             channel=row["channel"],
             title=row["title"],
             summary=row["summary"],
+            auto_approve_tools=bool(row.get("auto_approve_tools", False)),
             uncompacted_history=uncompacted_history,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -317,6 +327,7 @@ class JsonlSessionStore:
             "channel": session.channel,
             "title": session.title,
             "summary": session.summary,
+            "auto_approve_tools": session.auto_approve_tools,
             "uncompacted_history": [
                 self._context_message_to_dict(record)
                 for record in session.uncompacted_history

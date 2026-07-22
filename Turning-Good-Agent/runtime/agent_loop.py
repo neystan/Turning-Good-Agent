@@ -3,7 +3,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..channels.output import ChannelOutput, SilentChannelOutput
+from ..channels.base import ChannelAdapter, SilentChannelAdapter
 from ..config.settings import RuntimeSettings
 from ..context.tool_round_limit_prompt import TOOL_ROUND_LIMIT_SUMMARY_PROMPT
 from ..hooks.manager import HookManager
@@ -44,33 +44,40 @@ class AgentLoop:
     async def run(
         self,
         messages: list[dict[str, Any]],
-        output: ChannelOutput | None = None,
+        channel_adapter: ChannelAdapter | None = None,
+        auto_approve_tools: bool = False,
     ) -> AgentLoopResult:
         """运行模型调用和工具循环直到得到最终文本。"""
-        output = output or SilentChannelOutput()
+        channel_adapter = channel_adapter or SilentChannelAdapter()
         working = list(messages)
         tool_records: list[dict[str, Any]] = []
         usage = LLMUsage()
         for _ in range(self.runtime.max_tool_rounds):
-            response = await self._complete(working, self.tools.openai_tools(), output)
+            response = await self._complete(working, self.tools.openai_tools(), channel_adapter)
             usage = usage.add(response.usage)
             if not response.tool_calls:
                 return AgentLoopResult(response.content, working, tool_records, usage)
             calls = response.tool_calls[: self.runtime.max_tool_calls_per_round]
             working.append(self._assistant_tool_message(response.content, calls))
-            for call, record in zip(calls, await self._execute_tool_calls(calls, output), strict=True):
+            records = await self._execute_tool_calls(calls, channel_adapter, auto_approve_tools)
+            for call, record in zip(calls, records, strict=True):
                 tool_records.append(record)
                 working.append(self._tool_result_message(call, record))
         working.append({"role": "system", "content": TOOL_ROUND_LIMIT_SUMMARY_PROMPT})
-        summary = await self._complete(working, [], output)
+        summary = await self._complete(working, [], channel_adapter)
         usage = usage.add(summary.usage)
         content = summary.content.strip()
         if summary.protocol_error or summary.tool_calls or not content:
             content = self._tool_round_limit_fallback(tool_records)
-        await output.on_delta(content)
+        await channel_adapter.on_delta(content)
         return AgentLoopResult(content, working, tool_records, usage)
 
-    async def _execute_tool_calls(self, calls: list[ToolCall], output: ChannelOutput) -> list[dict[str, Any]]:
+    async def _execute_tool_calls(
+        self,
+        calls: list[ToolCall],
+        channel_adapter: ChannelAdapter,
+        auto_approve_tools: bool,
+    ) -> list[dict[str, Any]]:
         """按安全边界执行连续工具批次。"""
         records: list[dict[str, Any]] = []
         parallel_batch: list[ToolCall] = []
@@ -78,10 +85,10 @@ class AgentLoop:
             if self._is_parallel_safe(call):
                 parallel_batch.append(call)
                 continue
-            records.extend(await self._execute_parallel_batch(parallel_batch, output))
+            records.extend(await self._execute_parallel_batch(parallel_batch, channel_adapter, auto_approve_tools))
             parallel_batch.clear()
-            records.append(await self._execute_tool_call(call, output))
-        records.extend(await self._execute_parallel_batch(parallel_batch, output))
+            records.append(await self._execute_tool_call(call, channel_adapter, auto_approve_tools))
+        records.extend(await self._execute_parallel_batch(parallel_batch, channel_adapter, auto_approve_tools))
         return records
 
     def _is_parallel_safe(self, call: ToolCall) -> bool:
@@ -91,22 +98,32 @@ class AgentLoop:
         tool, _args, validation_error = self.tools.prepare_call(call.name, call.args)
         return tool is not None and validation_error is None and bool(getattr(tool, "parallel_safe", False))
 
-    async def _execute_parallel_batch(self, calls: list[ToolCall], output: ChannelOutput) -> list[dict[str, Any]]:
+    async def _execute_parallel_batch(
+        self,
+        calls: list[ToolCall],
+        channel_adapter: ChannelAdapter,
+        auto_approve_tools: bool,
+    ) -> list[dict[str, Any]]:
         """在并发上限内执行同一安全批次。"""
         if not calls:
             return []
         if len(calls) == 1:
-            return [await self._execute_tool_call(calls[0], output)]
+            return [await self._execute_tool_call(calls[0], channel_adapter, auto_approve_tools)]
         semaphore = asyncio.Semaphore(max(1, self.runtime.max_parallel_tool_calls))
 
         async def execute(call: ToolCall) -> dict[str, Any]:
             """在并发槽位内执行单个工具。"""
             async with semaphore:
-                return await self._execute_tool_call(call, output)
+                return await self._execute_tool_call(call, channel_adapter, auto_approve_tools)
 
         return list(await asyncio.gather(*(execute(call) for call in calls)))
 
-    async def _execute_tool_call(self, call: ToolCall, output: ChannelOutput) -> dict[str, Any]:
+    async def _execute_tool_call(
+        self,
+        call: ToolCall,
+        channel_adapter: ChannelAdapter,
+        auto_approve_tools: bool,
+    ) -> dict[str, Any]:
         """完成单次工具校验、审批、执行和结果处理。"""
         tool, args, validation_error = self.tools.prepare_call(call.name, call.args)
         normalized_call = ToolCall(call.id, call.name, args)
@@ -128,7 +145,11 @@ class AgentLoop:
             )
             return await self._finalize_tool_call(normalized_call, record)
 
-        block_reason = await self.hooks.run_before_tool_call(normalized_call)
+        block_reason = await self.hooks.run_before_tool_call(
+            normalized_call,
+            channel_adapter,
+            auto_approve_tools,
+        )
         if block_reason:
             record = self._error_record(
                 normalized_call,
@@ -137,7 +158,7 @@ class AgentLoop:
             )
             return await self._finalize_tool_call(normalized_call, record)
 
-        await self.hooks.run_tool_started(normalized_call, output)
+        await self.hooks.run_tool_started(normalized_call, channel_adapter)
         record = await self.executor.run(normalized_call.name, normalized_call.args)
         return await self._finalize_tool_call(normalized_call, record)
 
@@ -199,7 +220,7 @@ class AgentLoop:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-        output: ChannelOutput,
+        channel_adapter: ChannelAdapter,
     ) -> LLMResponse:
         """按配置选择非流式或流式模型调用。"""
         if not self.streaming_enabled or not hasattr(self.llm, "stream"):
@@ -213,7 +234,7 @@ class AgentLoop:
             usage = usage.add(chunk.usage)
             if chunk.delta_text:
                 content_parts.append(chunk.delta_text)
-                await output.on_delta(chunk.delta_text)
+                await channel_adapter.on_delta(chunk.delta_text)
             if chunk.tool_calls:
                 tool_calls = chunk.tool_calls
             if chunk.protocol_error:

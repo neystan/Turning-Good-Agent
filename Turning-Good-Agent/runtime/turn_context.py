@@ -3,7 +3,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..bus.messages import InboundMessage, OutboundMessage
-from ..channels.output import ChannelOutput, SilentChannelOutput
+from ..channels.base import ChannelAdapter, SilentChannelAdapter
 from .state import TurnState
 
 
@@ -31,4 +31,4 @@ class TurnContext:
     compact_stats: dict[str, Any] = field(default_factory=dict)
     outbound: OutboundMessage | None = None
     error: str | None = None
-    output: ChannelOutput = field(default_factory=SilentChannelOutput)
+    channel_adapter: ChannelAdapter = field(default_factory=SilentChannelAdapter)

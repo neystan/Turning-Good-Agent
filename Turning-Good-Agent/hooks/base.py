@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from ..channels.output import ChannelOutput
+from ..channels.base import ChannelAdapter
 from ..llm.types import ToolCall
 
 if TYPE_CHECKING:
@@ -11,13 +11,19 @@ if TYPE_CHECKING:
 class AgentHook:
     """定义工具和压缩 Hook 接口。"""
 
-    async def before_tool_call(self, call: ToolCall) -> str | None:
+    async def before_tool_call(
+        self,
+        call: ToolCall,
+        channel_adapter: ChannelAdapter,
+        auto_approve_tools: bool,
+    ) -> str | None:
         """在工具执行前返回可选阻断原因。"""
+        del call, channel_adapter, auto_approve_tools
         return None
 
-    async def on_tool_started(self, call: ToolCall, output: ChannelOutput) -> None:
+    async def on_tool_started(self, call: ToolCall, channel_adapter: ChannelAdapter) -> None:
         """在工具即将执行时发送通知。"""
-        del call, output
+        del call, channel_adapter
 
     async def after_tool_call(
         self,

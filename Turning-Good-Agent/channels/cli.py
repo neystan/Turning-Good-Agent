@@ -1,10 +1,13 @@
 import asyncio
+import json
 from collections import OrderedDict
 from contextlib import suppress
 
+from ..llm.types import ToolCall
 
-class CliChannelOutput:
-    """管理 CLI 单轮响应与工具状态输出。"""
+
+class CliChannelAdapter:
+    """管理 CLI 输出、工具状态和审批。"""
 
     def __init__(self) -> None:
         """初始化终端行和运行中工具状态。"""
@@ -77,6 +80,12 @@ class CliChannelOutput:
             print()
         print(content)
         self._reset_turn()
+
+    async def request_tool_approval(self, call: ToolCall) -> str | None:
+        """在 CLI 中同步请求用户确认工具调用。"""
+        args = json.dumps(call.args, ensure_ascii=False)
+        answer = input(f"\n[审批] 允许执行 {call.name} {args}？[y/N] ").strip().lower()
+        return None if answer in {"y", "yes", "允许"} else "用户拒绝执行工具"
 
     async def _animate_tools(self) -> None:
         """周期性重绘全部运行中工具。"""
