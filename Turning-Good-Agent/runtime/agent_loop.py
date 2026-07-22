@@ -1,9 +1,8 @@
 import json
-import inspect
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..channels.output import ChannelOutput, SilentChannelOutput
 from ..config.settings import RuntimeSettings
 from ..context.tool_round_limit_prompt import TOOL_ROUND_LIMIT_SUMMARY_PROMPT
 from ..hooks.manager import HookManager
@@ -44,36 +43,34 @@ class AgentLoop:
     async def run(
         self,
         messages: list[dict[str, Any]],
-        on_delta: Callable[[str], Any] | None = None,
+        output: ChannelOutput | None = None,
     ) -> AgentLoopResult:
         """运行模型调用和工具循环直到得到最终文本。"""
+        output = output or SilentChannelOutput()
         working = list(messages)
         tool_records: list[dict[str, Any]] = []
         usage = LLMUsage()
         for _ in range(self.runtime.max_tool_rounds):
-            response = await self._complete(working, self.tools.openai_tools(), on_delta)
+            response = await self._complete(working, self.tools.openai_tools(), output)
             usage = usage.add(response.usage)
             if not response.tool_calls:
                 return AgentLoopResult(response.content, working, tool_records, usage)
             calls = response.tool_calls[: self.runtime.max_tool_calls_per_round]
             working.append(self._assistant_tool_message(response.content, calls))
             for call in calls:
-                record = await self._execute_tool_call(call)
+                record = await self._execute_tool_call(call, output)
                 tool_records.append(record)
                 working.append(self._tool_result_message(call, record))
         working.append({"role": "system", "content": TOOL_ROUND_LIMIT_SUMMARY_PROMPT})
-        summary = await self._complete(working, [], None)
+        summary = await self._complete(working, [], output)
         usage = usage.add(summary.usage)
         content = summary.content.strip()
         if summary.protocol_error or summary.tool_calls or not content:
             content = self._tool_round_limit_fallback(tool_records)
-        if on_delta is not None:
-            emitted = on_delta(content)
-            if inspect.isawaitable(emitted):
-                await emitted
+        await output.on_delta(content)
         return AgentLoopResult(content, working, tool_records, usage)
 
-    async def _execute_tool_call(self, call: ToolCall) -> dict[str, Any]:
+    async def _execute_tool_call(self, call: ToolCall, output: ChannelOutput) -> dict[str, Any]:
         """完成单次工具校验、审批、执行和结果处理。"""
         tool, args, validation_error = self.tools.prepare_call(call.name, call.args)
         normalized_call = ToolCall(call.id, call.name, args)
@@ -104,6 +101,7 @@ class AgentLoop:
             )
             return await self._finalize_tool_call(normalized_call, record)
 
+        await self.hooks.run_tool_started(normalized_call, output)
         record = await self.executor.run(normalized_call.name, normalized_call.args)
         return await self._finalize_tool_call(normalized_call, record)
 
@@ -165,7 +163,7 @@ class AgentLoop:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-        on_delta: Callable[[str], Any] | None,
+        output: ChannelOutput,
     ) -> LLMResponse:
         """按配置选择非流式或流式模型调用。"""
         if not self.streaming_enabled or not hasattr(self.llm, "stream"):
@@ -179,10 +177,7 @@ class AgentLoop:
             usage = usage.add(chunk.usage)
             if chunk.delta_text:
                 content_parts.append(chunk.delta_text)
-                if on_delta is not None:
-                    emitted = on_delta(chunk.delta_text)
-                    if inspect.isawaitable(emitted):
-                        await emitted
+                await output.on_delta(chunk.delta_text)
             if chunk.tool_calls:
                 tool_calls = chunk.tool_calls
             if chunk.protocol_error:

@@ -2,6 +2,7 @@ import logging
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from ..channels.output import ChannelOutput
 from ..llm.types import ToolCall
 from .base import AgentHook
 
@@ -33,6 +34,14 @@ class HookManager:
             if reason:
                 return str(reason)
         return None
+
+    async def run_tool_started(self, call: ToolCall, output: ChannelOutput) -> None:
+        """通知工具即将执行。"""
+        for hook in self._hooks:
+            try:
+                await hook.on_tool_started(call, output)
+            except Exception:
+                logger.exception("Hook %s.on_tool_started 执行失败", type(hook).__name__)
 
     async def run_after_tool_call(
         self,

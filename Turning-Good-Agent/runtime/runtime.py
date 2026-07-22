@@ -1,9 +1,10 @@
 import time
-from collections.abc import Callable
 
 from ..bus.messages import InboundMessage, OutboundMessage
+from ..channels.output import ChannelOutputRouter
 from ..config.settings import Settings
 from ..context.builder import ContextBuilder
+from ..hooks.channel_status import ChannelStatusHook
 from ..hooks.manager import HookManager
 from ..hooks.tool_result_truncation import ToolResultTruncationHook
 from ..llm.client import LLMProvider
@@ -49,6 +50,7 @@ class AgentRuntime:
         self.profile_memory = profile_memory
         self.proactive = proactive
         self.hooks = hooks
+        self.outputs = ChannelOutputRouter()
         self.token_monitor = TokenMonitor()
         self.last_trace: list[StateTrace] = []
 
@@ -61,6 +63,7 @@ class AgentRuntime:
         ToolLoader().load(tools, settings)
         hooks = HookManager()
         hooks.register(ToolResultTruncationHook(settings.runtime.max_tool_result_tokens))
+        hooks.register(ChannelStatusHook())
         return cls(
             settings=settings,
             sessions=sessions,
@@ -74,10 +77,9 @@ class AgentRuntime:
     async def run_turn(
         self,
         msg: InboundMessage,
-        on_delta: Callable[[str], object] | None = None,
     ) -> OutboundMessage:
         """执行一轮消息处理并返回出站消息。"""
-        ctx = TurnContext(inbound=msg, on_delta=on_delta)
+        ctx = TurnContext(inbound=msg, output=self.outputs.create(msg.channel))
         lock = self.sessions.locks.lock_for(msg.session_id)
         async with lock:
             while True:
@@ -105,4 +107,9 @@ class AgentRuntime:
                 ctx.state = next_turn_state
             await save_remaining_traces(self, ctx)
         self.last_trace = ctx.trace
-        return ctx.outbound or OutboundMessage.new(msg.session_id, msg.channel, ctx.final_content)
+        outbound = ctx.outbound or OutboundMessage.new(msg.session_id, msg.channel, ctx.final_content)
+        if outbound.event_type == "response.error":
+            await ctx.output.on_error(outbound.content)
+        else:
+            await ctx.output.on_completed(outbound.content)
+        return outbound

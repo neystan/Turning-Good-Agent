@@ -175,7 +175,7 @@ MCP tools、skills tools、entry_points 插件不属于 Phase 2
 
 工具系统继续保持轻量，不引入完整插件生态。Phase 3 已完成 Hooks Runtime Extension；MCP tools 在 Phase 4 通过 adapter 注册进同一个 `ToolRegistry`。
 
-Phase 3 只实现三个 Hook 功能：CLI 在 `write_file`、`edit_file`、`exec`、`write_stdin` 执行前同步询问用户；工具结果在注入 LLM 前按 `max_tool_result_tokens = 8000` 截断；CLI 在真实压缩前后显示状态。审批不持久化，也不包含跨 Channel 和恢复机制。
+Phase 3 实现三个 Hook 功能：CLI 在 `write_file`、`edit_file`、`exec`、`write_stdin` 执行前同步询问用户；工具结果在注入 LLM 前按 `max_tool_result_tokens = 8000` 截断；通用 `ChannelStatusHook` 在工具开始和真实压缩前后发送状态。Runtime 按 `InboundMessage.channel` 选择单轮输出实现，CLI 已显示流式文本与状态；Web 可注册输出实现，微信和飞书当前静默且尚未接入传输层。审批不持久化，也不包含跨 Channel 和恢复机制。
 
 ## 使用真实 LLM 测试
 
@@ -216,7 +216,7 @@ python -m Turning-Good-Agent chat
 }
 ```
 
-默认值是 `true`。CLI 会逐段打印模型返回的文本；如果模型返回 tool call 参数片段，LLM 层会先合并成完整工具调用，再交给现有 AgentLoop 执行。Web、微信、飞书的流式展示后续在 channel 阶段接入。
+默认值是 `true`。Runtime 将模型文本 delta 交给当前 Channel 的输出实现；CLI 会逐段打印，未注册的 Channel 忽略中间文本但仍返回最终 `OutboundMessage`。如果模型返回 tool call 参数片段，LLM 层会先合并成完整工具调用，再交给现有 AgentLoop 执行。Web、微信、飞书的实际传输适配仍在后续 channel 阶段接入。
 
 当前 LLM 接入还有两个硬约束：
 

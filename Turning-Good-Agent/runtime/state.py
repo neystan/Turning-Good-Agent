@@ -110,7 +110,7 @@ async def build(runtime: AgentRuntime, ctx: TurnContext) -> str:
 
 async def run(runtime: AgentRuntime, ctx: TurnContext) -> str:
     """执行 AgentLoop。"""
-    result = await runtime.agent_loop.run(ctx.model_messages, ctx.on_delta)
+    result = await runtime.agent_loop.run(ctx.model_messages, ctx.output)
     ctx.final_content = result.final_content
     ctx.tool_calls = result.tool_calls
     ctx.llm_usage = result.usage

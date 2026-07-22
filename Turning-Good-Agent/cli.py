@@ -4,8 +4,9 @@ from pathlib import Path
 from uuid import uuid4
 
 from .bus.messages import InboundMessage
+from .channels.cli import CliChannelOutput
 from .config.settings import Settings
-from .hooks.cli import CliCompactStatusHook, CliToolApprovalHook
+from .hooks.cli import CliToolApprovalHook
 from .llm.client import LLMProvider
 from .llm.openai_compatible import OpenAICompatibleLLM
 from .runtime.runtime import AgentRuntime
@@ -97,8 +98,8 @@ async def chat(
     if model is not None:
         settings.llm.model = model
     runtime = AgentRuntime.create_default(settings, build_llm(settings))
+    runtime.outputs.register(settings.channel, CliChannelOutput)
     runtime.hooks.register(CliToolApprovalHook())
-    runtime.hooks.register(CliCompactStatusHook())
     configure_readline_for_unicode_input()
     print("Turning Good Agent MVP。输入 /exit 退出。")
     while True:
@@ -109,24 +110,7 @@ async def chat(
         if not content:
             continue
         msg = InboundMessage.new(content, active_session_id, settings.user_id, settings.channel)
-        streamed = False
-        response_line_open = False
-
-        def print_delta(delta: str) -> None:
-            """立即打印流式文本片段。"""
-            nonlocal streamed, response_line_open
-            streamed = True
-            response_line_open = True
-            print(delta, end="", flush=True)
-
-        outbound = await runtime.run_turn(
-            msg,
-            print_delta if settings.llm.streaming_enabled else None,
-        )
-        if response_line_open:
-            print()
-        elif not streamed:
-            print(outbound.content)
+        await runtime.run_turn(msg)
         if content == "/exit":
             break
         if content == "/new":

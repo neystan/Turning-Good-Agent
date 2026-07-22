@@ -1,9 +1,9 @@
 from dataclasses import dataclass, field
-from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
 from ..bus.messages import InboundMessage, OutboundMessage
+from ..channels.output import ChannelOutput, SilentChannelOutput
 from .state import TurnState
 
 
@@ -31,4 +31,4 @@ class TurnContext:
     compact_stats: dict[str, Any] = field(default_factory=dict)
     outbound: OutboundMessage | None = None
     error: str | None = None
-    on_delta: Callable[[str], Any] | None = None
+    output: ChannelOutput = field(default_factory=SilentChannelOutput)

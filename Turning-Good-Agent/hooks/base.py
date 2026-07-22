@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from ..channels.output import ChannelOutput
 from ..llm.types import ToolCall
 
 if TYPE_CHECKING:
@@ -13,6 +14,10 @@ class AgentHook:
     async def before_tool_call(self, call: ToolCall) -> str | None:
         """在工具执行前返回可选阻断原因。"""
         return None
+
+    async def on_tool_started(self, call: ToolCall, output: ChannelOutput) -> None:
+        """在工具即将执行时发送通知。"""
+        del call, output
 
     async def after_tool_call(
         self,
