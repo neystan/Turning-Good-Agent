@@ -31,6 +31,7 @@ class WeatherTool:
     name = "weather"
     source = "builtin"
     discoverable = True
+    parallel_safe = True
     description = "查询天气。"
     input_schema = {
         "type": "object",

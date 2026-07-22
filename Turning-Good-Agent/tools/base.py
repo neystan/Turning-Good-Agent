@@ -26,6 +26,7 @@ class BaseTool(Protocol):
     name: str
     description: str
     input_schema: dict[str, Any]
+    parallel_safe: bool
 
     async def run(self, args: dict[str, Any]) -> ToolResult:
         """执行工具并返回文本结果。"""

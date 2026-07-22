@@ -96,6 +96,7 @@ class ListDirTool(_FsTool):
     """列出目录内容。"""
 
     name = "list_dir"
+    parallel_safe = True
     description = "列出目录内容。"
     input_schema = {
         "type": "object",
@@ -143,6 +144,7 @@ class FindFileTool(_FsTool):
     """按名称、glob 或类型查找文件。"""
 
     name = "find_file"
+    parallel_safe = True
     description = "查找文件路径。"
     input_schema = {
         "type": "object",
@@ -188,6 +190,7 @@ class ReadFileTool(_FsTool):
     """读取 UTF-8 文本文件。"""
 
     name = "read_file"
+    parallel_safe = True
     description = "读取文本文件。"
     input_schema = {
         "type": "object",
@@ -312,6 +315,7 @@ class GrepTool(_FsTool):
     """搜索文件内容。"""
 
     name = "grep"
+    parallel_safe = True
     description = "搜索文件内容。"
     input_schema = {
         "type": "object",

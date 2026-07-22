@@ -108,6 +108,7 @@ class WebFetchTool:
     name = "web_fetch"
     source = "builtin"
     discoverable = True
+    parallel_safe = True
     description = "抓取网页文本。"
     input_schema = {
         "type": "object",
@@ -140,6 +141,7 @@ class WebSearchTool:
     name = "web_search"
     source = "builtin"
     discoverable = True
+    parallel_safe = True
     description = "搜索网页。"
     input_schema = {
         "type": "object",

@@ -1,3 +1,4 @@
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any
@@ -57,8 +58,7 @@ class AgentLoop:
                 return AgentLoopResult(response.content, working, tool_records, usage)
             calls = response.tool_calls[: self.runtime.max_tool_calls_per_round]
             working.append(self._assistant_tool_message(response.content, calls))
-            for call in calls:
-                record = await self._execute_tool_call(call, output)
+            for call, record in zip(calls, await self._execute_tool_calls(calls, output), strict=True):
                 tool_records.append(record)
                 working.append(self._tool_result_message(call, record))
         working.append({"role": "system", "content": TOOL_ROUND_LIMIT_SUMMARY_PROMPT})
@@ -69,6 +69,42 @@ class AgentLoop:
             content = self._tool_round_limit_fallback(tool_records)
         await output.on_delta(content)
         return AgentLoopResult(content, working, tool_records, usage)
+
+    async def _execute_tool_calls(self, calls: list[ToolCall], output: ChannelOutput) -> list[dict[str, Any]]:
+        """按安全边界执行连续工具批次。"""
+        records: list[dict[str, Any]] = []
+        parallel_batch: list[ToolCall] = []
+        for call in calls:
+            if self._is_parallel_safe(call):
+                parallel_batch.append(call)
+                continue
+            records.extend(await self._execute_parallel_batch(parallel_batch, output))
+            parallel_batch.clear()
+            records.append(await self._execute_tool_call(call, output))
+        records.extend(await self._execute_parallel_batch(parallel_batch, output))
+        return records
+
+    def _is_parallel_safe(self, call: ToolCall) -> bool:
+        """判断工具是否允许加入当前并行批次。"""
+        if not self.runtime.parallel_tool_calls_enabled:
+            return False
+        tool, _args, validation_error = self.tools.prepare_call(call.name, call.args)
+        return tool is not None and validation_error is None and bool(getattr(tool, "parallel_safe", False))
+
+    async def _execute_parallel_batch(self, calls: list[ToolCall], output: ChannelOutput) -> list[dict[str, Any]]:
+        """在并发上限内执行同一安全批次。"""
+        if not calls:
+            return []
+        if len(calls) == 1:
+            return [await self._execute_tool_call(calls[0], output)]
+        semaphore = asyncio.Semaphore(max(1, self.runtime.max_parallel_tool_calls))
+
+        async def execute(call: ToolCall) -> dict[str, Any]:
+            """在并发槽位内执行单个工具。"""
+            async with semaphore:
+                return await self._execute_tool_call(call, output)
+
+        return list(await asyncio.gather(*(execute(call) for call in calls)))
 
     async def _execute_tool_call(self, call: ToolCall, output: ChannelOutput) -> dict[str, Any]:
         """完成单次工具校验、审批、执行和结果处理。"""

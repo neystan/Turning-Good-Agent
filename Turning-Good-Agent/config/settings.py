@@ -11,6 +11,8 @@ class RuntimeSettings:
 
     max_tool_rounds: int = 5
     max_tool_calls_per_round: int = 8
+    parallel_tool_calls_enabled: bool = True
+    max_parallel_tool_calls: int = 4
     turn_timeout_seconds: int = 120
     max_context_tokens: int = 300_000
     max_tool_result_tokens: int = 8_000
@@ -80,6 +82,8 @@ class Settings:
             for key in (
                 "max_tool_rounds",
                 "max_tool_calls_per_round",
+                "parallel_tool_calls_enabled",
+                "max_parallel_tool_calls",
                 "turn_timeout_seconds",
                 "max_context_tokens",
                 "max_tool_result_tokens",
