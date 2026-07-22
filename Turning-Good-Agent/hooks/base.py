@@ -38,3 +38,13 @@ class AgentHook:
 
     async def after_compact(self, ctx: "TurnContext") -> None:
         """在真实压缩完成后执行扩展。"""
+
+    async def after_turn(
+        self,
+        ctx: "TurnContext",
+        turn_duration_ms: float,
+        session_lock_wait_ms: float,
+    ) -> dict[str, int | float | str]:
+        """在可持久化会话结束时返回终态监控字段。"""
+        del ctx, turn_duration_ms, session_lock_wait_ms
+        return {}

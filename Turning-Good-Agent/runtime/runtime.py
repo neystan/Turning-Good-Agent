@@ -8,6 +8,7 @@ from ..hooks.channel_status import ChannelStatusHook
 from ..hooks.manager import HookManager
 from ..hooks.tool_permission import ToolPermissionHook
 from ..hooks.tool_result_truncation import ToolResultTruncationHook
+from ..hooks.turn_monitor import TurnMonitorHook
 from ..llm.client import LLMProvider
 from ..memory.long_term import ProfileMemory
 from ..observability.token_monitor import TokenMonitor
@@ -76,6 +77,7 @@ class AgentRuntime:
         hooks.register(ToolPermissionHook(frozenset(settings.tool_permissions.approval_required_tools)))
         hooks.register(ToolResultTruncationHook(settings.runtime.max_tool_result_tokens))
         hooks.register(ChannelStatusHook())
+        hooks.register(TurnMonitorHook())
         return cls(
             settings=settings,
             sessions=sessions,
@@ -91,9 +93,12 @@ class AgentRuntime:
         msg: InboundMessage,
     ) -> OutboundMessage:
         """执行一轮消息处理并返回出站消息。"""
+        turn_started = time.perf_counter()
         ctx = TurnContext(inbound=msg, channel_adapter=self.channel_router.create(msg.channel))
+        lock_wait_started = time.perf_counter()
         lock = self.sessions.locks.lock_for(msg.session_id)
         async with lock:
+            session_lock_wait_ms = (time.perf_counter() - lock_wait_started) * 1000
             while True:
                 started = time.perf_counter()
                 try:
@@ -110,10 +115,18 @@ class AgentRuntime:
                     metadata = compact_trace_metadata(ctx)
                 elif ctx.state is TurnState.SAVE:
                     metadata = save_trace_metadata(ctx)
+                next_turn_state = next_state(ctx.state, event)
+                if (
+                    ctx.state is TurnState.RESPOND
+                    and next_turn_state is None
+                    and ctx.shortcut_response is None
+                    and ctx.session is not None
+                ):
+                    turn_duration_ms = (time.perf_counter() - turn_started) * 1000
+                    metadata.update(await self.hooks.run_after_turn(ctx, turn_duration_ms, session_lock_wait_ms))
                 ctx.trace.append(
                     StateTrace(ctx.turn_id, msg.session_id, ctx.state.name, duration_ms, event, ctx.error, metadata)
                 )
-                next_turn_state = next_state(ctx.state, event)
                 if next_turn_state is None:
                     break
                 ctx.state = next_turn_state

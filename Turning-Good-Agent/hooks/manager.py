@@ -82,3 +82,23 @@ class HookManager:
                 await hook.after_compact(ctx)
             except Exception:
                 logger.exception("Hook %s.after_compact 执行失败", type(hook).__name__)
+
+    async def run_after_turn(
+        self,
+        ctx: "TurnContext",
+        turn_duration_ms: float,
+        session_lock_wait_ms: float,
+    ) -> dict[str, int | float | str]:
+        """执行终态 Hook 并合并合法监控字段。"""
+        metadata: dict[str, int | float | str] = {}
+        for hook in self._hooks:
+            try:
+                result = await hook.after_turn(ctx, turn_duration_ms, session_lock_wait_ms)
+            except Exception:
+                logger.exception("Hook %s.after_turn 执行失败", type(hook).__name__)
+                continue
+            if not isinstance(result, Mapping):
+                logger.error("Hook %s.after_turn 返回值不是 Mapping", type(hook).__name__)
+                continue
+            metadata.update(result)
+        return metadata
