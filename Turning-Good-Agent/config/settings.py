@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 @dataclass(slots=True)
@@ -43,6 +44,33 @@ class ToolPermissionSettings:
 
 
 @dataclass(slots=True)
+class McpServerSettings:
+    """保存一个 MCP Server 的本地连接配置。"""
+
+    enabled: bool = False
+    transport: str = "stdio"
+    command: str | None = None
+    args: list[str] = field(default_factory=list)
+    env: dict[str, str] = field(default_factory=dict)
+    cwd: str | None = None
+    url: str | None = None
+    headers: dict[str, str] = field(default_factory=dict)
+    timeout_seconds: float = 30.0
+    enabled_tools: list[str] = field(default_factory=list)
+    auto_approve_tools: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class McpSettings:
+    """保存 MCP 的附件限制与 Server 配置。"""
+
+    resource_context_token_limit: int = 8_000
+    prompt_context_token_limit: int = 4_000
+    attachment_context_token_limit: int = 12_000
+    servers: dict[str, McpServerSettings] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class LLMSettings:
     """保存 LLM Provider 配置。"""
 
@@ -68,6 +96,7 @@ class Settings:
     memory: MemorySettings = field(default_factory=MemorySettings)
     sessions: SessionSettings = field(default_factory=SessionSettings)
     tool_permissions: ToolPermissionSettings = field(default_factory=ToolPermissionSettings)
+    mcp: McpSettings = field(default_factory=McpSettings)
     llm: LLMSettings = field(default_factory=LLMSettings)
 
     @classmethod
@@ -111,6 +140,7 @@ class Settings:
             tool_permissions = payload.get("tool_permissions", {})
             if "approval_required_tools" in tool_permissions:
                 settings.tool_permissions.approval_required_tools = tool_permissions["approval_required_tools"]
+            settings.mcp = _load_mcp_settings(payload.get("mcp", {}))
             llm = payload.get("llm", {})
             for key in (
                 "provider",
@@ -129,3 +159,83 @@ class Settings:
         if default_session_id is not None:
             settings.default_session_id = default_session_id
         return settings
+
+
+def _load_mcp_settings(payload: object) -> McpSettings:
+    """解析并校验 MCP 本地配置。"""
+    if not isinstance(payload, dict):
+        raise ValueError("mcp 必须是 object")
+    settings = McpSettings()
+    for key in (
+        "resource_context_token_limit",
+        "prompt_context_token_limit",
+        "attachment_context_token_limit",
+    ):
+        if key in payload:
+            value = int(payload[key])
+            if value <= 0:
+                raise ValueError(f"mcp.{key} 必须大于 0")
+            setattr(settings, key, value)
+    servers = payload.get("servers", {})
+    if not isinstance(servers, dict):
+        raise ValueError("mcp.servers 必须是 object")
+    settings.servers = {str(name): _load_mcp_server(str(name), value) for name, value in servers.items()}
+    return settings
+
+
+def _load_mcp_server(name: str, payload: object) -> McpServerSettings:
+    """解析并校验单个 MCP Server。"""
+    if not isinstance(payload, dict):
+        raise ValueError(f"mcp.servers.{name} 必须是 object")
+    server = McpServerSettings(
+        enabled=bool(payload.get("enabled", False)),
+        transport=str(payload.get("transport", "stdio")),
+        command=payload.get("command"),
+        args=_string_list(payload.get("args", []), f"mcp.servers.{name}.args"),
+        env=_string_mapping(payload.get("env", {}), f"mcp.servers.{name}.env"),
+        cwd=payload.get("cwd"),
+        url=payload.get("url"),
+        headers=_string_mapping(payload.get("headers", {}), f"mcp.servers.{name}.headers"),
+        timeout_seconds=float(payload.get("timeout_seconds", 30.0)),
+        enabled_tools=_string_list(payload.get("enabled_tools", []), f"mcp.servers.{name}.enabled_tools"),
+        auto_approve_tools=_string_list(
+            payload.get("auto_approve_tools", []), f"mcp.servers.{name}.auto_approve_tools"
+        ),
+    )
+    if server.transport not in {"stdio", "streamable_http"}:
+        raise ValueError(f"mcp.servers.{name}.transport 仅支持 stdio 或 streamable_http")
+    if "*" in server.auto_approve_tools:
+        raise ValueError(f"mcp.servers.{name}.auto_approve_tools 不允许 *")
+    if server.timeout_seconds <= 0:
+        raise ValueError(f"mcp.servers.{name}.timeout_seconds 必须大于 0")
+    if server.transport == "stdio" and not isinstance(server.command, str):
+        raise ValueError(f"mcp.servers.{name}.command 不能为空")
+    if server.transport == "streamable_http":
+        _validate_mcp_url(name, server.url)
+    return server
+
+
+def _validate_mcp_url(name: str, url: str | None) -> None:
+    """限制远程 MCP Server 使用 HTTPS。"""
+    if not isinstance(url, str):
+        raise ValueError(f"mcp.servers.{name}.url 不能为空")
+    parsed = urlparse(url)
+    local_hosts = {"localhost", "127.0.0.1", "::1"}
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError(f"mcp.servers.{name}.url 必须是 HTTP URL")
+    if parsed.scheme != "https" and parsed.hostname not in local_hosts:
+        raise ValueError(f"mcp.servers.{name}.url 仅本地地址允许 HTTP")
+
+
+def _string_list(value: object, label: str) -> list[str]:
+    """校验配置中的字符串列表。"""
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{label} 必须是 string 数组")
+    return list(value)
+
+
+def _string_mapping(value: object, label: str) -> dict[str, str]:
+    """校验配置中的字符串映射。"""
+    if not isinstance(value, dict) or not all(isinstance(key, str) and isinstance(item, str) for key, item in value.items()):
+        raise ValueError(f"{label} 必须是 string 映射")
+    return dict(value)

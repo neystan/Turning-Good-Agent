@@ -24,6 +24,22 @@
       "write_stdin"
     ]
   },
+  "mcp": {
+    "resource_context_token_limit": 8000,
+    "prompt_context_token_limit": 4000,
+    "attachment_context_token_limit": 12000,
+    "servers": {
+      "local-example": {
+        "enabled": false,
+        "transport": "stdio",
+        "command": "python",
+        "args": ["-m", "example_mcp_server"],
+        "env": {},
+        "enabled_tools": [],
+        "auto_approve_tools": []
+      }
+    }
+  },
   "llm": {
     "provider": "openai-compatible",
     "api_key": "replace-with-your-key",
