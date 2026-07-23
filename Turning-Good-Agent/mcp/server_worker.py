@@ -45,6 +45,7 @@ class McpServerWorker:
         self._task: asyncio.Task[None] | None = None
         self._status = McpServerStatus(name=name)
         self._close_requested = False
+        self._restart_requested = False
 
     @property
     def task(self) -> asyncio.Task[None] | None:
@@ -60,6 +61,7 @@ class McpServerWorker:
         """创建不阻塞调用方的 Worker Task。"""
         if self._task is None or self._task.done():
             self._close_requested = False
+            self._restart_requested = False
             self._task = asyncio.create_task(self._run(), name=f"mcp:{self.name}")
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
@@ -147,6 +149,9 @@ class McpServerWorker:
                 retry_index += 1
                 if not await self._wait_for_retry(delay):
                     return False
+                if self._restart_requested:
+                    self._restart_requested = False
+                    retry_index = 0
                 continue
             self._client = client
             await self._set_status("connected", attempt=attempt)
@@ -167,6 +172,10 @@ class McpServerWorker:
                 self._close_requested = True
                 self._resolve(command, None)
                 return False
+            if command.name == "reconnect":
+                self._restart_requested = True
+                self._resolve(command, None)
+                return True
             self._reject(command, self._unavailable_message())
 
     async def _wait_when_failed(self) -> bool:
