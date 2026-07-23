@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from .context_attachment import ContextAttachment
+
 
 _JSON_TYPE_MAP: dict[str, type | tuple[type, ...]] = {
     "string": str,
@@ -18,7 +20,7 @@ class ToolResult:
 
     content: str
     metadata: dict[str, Any] = field(default_factory=dict)
-    context_attachment: Any | None = None
+    context_attachment: ContextAttachment | None = None
 
 
 class BaseTool(Protocol):

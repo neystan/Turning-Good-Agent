@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 from ..config.settings import McpSettings
 from ..sessions.token_counter import TOKEN_ENCODING, count_content_tokens
+from ..tools.context_attachment import ContextAttachment
 from ..tools.registry import ToolRegistry
 from .adapter import McpToolAdapter
 from .client import McpClient
@@ -119,7 +120,7 @@ class McpManager:
         server_name: str,
         uri: str,
         arguments: dict[str, str],
-    ) -> "McpContextAttachment":
+    ) -> ContextAttachment:
         """读取 Resource 并生成受限的当前轮附件。"""
         client = self._client_or_raise(server_name)
         resolved_uri = uri.format(**arguments) if arguments else uri
@@ -132,7 +133,7 @@ class McpManager:
         server_name: str,
         prompt_name: str,
         arguments: dict[str, str],
-    ) -> "McpContextAttachment":
+    ) -> ContextAttachment:
         """读取 Prompt 并拒绝超出单 Prompt 限额的内容。"""
         client = self._client_or_raise(server_name)
         messages = await client.get_prompt(prompt_name, arguments)
@@ -164,12 +165,10 @@ class McpManager:
             raise RuntimeError(f"MCP Server 未连接：{server_name}")
         return client
 
-    def _attachment(self, source: str, messages: list[dict[str, str]]) -> "McpContextAttachment":
+    def _attachment(self, source: str, messages: list[dict[str, str]]) -> ContextAttachment:
         """构造带 token 计数的当前轮附件。"""
-        from .types import McpContextAttachment
-
         token_count = sum(count_content_tokens(str(message["content"])) for message in messages)
-        return McpContextAttachment(source=source, messages=list(messages), token_count=token_count)
+        return ContextAttachment(source=source, messages=list(messages), token_count=token_count)
 
     @staticmethod
     def _truncate_resource(content: str, limit: int) -> str:

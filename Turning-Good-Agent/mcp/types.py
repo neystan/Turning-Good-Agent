@@ -24,15 +24,6 @@ class McpCatalog:
 
 
 @dataclass(slots=True)
-class McpContextAttachment:
-    """表示仅供当前 AgentLoop 使用的 MCP 上下文附件。"""
-
-    source: str
-    messages: list[dict[str, object]]
-    token_count: int
-
-
-@dataclass(slots=True)
 class McpServerStatus:
     """记录单个 MCP Server 的连接状态。"""
 

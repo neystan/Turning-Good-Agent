@@ -1,4 +1,3 @@
-import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any
@@ -9,9 +8,10 @@ from ..context.tool_round_limit_prompt import TOOL_ROUND_LIMIT_SUMMARY_PROMPT
 from ..hooks.manager import HookManager
 from ..llm.client import LLMProvider
 from ..llm.types import LLMResponse, LLMUsage, ToolCall
+from ..tools.context_attachment import ContextAttachment, validate_context_attachment
 from ..tools.executor import ToolExecutor
 from ..tools.registry import ToolRegistry
-from ..sessions.token_counter import count_content_tokens
+from .tool_call_runner import ToolCallRunner
 
 @dataclass(slots=True)
 class AgentLoopResult:
@@ -35,13 +35,14 @@ class AgentLoop:
         hooks: HookManager | None = None,
         attachment_context_token_limit: int = 12_000,
     ) -> None:
-        """初始化模型、工具执行器和 Hook 管理器。"""
+        """初始化模型、工具 Runner 和 Hook 管理器。"""
         self.llm = llm
         self.tools = tools
         self.runtime = runtime
-        self.executor = ToolExecutor(tools)
+        self.executor = ToolExecutor()
         self.streaming_enabled = streaming_enabled
         self.hooks = hooks or HookManager()
+        self.tool_call_runner = ToolCallRunner(tools, self.executor, self.hooks, runtime)
         self.attachment_context_token_limit = attachment_context_token_limit
 
     async def run(
@@ -63,16 +64,21 @@ class AgentLoop:
                 return AgentLoopResult(response.content, working, tool_records, usage)
             calls = response.tool_calls[: self.runtime.max_tool_calls_per_round]
             working.append(self._assistant_tool_message(response.content, calls))
-            records = await self._execute_tool_calls(calls, channel_adapter, auto_approve_tools)
+            records = await self.tool_call_runner.execute_calls(calls, channel_adapter, auto_approve_tools)
             for call, record in zip(calls, records, strict=True):
                 tool_records.append(record)
                 attachment = record.pop("context_attachment", None)
-                attachment_error = self._attachment_error(attachment, attachment_tokens)
+                attachment_error = validate_context_attachment(
+                    attachment,
+                    attachment_tokens,
+                    self.attachment_context_token_limit,
+                )
                 if attachment_error is not None:
                     record["error"] = attachment_error
-                    record["content"] = f"MCP 附件被拒绝：{attachment_error}"
+                    record["content"] = f"本轮上下文附件被拒绝：{attachment_error}"
                 working.append(self._tool_result_message(call, record))
                 if attachment_error is None and attachment is not None:
+                    assert isinstance(attachment, ContextAttachment)
                     attachment_tokens += attachment.token_count
                     working.extend(attachment.messages)
         working.append({"role": "system", "content": TOOL_ROUND_LIMIT_SUMMARY_PROMPT})
@@ -83,101 +89,6 @@ class AgentLoop:
             content = self._tool_round_limit_fallback(tool_records)
         await channel_adapter.on_delta(content)
         return AgentLoopResult(content, working, tool_records, usage)
-
-    async def _execute_tool_calls(
-        self,
-        calls: list[ToolCall],
-        channel_adapter: ChannelAdapter,
-        auto_approve_tools: bool,
-    ) -> list[dict[str, Any]]:
-        """按安全边界执行连续工具批次。"""
-        records: list[dict[str, Any]] = []
-        parallel_batch: list[ToolCall] = []
-        for call in calls:
-            if self._is_parallel_safe(call):
-                parallel_batch.append(call)
-                continue
-            records.extend(await self._execute_parallel_batch(parallel_batch, channel_adapter, auto_approve_tools))
-            parallel_batch.clear()
-            records.append(await self._execute_tool_call(call, channel_adapter, auto_approve_tools))
-        records.extend(await self._execute_parallel_batch(parallel_batch, channel_adapter, auto_approve_tools))
-        return records
-
-    def _is_parallel_safe(self, call: ToolCall) -> bool:
-        """判断工具是否允许加入当前并行批次。"""
-        if not self.runtime.parallel_tool_calls_enabled:
-            return False
-        tool, _args, validation_error = self.tools.prepare_call(call.name, call.args)
-        return tool is not None and validation_error is None and bool(getattr(tool, "parallel_safe", False))
-
-    async def _execute_parallel_batch(
-        self,
-        calls: list[ToolCall],
-        channel_adapter: ChannelAdapter,
-        auto_approve_tools: bool,
-    ) -> list[dict[str, Any]]:
-        """在并发上限内执行同一安全批次。"""
-        if not calls:
-            return []
-        if len(calls) == 1:
-            return [await self._execute_tool_call(calls[0], channel_adapter, auto_approve_tools)]
-        semaphore = asyncio.Semaphore(max(1, self.runtime.max_parallel_tool_calls))
-
-        async def execute(call: ToolCall) -> dict[str, Any]:
-            """在并发槽位内执行单个工具。"""
-            async with semaphore:
-                return await self._execute_tool_call(call, channel_adapter, auto_approve_tools)
-
-        return list(await asyncio.gather(*(execute(call) for call in calls)))
-
-    async def _execute_tool_call(
-        self,
-        call: ToolCall,
-        channel_adapter: ChannelAdapter,
-        auto_approve_tools: bool,
-    ) -> dict[str, Any]:
-        """完成单次工具校验、审批、执行和结果处理。"""
-        tool, args, validation_error = self.tools.prepare_call(call.name, call.args)
-        normalized_call = ToolCall(call.id, call.name, args)
-        if validation_error:
-            record = self._error_record(
-                normalized_call,
-                f"工具 {call.name} 参数错误：{validation_error}",
-                validation_error,
-            )
-            return await self._finalize_tool_call(normalized_call, record)
-
-        assert tool is not None
-        security_error = self.executor.precheck(tool, args)
-        if security_error:
-            record = self._error_record(
-                normalized_call,
-                f"工具 {call.name} 安全检查失败：{security_error}",
-                security_error,
-            )
-            return await self._finalize_tool_call(normalized_call, record)
-
-        block_reason = await self.hooks.run_before_tool_call(
-            normalized_call,
-            channel_adapter,
-            auto_approve_tools,
-        )
-        if block_reason:
-            record = self._error_record(
-                normalized_call,
-                f"工具 {call.name} 被 Hook 阻止：{block_reason}",
-                block_reason,
-            )
-            return await self._finalize_tool_call(normalized_call, record)
-
-        await self.hooks.run_tool_started(normalized_call, channel_adapter)
-        record = await self.executor.run(normalized_call.name, normalized_call.args)
-        return await self._finalize_tool_call(normalized_call, record)
-
-    async def _finalize_tool_call(self, call: ToolCall, record: dict[str, Any]) -> dict[str, Any]:
-        """补齐工具调用 ID 并执行结果 Hook。"""
-        record["tool_call_id"] = call.id
-        return await self.hooks.run_after_tool_call(call, record)
 
     @staticmethod
     def _assistant_tool_message(content: str, calls: list[ToolCall]) -> dict[str, Any]:
@@ -207,34 +118,6 @@ class AgentLoop:
             "name": call.name,
             "content": record["content"],
         }
-
-    @staticmethod
-    def _error_record(call: ToolCall, content: str, error: str) -> dict[str, Any]:
-        """构造兼容现有落盘格式的工具错误记录。"""
-        return {
-            "tool_name": call.name,
-            "args": dict(call.args),
-            "content": content,
-            "duration_ms": 0.0,
-            "error": error,
-        }
-
-    def _attachment_error(self, attachment: Any, current_tokens: int) -> str | None:
-        """校验 MCP Attachment 的角色、计数和单轮预算。"""
-        if attachment is None:
-            return None
-        messages = getattr(attachment, "messages", None)
-        token_count = getattr(attachment, "token_count", None)
-        if not isinstance(messages, list) or not isinstance(token_count, int) or token_count < 0:
-            return "附件格式无效"
-        if any(not isinstance(item, dict) or item.get("role") not in {"user", "assistant"} for item in messages):
-            return "附件只允许 user 或 assistant 文本消息"
-        actual_tokens = sum(count_content_tokens(str(item.get("content", ""))) for item in messages)
-        if actual_tokens != token_count:
-            return "附件 token 计数不一致"
-        if current_tokens + token_count > self.attachment_context_token_limit:
-            return f"附件总量超过 {self.attachment_context_token_limit} tokens 限制"
-        return None
 
     @staticmethod
     def _tool_round_limit_fallback(tool_records: list[dict[str, Any]]) -> str:
