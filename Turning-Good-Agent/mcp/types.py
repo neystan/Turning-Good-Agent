@@ -30,3 +30,6 @@ class McpServerStatus:
     name: str
     connected: bool = False
     error: str | None = None
+    state: str = "closed"
+    attempt: int = 0
+    next_retry_at: str | None = None
