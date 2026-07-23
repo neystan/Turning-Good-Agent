@@ -56,6 +56,9 @@ class McpServerSettings:
     url: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
     timeout_seconds: float = 30.0
+    connect_retry_attempts: int = 3
+    connect_retry_delay_seconds: float = 1.0
+    connect_retry_max_delay_seconds: float = 8.0
     enabled_tools: list[str] = field(default_factory=list)
 
 
@@ -198,12 +201,21 @@ def _load_mcp_server(name: str, payload: object) -> McpServerSettings:
         url=payload.get("url"),
         headers=_string_mapping(payload.get("headers", {}), f"mcp.servers.{name}.headers"),
         timeout_seconds=float(payload.get("timeout_seconds", 30.0)),
+        connect_retry_attempts=int(payload.get("connect_retry_attempts", 3)),
+        connect_retry_delay_seconds=float(payload.get("connect_retry_delay_seconds", 1.0)),
+        connect_retry_max_delay_seconds=float(payload.get("connect_retry_max_delay_seconds", 8.0)),
         enabled_tools=_string_list(payload.get("enabled_tools", []), f"mcp.servers.{name}.enabled_tools"),
     )
     if server.transport not in {"stdio", "streamable_http"}:
         raise ValueError(f"mcp.servers.{name}.transport 仅支持 stdio 或 streamable_http")
     if server.timeout_seconds <= 0:
         raise ValueError(f"mcp.servers.{name}.timeout_seconds 必须大于 0")
+    if server.connect_retry_attempts < 0:
+        raise ValueError(f"mcp.servers.{name}.connect_retry_attempts 不能小于 0")
+    if server.connect_retry_delay_seconds <= 0:
+        raise ValueError(f"mcp.servers.{name}.connect_retry_delay_seconds 必须大于 0")
+    if server.connect_retry_max_delay_seconds <= 0:
+        raise ValueError(f"mcp.servers.{name}.connect_retry_max_delay_seconds 必须大于 0")
     if server.transport == "stdio" and not isinstance(server.command, str):
         raise ValueError(f"mcp.servers.{name}.command 不能为空")
     if server.transport == "streamable_http":

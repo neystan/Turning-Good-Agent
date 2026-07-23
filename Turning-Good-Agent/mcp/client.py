@@ -4,6 +4,8 @@ from collections.abc import Callable
 from contextlib import AsyncExitStack
 from typing import Any
 
+import anyio
+import httpx
 from mcp import ClientSession
 from mcp import types as mcp_types
 from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -12,6 +14,24 @@ from pydantic import AnyUrl
 
 from ..config.settings import McpServerSettings
 from .types import McpCapability, McpCatalog
+
+
+def is_mcp_connection_error(error: BaseException) -> bool:
+    """判断异常是否表示 MCP transport 已不可用。"""
+    if isinstance(error, BaseExceptionGroup):
+        errors = [item for item in error.exceptions if not isinstance(item, GeneratorExit)]
+        return bool(errors) and all(is_mcp_connection_error(item) for item in errors)
+    return isinstance(
+        error,
+        (
+            OSError,
+            TimeoutError,
+            httpx.HTTPError,
+            anyio.EndOfStream,
+            anyio.BrokenResourceError,
+            anyio.ClosedResourceError,
+        ),
+    )
 
 
 class _NotifyingClientSession(ClientSession):
