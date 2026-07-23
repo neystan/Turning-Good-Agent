@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from collections.abc import Callable
 from contextlib import AsyncExitStack
 from typing import Any
@@ -63,8 +64,8 @@ class McpClient:
                 _NotifyingClientSession(read_stream, write_stream, on_list_changed=self._on_list_changed)
             )
             initialize_result = await self._request(session.initialize())
-        except Exception:
-            await stack.aclose()
+        except BaseException:
+            await stack.__aexit__(*sys.exc_info())
             raise
         self._stack = stack
         self._session = session
@@ -210,7 +211,19 @@ class McpClient:
             if item_type == "text" or hasattr(item, "text"):
                 normalized.append(str(getattr(item, "text", "")))
                 continue
+            if item_type == "resource":
+                resource = getattr(item, "resource", None)
+                if hasattr(resource, "text"):
+                    normalized.append(str(getattr(resource, "text", "")))
+                    continue
             mime_type = getattr(item, "mimeType", None) or getattr(item, "mime_type", None) or "unknown"
-            raw = getattr(item, "data", None) or getattr(item, "blob", None) or ""
+            resource = getattr(item, "resource", None)
+            mime_type = mime_type if mime_type != "unknown" else getattr(resource, "mimeType", None) or "unknown"
+            raw = (
+                getattr(item, "data", None)
+                or getattr(item, "blob", None)
+                or getattr(resource, "blob", None)
+                or ""
+            )
             normalized.append(f"[MCP 非文本内容：来源 {source}，MIME {mime_type}，大小 {len(str(raw))} bytes]")
         return "\n".join(normalized)

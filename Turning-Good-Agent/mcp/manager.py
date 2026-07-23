@@ -87,7 +87,25 @@ class McpManager:
 
     async def handle_list_changed(self, name: str, registry: ToolRegistry) -> McpServerStatus:
         """处理某个 Server 的 Catalog 变更通知。"""
-        return await self.refresh_server(name, registry)
+        lock = self._locks.setdefault(name, asyncio.Lock())
+        async with lock:
+            client = self.clients.get(name)
+            if client is None:
+                status = McpServerStatus(name=name, error="MCP Server 未连接")
+                self.statuses[name] = status
+                return status
+            try:
+                catalog = await client.discover()
+            except Exception as exc:
+                status = McpServerStatus(name=name, error=str(exc))
+                self.statuses[name] = status
+                return status
+            registry.unregister_prefix(self._tool_prefix(name))
+            self.catalogs[name] = catalog
+            self._register_enabled_tools(name, catalog, registry)
+            status = McpServerStatus(name=name, connected=True)
+            self.statuses[name] = status
+            return status
 
     async def search_capabilities(
         self,
