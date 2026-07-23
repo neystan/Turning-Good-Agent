@@ -26,7 +26,6 @@ class McpManager:
         self.clients: dict[str, McpClient] = {}
         self.catalogs: dict[str, McpCatalog] = {}
         self.statuses: dict[str, McpServerStatus] = {}
-        self._tool_servers: dict[str, str] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
     async def start(self, registry: ToolRegistry) -> None:
@@ -51,11 +50,6 @@ class McpManager:
         lock = self._locks.setdefault(name, asyncio.Lock())
         async with lock:
             registry.unregister_prefix(self._tool_prefix(name))
-            self._tool_servers = {
-                tool_name: server_name
-                for tool_name, server_name in self._tool_servers.items()
-                if server_name != name
-            }
             old_client = self.clients.pop(name, None)
             self.catalogs.pop(name, None)
             if old_client is not None:
@@ -147,20 +141,6 @@ class McpManager:
             raise RuntimeError(f"MCP Prompt 超过 {self.settings.prompt_context_token_limit} tokens 限制")
         return self._attachment(f"MCP Prompt：{server_name}/{prompt_name}", messages)
 
-    def requires_approval(self, tool_name: str, arguments: dict[str, object] | None = None) -> bool:
-        """判断 MCP Tool 是否未被 Server 显式自动批准。"""
-        server_name = self._tool_servers.get(tool_name) or self._server_name_from_tool(tool_name)
-        if tool_name in {"attach_mcp_resource", "apply_mcp_prompt"}:
-            server_name = str((arguments or {}).get("server_name", ""))
-        if not server_name:
-            return False
-        server = self.settings.servers.get(server_name)
-        if server is None:
-            return True
-        allowed = set(server.auto_approve_tools)
-        raw_name = tool_name.removeprefix(f"mcp_{server_name}_")
-        return raw_name not in allowed and tool_name not in allowed
-
     def _register_enabled_tools(self, name: str, catalog: McpCatalog, registry: ToolRegistry) -> None:
         """仅注册配置显式启用的远端 MCP Tool。"""
         server = self.settings.servers[name]
@@ -174,7 +154,6 @@ class McpManager:
                 continue
             adapter = McpToolAdapter(self, capability)
             registry.register(adapter)
-            self._tool_servers[adapter.name] = name
         for tool_name in sorted(enabled - set(available) - {f"mcp_{name}_{item}" for item in available}):
             logger.warning("MCP Server %s 未发现已启用工具：%s", name, tool_name)
 
@@ -214,10 +193,3 @@ class McpManager:
     def _tool_prefix(name: str) -> str:
         """生成 Server 对应的 MCP Tool 前缀。"""
         return f"mcp_{name}_"
-
-    def _server_name_from_tool(self, tool_name: str) -> str | None:
-        """从包装 Tool 名称解析已配置的 Server 名称。"""
-        for name in sorted(self.settings.servers, key=len, reverse=True):
-            if tool_name.startswith(self._tool_prefix(name)):
-                return name
-        return None

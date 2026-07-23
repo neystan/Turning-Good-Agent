@@ -57,7 +57,6 @@ class McpServerSettings:
     headers: dict[str, str] = field(default_factory=dict)
     timeout_seconds: float = 30.0
     enabled_tools: list[str] = field(default_factory=list)
-    auto_approve_tools: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -187,6 +186,8 @@ def _load_mcp_server(name: str, payload: object) -> McpServerSettings:
     """解析并校验单个 MCP Server。"""
     if not isinstance(payload, dict):
         raise ValueError(f"mcp.servers.{name} 必须是 object")
+    if "auto_approve_tools" in payload:
+        raise ValueError(f"mcp.servers.{name}.auto_approve_tools 已不支持，请使用 /approve on。")
     server = McpServerSettings(
         enabled=bool(payload.get("enabled", False)),
         transport=str(payload.get("transport", "stdio")),
@@ -198,14 +199,9 @@ def _load_mcp_server(name: str, payload: object) -> McpServerSettings:
         headers=_string_mapping(payload.get("headers", {}), f"mcp.servers.{name}.headers"),
         timeout_seconds=float(payload.get("timeout_seconds", 30.0)),
         enabled_tools=_string_list(payload.get("enabled_tools", []), f"mcp.servers.{name}.enabled_tools"),
-        auto_approve_tools=_string_list(
-            payload.get("auto_approve_tools", []), f"mcp.servers.{name}.auto_approve_tools"
-        ),
     )
     if server.transport not in {"stdio", "streamable_http"}:
         raise ValueError(f"mcp.servers.{name}.transport 仅支持 stdio 或 streamable_http")
-    if "*" in server.auto_approve_tools:
-        raise ValueError(f"mcp.servers.{name}.auto_approve_tools 不允许 *")
     if server.timeout_seconds <= 0:
         raise ValueError(f"mcp.servers.{name}.timeout_seconds 必须大于 0")
     if server.transport == "stdio" and not isinstance(server.command, str):

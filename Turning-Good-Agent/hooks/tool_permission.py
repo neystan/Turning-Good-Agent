@@ -11,12 +11,10 @@ class ToolPermissionHook(AgentHook):
         self,
         approval_required_tools: frozenset[str],
         tools: ToolRegistry | None = None,
-        mcp_manager: object | None = None,
     ) -> None:
-        """保存内置工具、注册表与可选 MCP 审批策略。"""
+        """保存内置审批工具与注册表。"""
         self.approval_required_tools = approval_required_tools
         self.tools = tools
-        self.mcp_manager = mcp_manager
 
     async def before_tool_call(
         self,
@@ -31,15 +29,6 @@ class ToolPermissionHook(AgentHook):
         needs_approval = call.name in self.approval_required_tools or bool(
             getattr(tool, "approval_required", False)
         )
-        if self.mcp_manager is not None:
-            requires_approval = getattr(self.mcp_manager, "requires_approval", None)
-            if callable(requires_approval):
-                is_mcp_operation = call.name.startswith("mcp_") or call.name in {
-                    "attach_mcp_resource",
-                    "apply_mcp_prompt",
-                }
-                if is_mcp_operation:
-                    needs_approval = bool(requires_approval(call.name, call.args))
         if not needs_approval:
             return None
         request_approval = getattr(channel_adapter, "request_tool_approval", None)

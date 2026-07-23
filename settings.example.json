@@ -35,8 +35,7 @@
         "command": "python",
         "args": ["-m", "example_mcp_server"],
         "env": {},
-        "enabled_tools": [],
-        "auto_approve_tools": []
+        "enabled_tools": []
       }
     }
   },

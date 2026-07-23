@@ -86,7 +86,7 @@ class AgentRuntime:
         mcp = McpManager(settings.mcp)
         register_mcp_control_tools(mcp, tools)
         hooks = HookManager()
-        hooks.register(ToolPermissionHook(frozenset(settings.tool_permissions.approval_required_tools), tools, mcp))
+        hooks.register(ToolPermissionHook(frozenset(settings.tool_permissions.approval_required_tools), tools))
         hooks.register(ToolResultTruncationHook(settings.runtime.max_tool_result_tokens))
         hooks.register(ChannelStatusHook())
         hooks.register(TurnMonitorHook())
