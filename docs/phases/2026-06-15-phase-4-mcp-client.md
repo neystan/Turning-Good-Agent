@@ -6,7 +6,7 @@
 
 **Goal:** 基于官方 Python MCP SDK 接入 stdio 与 Streamable HTTP Server，将经用户许可的 MCP Tool 接入现有 ToolRegistry，并以轻量 Catalog、自然语言搜索和受控当前轮附件处理 MCP Resource 与 Prompt。
 
-**Architecture:** `mcp/` 负责协议、连接、Server 生命周期和 Catalog；`McpManager` 是 Runtime 与 MCP 的唯一边界。实际 MCP Tool 适配为 `BaseTool`，而 Resource/Prompt 不逐项生成 Tool schema；只有三个固定 MCP 控制 Tool 进入 ToolRegistry，用于搜索能力、读取已确认 Resource、应用已确认 Prompt。MCP 返回内容通过通用 `ContextAttachment` 只在当前 AgentLoop working messages 中可见，不写入对话历史或摘要。
+**Architecture:** `mcp/` 负责协议、连接、Server 生命周期和 Catalog；`McpManager` 是 Runtime 与 MCP 的唯一边界。每个启用 Server 由独立 `McpServerWorker` 在后台 Task 中持有 SDK Client，正常对话不等待连接完成。实际 MCP Tool 适配为 `BaseTool`，而 Resource/Prompt 不逐项生成 Tool schema；只有三个固定 MCP 控制 Tool 进入 ToolRegistry，用于搜索能力、读取已确认 Resource、应用已确认 Prompt。MCP 返回内容通过通用 `ContextAttachment` 只在当前 AgentLoop working messages 中可见，不写入对话历史或摘要。
 
 **Tech Stack:** Python 3.11+、asyncio、官方 `mcp` Python SDK（1.x）、现有 `ToolRegistry`、`ToolPermissionHook`、OpenAI-compatible Chat Completions 与 pytest。
 
@@ -98,7 +98,8 @@ LLM：基于 Issue 内容继续回答。
 | --- | --- |
 | `Turning-Good-Agent/mcp/types.py` | 定义能力描述、Catalog 与连接状态。 |
 | `Turning-Good-Agent/mcp/client.py` | 封装单个 MCP SDK Session 的 initialize、分页发现、调用、读取、Prompt 获取和关闭。 |
-| `Turning-Good-Agent/mcp/manager.py` | 维护多 Server 生命周期、Catalog、Tool 注册/注销、刷新、通知与安全校验。 |
+| `Turning-Good-Agent/mcp/server_worker.py` | 在独立后台 Task 中持有单 Server Client，处理连接、有限退避重试、调用、刷新与关闭。 |
+| `Turning-Good-Agent/mcp/manager.py` | 管理多 Server Worker、Catalog、Tool 注册/注销、刷新与状态快照。 |
 | `Turning-Good-Agent/mcp/adapter.py` | 将一个 MCP Tool 包装为 `BaseTool`，保留原始名称与 annotations。 |
 | `Turning-Good-Agent/mcp/control_tools.py` | 定义三个固定 MCP 控制 Tool。 |
 | `Turning-Good-Agent/config/settings.py` | 增加集中 MCP 配置模型及本地 JSON 加载。 |
@@ -128,7 +129,7 @@ class ContextAttachment:
 class McpManager:
     """管理 MCP Server、Catalog 与当前运行时注册工具。"""
 
-    async def start(self, registry: ToolRegistry) -> None: ...
+    async def start_background(self, registry: ToolRegistry) -> None: ...
     async def close(self) -> None: ...
     async def refresh_server(self, name: str, registry: ToolRegistry) -> McpServerStatus: ...
     async def search_capabilities(
@@ -142,7 +143,7 @@ class McpManager:
     ) -> ContextAttachment: ...
 ```
 
-每个 Server 持有独立 SDK Session 与退出栈。Client 只请求 initialize capabilities 中已声明的 Catalog 类型，因此纯 Tool Server 不需要实现 Resource、Resource Template 或 Prompt 接口。Catalog 仅保存在内存，包含 Server 已声明的 Tool、Resource、Resource Template 与 Prompt 描述，不保存读取内容。收到 `tools/resources/prompts/list_changed` 时，Manager 串行刷新该 Server，先注销旧前缀 Tool，再注册新的显式启用 Tool。
+每个 `McpServerWorker` 在自己的后台 Task 中持有独立 SDK Session 与退出栈，并在同一 Task 内关闭 Client。Runtime Host 调用 `runtime.start()` 后只创建 Worker，不等待连接；CLI、未来 Web、微信和飞书 Host 均复用这一生命周期。Client 只请求 initialize capabilities 中已声明的 Catalog 类型，因此纯 Tool Server 不需要实现 Resource、Resource Template 或 Prompt 接口。Catalog 仅保存在内存，包含 Server 已声明的 Tool、Resource、Resource Template 与 Prompt 描述，不保存读取内容。收到 `tools/resources/prompts/list_changed` 时，Worker 复用当前连接刷新 Catalog，Manager 串行注销旧前缀 Tool 后注册新的显式启用 Tool。连接级错误按配置从 1 秒开始指数退避；每次后续连接级中断开启新的重试周期，业务 Tool 错误不重连。
 
 ## 实施任务
 
@@ -166,7 +167,7 @@ class McpManager:
   Expected: 因 MCP 配置模型尚不存在而失败。
 
 - [x] **Step 3：实现最小配置与类型**
-  `McpSettings` 只保存三个 Attachment token 上限和 `servers`；`McpServerSettings` 只保存本计划中的配置字段。配置加载不得兼容旧 MCP 配置名。
+  `McpSettings` 只保存三个 Attachment token 上限和 `servers`；`McpServerSettings` 保存连接、超时、显式 Tool allowlist 与有限连接重试配置。配置加载不得兼容旧 MCP 配置名。
 
 - [x] **Step 4：加入 SDK 与示例配置**
   在 `pyproject.toml` 增加 `mcp>=1.26.0,<2.0.0`；示例配置只包含不含真实 token 的 disabled Server。
@@ -221,7 +222,7 @@ class McpManager:
   Expected: 因 `McpManager` 尚不存在而失败。
 
 - [x] **Step 3：实现连接、注册、搜索和动态刷新**
-  `start()` 只连接 `enabled=true` 的 Server。连接成功后仅发现其 initialize capabilities 声明的 Catalog 类型，但仅将 `enabled_tools` 中匹配的实际 MCP Tool 注册为 `mcp_<server>_<tool>`。未知 allowlist 项和 Server 错误记录状态但不得中断启动。搜索按 query 对名称、描述和 Server 名称做大小写无关匹配，返回不超过 limit 条描述。刷新在每 Server 锁内先关闭/注销旧资源再连接/发现/注册新资源。
+  `start_background()` 只为 `enabled=true` 的 Server 创建独立 Worker，不等待连接结果。连接成功后仅发现其 initialize capabilities 声明的 Catalog 类型，但仅将 `enabled_tools` 中匹配的实际 MCP Tool 注册为 `mcp_<server>_<tool>`。未知 allowlist 项和 Server 错误记录状态但不得中断启动。连接级异常按每 Server 配置有限退避重试；搜索按 query 对名称、描述和 Server 名称做大小写无关匹配，返回不超过 limit 条描述。`list_changed` 复用当前连接刷新 Catalog；手动刷新要求 Worker 在自身 Task 中关闭后开始新连接周期。
 
 - [x] **Step 4：运行测试并提交**
   Run: `pytest tests/test_mcp_manager.py -q`
@@ -305,7 +306,7 @@ class McpManager:
   Expected: 因 Runtime MCP 生命周期尚不存在而失败。
 
 - [x] **Step 3：实现启动与关闭**
-  `AgentRuntime.create_default()` 创建 Manager，异步启动在第一次真实 Runtime 使用前完成，避免同步构造器启动连接。新增 `AgentRuntime.close()` 并由 CLI 的 `finally` 调用。Runtime 关闭失败只记录日志，不能覆盖用户最终回复。
+  `AgentRuntime.create_default()` 创建 Manager；Runtime Host 显式调用 `runtime.start()` 后在后台启动 Worker，避免同步构造器或首条消息等待连接。新增 `AgentRuntime.close()` 并由 CLI 的 `finally` 调用。Runtime 关闭失败只记录日志，不能覆盖用户最终回复。
 
 - [x] **Step 4：同步文档并完整验证**
   README 只说明用户配置、审批与当前支持范围；不得声称已支持 OAuth、旧 SSE、Web MCP 管理或多模态附件。
@@ -331,8 +332,9 @@ class McpManager:
 - `search_mcp_capabilities` 只返回少量元数据；不读取或注入 Resource/Prompt 内容。
 - `attach_mcp_resource` 与 `apply_mcp_prompt` 在批准后仅影响当前 AgentLoop，遵守 8,000 / 4,000 / 12,000 token 限额。
 - Resource 不进入 `messages.jsonl`、summary 或下一轮 Context；Prompt 不允许引入 system role。
-- `list_changed` 和手动刷新都能更新 Catalog 与 ToolRegistry，并释放旧连接。
+- `list_changed` 与手动刷新都能更新 Catalog 与 ToolRegistry；手动刷新在 Worker 内关闭旧连接后启动新的连接周期。
 - CLI 退出关闭所有 MCP SDK Session 和 stdio 子进程。
+- 连接级失败不阻塞普通对话，按 Server 配置有限退避重试；权限、参数和 Tool 业务错误不触发重连。
 
 ## 明确不实现
 
@@ -341,7 +343,7 @@ class McpManager:
 - Resource/Prompt 的全量预注入、持久化、RAG、自动长期记忆或跨轮重放。
 - 将每个 Resource/Prompt 转换为独立 Tool schema。
 - 多模态 Attachment、MCP sampling、elicitation、roots、logging、任务、订阅内容推送。
-- Server 级无限重连、后台轮询或跨进程连接恢复。
+- Server 级无限重连、后台轮询或跨进程连接恢复；仅实现每个连接周期内有限次数的后台退避重试。
 
 ## 后续关系
 

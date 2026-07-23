@@ -35,6 +35,9 @@
         "command": "python",
         "args": ["-m", "example_mcp_server"],
         "env": {},
+        "connect_retry_attempts": 3,
+        "connect_retry_delay_seconds": 1,
+        "connect_retry_max_delay_seconds": 8,
         "enabled_tools": []
       }
     }

@@ -324,10 +324,10 @@ class ToolCallRunner:
 - Test: `tests/test_cli.py`
 - Test: `tests/test_runtime_flow.py`
 
-**Acceptance:** Runtime 首次普通消息启动 MCP；CLI 的 `/exit` 和 EOF 都会调用 `close()`；`close()` 保持最终销毁语义，不承诺同一 Runtime 可重启。MCP 未启动时关闭应安全无副作用，MCP 连接已启动时关闭必须调用全部 Client 的 `close()`。
+**Acceptance:** Runtime Host 启动时后台启动 MCP Worker，不等待 Server 连接；CLI 的 `/exit` 和 EOF 都会调用 `close()`；`close()` 保持最终销毁语义，不承诺同一 Runtime 可重启。每个 Worker 必须在创建 transport 的同一 Task 中调用 Client `close()`。
 
 - [x] **Step 1：写失败测试**
-  - 普通首轮输入只启动一次 MCP；slash command 不启动 MCP。
+  - `runtime.start()` 只启动一次后台 MCP Worker；普通消息和 slash command 不再决定 MCP 生命周期。
   - CLI `/exit` 与 EOF 均调用 Runtime `close()`。
   - 已启动的多个 MCP Client 在 Runtime `close()` 时都关闭；未启动时关闭不报错。
   - README、架构和 Spec 移除 Server `auto_approve_tools`，说明 `/approve on` 是唯一自动放行开关，并说明 Tool schema 不再作为 system message 重复注入。
@@ -341,8 +341,9 @@ class ToolCallRunner:
   Expected: 至少一个测试因旧审批文案、旧 Runtime 接线或旧 Context 描述失败。
 
 - [x] **Step 3：实现最小生命周期收口并同步文档**
-  - 保持 `AgentRuntime.close()` 只做最终资源释放，不将其设计成可重启操作。
-  - 不为 MCP 增加新的 Runtime 状态；仍由 CLI 的 `finally` 和未来 Web 应用 shutdown 调用 `close()`。
+- 保持 `AgentRuntime.close()` 只做最终资源释放，不将其设计成可重启操作。
+- 不为 MCP 增加新的 Runtime 状态；仍由 CLI 的 `finally` 和未来 Web 应用 shutdown 调用 `close()`。
+- 每个启用 Server 使用独立 Worker 后台连接；连接级错误按配置退避重试，权限、参数和 Tool 业务错误不触发重连。
   - 同步所有受影响文档的当前行为与架构边界。文档忽略规则不变，不强制提交。
 
 - [x] **Step 4：完整验证与提交**

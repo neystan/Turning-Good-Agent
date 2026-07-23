@@ -67,7 +67,7 @@ python -m Turning-Good-Agent chat
 
 | 路径 | 作用 |
 | --- | --- |
-| `config/settings.py` | 定义 Runtime、Memory、Session、ToolPermission、MCP、LLM 配置和 `Settings.load()`；MCP Server 不支持单独自动审批配置。 |
+| `config/settings.py` | 定义 Runtime、Memory、Session、ToolPermission、MCP、LLM 配置和 `Settings.load()`；MCP Server 不支持单独自动审批配置，并可配置连接重试。 |
 
 当前配置路径只有项目根目录的 `settings.local.json`。`Settings.load()` 不再支持 `TGA_*` 环境变量覆盖。
 
@@ -177,7 +177,8 @@ Tools 当前边界：
 | --- | --- |
 | `mcp/types.py` | Server 连接状态、轻量 Catalog 和能力描述。 |
 | `mcp/client.py` | 单 Server 的 stdio / Streamable HTTP SDK Session、初始化、按协商能力分页发现和协议调用。 |
-| `mcp/manager.py` | 多 Server 生命周期、Catalog、显式 Tool 注册/注销、调用、刷新和 `list_changed` 处理。 |
+| `mcp/server_worker.py` | 单 Server 的后台 Task，唯一负责 Client 连接、调用、重试、刷新和关闭。 |
+| `mcp/manager.py` | 多 Server Worker、Catalog、显式 Tool 注册/注销、调用转发、刷新和状态快照。 |
 | `mcp/adapter.py` | 将显式启用的 MCP Tool 转成 `BaseTool`，保留原始远端名称。 |
 | `mcp/control_tools.py` | 固定的能力搜索、Resource 附加和 Prompt 应用 Tool，不为每项 Resource/Prompt 生成 schema。 |
 
@@ -188,6 +189,8 @@ Tools 当前边界：
 - 所有远端 MCP Tool、Resource 与 Prompt 附件默认审批；只有会话 `/approve on` 可统一跳过，annotations 不参与审批。
 - Resource 与 Prompt 仅以 Catalog 存在；经用户确认后才作为通用当前轮 Attachment 注入，且不持久化到消息或摘要。
 - `McpManager` 是未来 Web 一键增删启停的唯一服务边界。
+- Runtime Host 启动时调用 `runtime.start()`，不等待任何 MCP Server；每个 Server 独立后台连接，连接级错误按配置退避重试，业务 Tool 错误不重连。
+- Web、微信和飞书 Host 未来只调用 `runtime.start()` / `runtime.close()`，不在 `ChannelAdapter` 内管理 MCP transport。
 
 ### 4.10 `llm/`
 
