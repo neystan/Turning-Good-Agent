@@ -3,6 +3,7 @@ import logging
 from collections.abc import Callable
 
 from ..config.settings import McpSettings
+from ..sessions.token_counter import TOKEN_ENCODING, count_content_tokens
 from ..tools.registry import ToolRegistry
 from .adapter import McpToolAdapter
 from .client import McpClient
@@ -119,6 +120,33 @@ class McpManager:
             raise RuntimeError(f"MCP Server 未连接：{server_name}")
         return await client.call_tool(tool_name, arguments)
 
+    async def attach_resource(
+        self,
+        server_name: str,
+        uri: str,
+        arguments: dict[str, str],
+    ) -> "McpContextAttachment":
+        """读取 Resource 并生成受限的当前轮附件。"""
+        client = self._client_or_raise(server_name)
+        resolved_uri = uri.format(**arguments) if arguments else uri
+        content = await client.read_resource(resolved_uri)
+        content = self._truncate_resource(content, self.settings.resource_context_token_limit)
+        return self._attachment(f"MCP Resource：{server_name}/{resolved_uri}", [{"role": "user", "content": content}])
+
+    async def apply_prompt(
+        self,
+        server_name: str,
+        prompt_name: str,
+        arguments: dict[str, str],
+    ) -> "McpContextAttachment":
+        """读取 Prompt 并拒绝超出单 Prompt 限额的内容。"""
+        client = self._client_or_raise(server_name)
+        messages = await client.get_prompt(prompt_name, arguments)
+        token_count = sum(count_content_tokens(str(message["content"])) for message in messages)
+        if token_count > self.settings.prompt_context_token_limit:
+            raise RuntimeError(f"MCP Prompt 超过 {self.settings.prompt_context_token_limit} tokens 限制")
+        return self._attachment(f"MCP Prompt：{server_name}/{prompt_name}", messages)
+
     def requires_approval(self, tool_name: str, arguments: dict[str, object] | None = None) -> bool:
         """判断 MCP Tool 是否未被 Server 显式自动批准。"""
         server_name = self._tool_servers.get(tool_name) or self._server_name_from_tool(tool_name)
@@ -149,6 +177,33 @@ class McpManager:
             self._tool_servers[adapter.name] = name
         for tool_name in sorted(enabled - set(available) - {f"mcp_{name}_{item}" for item in available}):
             logger.warning("MCP Server %s 未发现已启用工具：%s", name, tool_name)
+
+    def _client_or_raise(self, server_name: str) -> McpClient:
+        """返回已连接的指定 MCP Client。"""
+        client = self.clients.get(server_name)
+        if client is None:
+            raise RuntimeError(f"MCP Server 未连接：{server_name}")
+        return client
+
+    def _attachment(self, source: str, messages: list[dict[str, str]]) -> "McpContextAttachment":
+        """构造带 token 计数的当前轮附件。"""
+        from .types import McpContextAttachment
+
+        token_count = sum(count_content_tokens(str(message["content"])) for message in messages)
+        return McpContextAttachment(source=source, messages=list(messages), token_count=token_count)
+
+    @staticmethod
+    def _truncate_resource(content: str, limit: int) -> str:
+        """按头尾策略截断超长 Resource。"""
+        tokens = TOKEN_ENCODING.encode(content)
+        if len(tokens) <= limit:
+            return content
+        notice = "\n\n[MCP Resource 内容已截断]"
+        notice_tokens = TOKEN_ENCODING.encode(notice)
+        budget = max(0, limit - len(notice_tokens))
+        head_size = budget // 2
+        tail_size = budget - head_size
+        return TOKEN_ENCODING.decode(tokens[:head_size] + tokens[-tail_size:]) + notice
 
     @staticmethod
     def _catalog_values(catalog: McpCatalog) -> list[McpCapability]:

@@ -12,6 +12,7 @@ from ..hooks.turn_monitor import TurnMonitorHook
 from ..llm.client import LLMProvider
 from ..memory.long_term import ProfileMemory
 from ..mcp.manager import McpManager
+from ..mcp.control_tools import register_mcp_control_tools
 from ..observability.token_monitor import TokenMonitor
 from ..observability.trace import StateTrace
 from ..proactive.manager import ProactiveManager
@@ -77,6 +78,7 @@ class AgentRuntime:
         ToolLoader().load(tools, settings)
         validate_tool_permission_settings(tools, settings)
         mcp = McpManager(settings.mcp)
+        register_mcp_control_tools(mcp, tools)
         hooks = HookManager()
         hooks.register(ToolPermissionHook(frozenset(settings.tool_permissions.approval_required_tools), tools, mcp))
         hooks.register(ToolResultTruncationHook(settings.runtime.max_tool_result_tokens))
@@ -86,7 +88,14 @@ class AgentRuntime:
             settings=settings,
             sessions=sessions,
             context_builder=ContextBuilder(),
-            agent_loop=AgentLoop(llm, tools, settings.runtime, settings.llm.streaming_enabled, hooks=hooks),
+            agent_loop=AgentLoop(
+                llm,
+                tools,
+                settings.runtime,
+                settings.llm.streaming_enabled,
+                hooks=hooks,
+                attachment_context_token_limit=settings.mcp.attachment_context_token_limit,
+            ),
             profile_memory=ProfileMemory(),
             proactive=ProactiveManager(),
             hooks=hooks,

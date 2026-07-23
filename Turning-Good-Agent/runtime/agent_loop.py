@@ -11,6 +11,7 @@ from ..llm.client import LLMProvider
 from ..llm.types import LLMResponse, LLMUsage, ToolCall
 from ..tools.executor import ToolExecutor
 from ..tools.registry import ToolRegistry
+from ..sessions.token_counter import count_content_tokens
 
 @dataclass(slots=True)
 class AgentLoopResult:
@@ -32,6 +33,7 @@ class AgentLoop:
         runtime: RuntimeSettings,
         streaming_enabled: bool = False,
         hooks: HookManager | None = None,
+        attachment_context_token_limit: int = 12_000,
     ) -> None:
         """初始化模型、工具执行器和 Hook 管理器。"""
         self.llm = llm
@@ -40,6 +42,7 @@ class AgentLoop:
         self.executor = ToolExecutor(tools)
         self.streaming_enabled = streaming_enabled
         self.hooks = hooks or HookManager()
+        self.attachment_context_token_limit = attachment_context_token_limit
 
     async def run(
         self,
@@ -52,6 +55,7 @@ class AgentLoop:
         working = list(messages)
         tool_records: list[dict[str, Any]] = []
         usage = LLMUsage()
+        attachment_tokens = 0
         for _ in range(self.runtime.max_tool_rounds):
             response = await self._complete(working, self.tools.openai_tools(), channel_adapter)
             usage = usage.add(response.usage)
@@ -62,7 +66,15 @@ class AgentLoop:
             records = await self._execute_tool_calls(calls, channel_adapter, auto_approve_tools)
             for call, record in zip(calls, records, strict=True):
                 tool_records.append(record)
+                attachment = record.pop("context_attachment", None)
+                attachment_error = self._attachment_error(attachment, attachment_tokens)
+                if attachment_error is not None:
+                    record["error"] = attachment_error
+                    record["content"] = f"MCP 附件被拒绝：{attachment_error}"
                 working.append(self._tool_result_message(call, record))
+                if attachment_error is None and attachment is not None:
+                    attachment_tokens += attachment.token_count
+                    working.extend(attachment.messages)
         working.append({"role": "system", "content": TOOL_ROUND_LIMIT_SUMMARY_PROMPT})
         summary = await self._complete(working, [], channel_adapter)
         usage = usage.add(summary.usage)
@@ -206,6 +218,23 @@ class AgentLoop:
             "duration_ms": 0.0,
             "error": error,
         }
+
+    def _attachment_error(self, attachment: Any, current_tokens: int) -> str | None:
+        """校验 MCP Attachment 的角色、计数和单轮预算。"""
+        if attachment is None:
+            return None
+        messages = getattr(attachment, "messages", None)
+        token_count = getattr(attachment, "token_count", None)
+        if not isinstance(messages, list) or not isinstance(token_count, int) or token_count < 0:
+            return "附件格式无效"
+        if any(not isinstance(item, dict) or item.get("role") not in {"user", "assistant"} for item in messages):
+            return "附件只允许 user 或 assistant 文本消息"
+        actual_tokens = sum(count_content_tokens(str(item.get("content", ""))) for item in messages)
+        if actual_tokens != token_count:
+            return "附件 token 计数不一致"
+        if current_tokens + token_count > self.attachment_context_token_limit:
+            return f"附件总量超过 {self.attachment_context_token_limit} tokens 限制"
+        return None
 
     @staticmethod
     def _tool_round_limit_fallback(tool_records: list[dict[str, Any]]) -> str:

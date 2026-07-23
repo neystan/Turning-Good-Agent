@@ -18,6 +18,7 @@ class ToolResult:
 
     content: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    context_attachment: Any | None = None
 
 
 class BaseTool(Protocol):

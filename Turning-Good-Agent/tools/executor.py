@@ -39,6 +39,7 @@ class ToolExecutor:
                 else:
                     result = await tool.run(args)
                     content = result.content if hasattr(result, "content") else str(result)
+                    context_attachment = getattr(result, "context_attachment", None)
         except Exception as exc:
             error = str(exc)
             content = f"工具 {tool_name} 执行失败：{error}"
@@ -48,4 +49,5 @@ class ToolExecutor:
             "content": content,
             "duration_ms": (time.perf_counter() - started) * 1000,
             "error": error,
+            "context_attachment": locals().get("context_attachment"),
         }
