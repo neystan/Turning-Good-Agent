@@ -11,6 +11,7 @@ from ..hooks.tool_result_truncation import ToolResultTruncationHook
 from ..hooks.turn_monitor import TurnMonitorHook
 from ..llm.client import LLMProvider
 from ..memory.long_term import ProfileMemory
+from ..mcp.manager import McpManager
 from ..observability.token_monitor import TokenMonitor
 from ..observability.trace import StateTrace
 from ..proactive.manager import ProactiveManager
@@ -52,6 +53,7 @@ class AgentRuntime:
         profile_memory: ProfileMemory,
         proactive: ProactiveManager,
         hooks: HookManager,
+        mcp: McpManager,
     ) -> None:
         """初始化 Runtime 依赖和唯一 Hook 管理器。"""
         self.settings = settings
@@ -61,6 +63,7 @@ class AgentRuntime:
         self.profile_memory = profile_memory
         self.proactive = proactive
         self.hooks = hooks
+        self.mcp = mcp
         self.channel_router = ChannelRouter()
         self.token_monitor = TokenMonitor()
         self.last_trace: list[StateTrace] = []
@@ -73,8 +76,9 @@ class AgentRuntime:
         tools = ToolRegistry()
         ToolLoader().load(tools, settings)
         validate_tool_permission_settings(tools, settings)
+        mcp = McpManager(settings.mcp)
         hooks = HookManager()
-        hooks.register(ToolPermissionHook(frozenset(settings.tool_permissions.approval_required_tools)))
+        hooks.register(ToolPermissionHook(frozenset(settings.tool_permissions.approval_required_tools), tools, mcp))
         hooks.register(ToolResultTruncationHook(settings.runtime.max_tool_result_tokens))
         hooks.register(ChannelStatusHook())
         hooks.register(TurnMonitorHook())
@@ -86,6 +90,7 @@ class AgentRuntime:
             profile_memory=ProfileMemory(),
             proactive=ProactiveManager(),
             hooks=hooks,
+            mcp=mcp,
         )
 
     async def run_turn(
