@@ -32,6 +32,7 @@ MemorySettings   短期记忆压缩阈值
 SessionSettings  会话保留期
 ToolPermissionSettings 审批类工具列表
 LLMSettings      LLM Provider 配置
+McpSettings      MCP Server 与附件限制配置
 ```
 
 短期记忆默认策略：
@@ -144,7 +145,7 @@ proactive/    主动能力扩展入口
 
 ## 当前阶段
 
-项目当前已完成 Phase 3 四项轻量 Hook 能力：会话工具权限、工具结果截断、跨 Channel 状态提示和只读 Turn Monitor。
+项目当前已完成 Phase 3 四项轻量 Hook 能力，以及 Phase 4 MCP Client 与审批/Runtime 收口：会话工具权限、工具结果截断、跨 Channel 状态提示、只读 Turn Monitor、MCP Catalog、显式远端 Tool、当前轮附件和最终资源关闭。
 
 已完成：
 
@@ -161,6 +162,9 @@ RUN trace 中记录 tool_call_count 和 tool_names
 tool_calls.jsonl 工具调用明细落盘
 /tools 会话工具记录查看命令
 工具轮数上限触发一次 no-tools 总结，并隔离 DSML 协议泄漏
+ToolCallRunner 收口参数规范化、审批、并发、双重安全检查和结果 Hook
+ContextAttachment 仅进入当前 AgentLoop working messages
+MCP Client：stdio / Streamable HTTP、Catalog、显式 enabled_tools 和 list_changed 刷新
 请求失败错误回显
 可恢复 LLM 错误重试
 文件基础工具：list_dir / find_file / read_file / write_file / edit_file / grep
