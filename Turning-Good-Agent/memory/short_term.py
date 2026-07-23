@@ -1,6 +1,21 @@
+from dataclasses import dataclass
+
 from ..sessions.types import MessageRecord
 from ..llm.client import LLMProvider
 from ..llm.types import LLMUsage
+
+
+@dataclass(slots=True)
+class CompactionPlan:
+    """保存一次短期记忆压缩计划。"""
+
+    should_compact: bool
+    compact_source: list[MessageRecord]
+    recent_window: list[MessageRecord]
+    compacted_message_count: int
+    compacted_token_count: int
+    raw_window_message_count: int
+    raw_window_token_count: int
 
 
 class ShortTermMemory:
@@ -13,6 +28,31 @@ class ShortTermMemory:
     def should_compact(self, messages: list[MessageRecord]) -> bool:
         """判断未压缩历史 token 是否超过阈值。"""
         return self.count_tokens(messages) > self.compact_token_threshold
+
+    def plan_compaction(self, messages: list[MessageRecord], force: bool = False) -> CompactionPlan:
+        """生成保留完整对话的压缩计划。"""
+        if not force and not self.should_compact(messages):
+            return CompactionPlan(
+                should_compact=False,
+                compact_source=[],
+                recent_window=list(messages),
+                compacted_message_count=0,
+                compacted_token_count=0,
+                raw_window_message_count=len(messages),
+                raw_window_token_count=self.count_tokens(messages),
+            )
+        recent_window = self.recent_window(messages)
+        recent_ids = {item.id for item in recent_window}
+        compact_source = [item for item in messages if item.id not in recent_ids]
+        return CompactionPlan(
+            should_compact=True,
+            compact_source=compact_source,
+            recent_window=recent_window,
+            compacted_message_count=len(compact_source),
+            compacted_token_count=self.count_tokens(compact_source),
+            raw_window_message_count=len(recent_window),
+            raw_window_token_count=self.count_tokens(recent_window),
+        )
 
     def recent_window(self, messages: list[MessageRecord]) -> list[MessageRecord]:
         """返回不超过 token 上限的最近完整对话。"""

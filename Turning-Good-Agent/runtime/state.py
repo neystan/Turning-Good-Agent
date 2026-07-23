@@ -134,37 +134,44 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
     if ctx.session is None:
         return "ok"
     uncompacted_history = build_virtual_history(ctx)
-    ctx.compact_stats = build_compaction_stats(runtime, ctx.session.summary, uncompacted_history)
-    ctx.should_compact = bool(ctx.compact_stats["should_compact"])
-    if not ctx.should_compact:
-        ctx.session.uncompacted_history = uncompacted_history
-        ctx.true_token_usage = await build_true_token_usage(runtime, ctx, compacted=False)
-        return "ok"
     memory = ShortTermMemory(
         compact_token_threshold=runtime.settings.memory.compact_token_threshold,
         recent_window_token_limit=runtime.settings.memory.recent_window_token_limit,
     )
-    recent_history = memory.recent_window(uncompacted_history)
-    compact_source = uncompacted_history[: len(uncompacted_history) - len(recent_history)]
-    if not compact_source:
+    context_tokens = build_context_token_breakdown(
+        summary=ctx.session.summary,
+        history=uncompacted_history,
+        current_input="",
+        output="",
+        profile_memory=runtime.profile_memory.read(),
+        openai_tools=runtime.agent_loop.tools.openai_tools(),
+        include_current_turn=False,
+    )
+    plan = memory.plan_compaction(
+        uncompacted_history,
+        force=context_tokens["current_context_tokens"] > runtime.settings.runtime.max_context_tokens,
+    )
+    ctx.compact_stats = {
+        "should_compact": plan.should_compact,
+        "compacted_message_count": plan.compacted_message_count,
+        "compacted_token_count": plan.compacted_token_count,
+        "raw_window_message_count": plan.raw_window_message_count,
+        "raw_window_token_count": plan.raw_window_token_count,
+    }
+    ctx.should_compact = plan.should_compact
+    if not ctx.should_compact:
+        ctx.session.uncompacted_history = uncompacted_history
+        ctx.true_token_usage = await build_true_token_usage(runtime, ctx, compacted=False)
+        return "ok"
+    if not plan.compact_source:
         ctx.session.uncompacted_history = uncompacted_history
         ctx.true_token_usage = await build_true_token_usage(runtime, ctx, compacted=False)
         return "ok"
     await runtime.hooks.run_before_compact(ctx)
-    summary, summary_usage = await memory.compact(ctx.session.summary, compact_source, runtime.agent_loop.llm)
+    summary, summary_usage = await memory.compact(ctx.session.summary, plan.compact_source, runtime.agent_loop.llm)
     ctx.llm_usage = ctx.llm_usage.add(summary_usage)
-    compacted_token_count = memory.count_tokens(compact_source)
-    raw_window_token_count = memory.count_tokens(recent_history)
     ctx.session.summary = summary
-    ctx.session.uncompacted_history = recent_history
-    ctx.compact_stats.update(
-        {
-            "compacted_message_count": len(compact_source),
-            "compacted_token_count": compacted_token_count,
-            "raw_window_message_count": len(recent_history),
-            "raw_window_token_count": raw_window_token_count,
-        }
-    )
+    ctx.session.uncompacted_history = plan.recent_window
     ctx.true_token_usage = await build_true_token_usage(runtime, ctx, compacted=True)
     await runtime.hooks.run_after_compact(ctx)
     return "ok"
@@ -242,47 +249,6 @@ async def build_true_token_usage(
         previous_total_tokens=previous_total,
         compacted=compacted,
     )
-
-
-def build_compaction_stats(
-    runtime: AgentRuntime,
-    summary: str,
-    uncompacted_history: list[MessageRecord],
-) -> dict[str, int | bool]:
-    """基于压缩阈值和上下文上限生成压缩统计。"""
-    memory = ShortTermMemory(
-        compact_token_threshold=runtime.settings.memory.compact_token_threshold,
-        recent_window_token_limit=runtime.settings.memory.recent_window_token_limit,
-    )
-    context_tokens = build_context_token_breakdown(
-        summary=summary,
-        history=uncompacted_history,
-        current_input="",
-        output="",
-        profile_memory=runtime.profile_memory.read(),
-        openai_tools=runtime.agent_loop.tools.openai_tools(),
-        include_current_turn=False,
-    )
-    should_compact = memory.should_compact(uncompacted_history) or (
-        context_tokens["current_context_tokens"] > runtime.settings.runtime.max_context_tokens
-    )
-    if not should_compact:
-        return {
-            "should_compact": False,
-            "compacted_message_count": 0,
-            "compacted_token_count": 0,
-            "raw_window_message_count": len(uncompacted_history),
-            "raw_window_token_count": memory.count_tokens(uncompacted_history),
-        }
-    recent_history = memory.recent_window(uncompacted_history)
-    compact_source = uncompacted_history[: len(uncompacted_history) - len(recent_history)]
-    return {
-        "should_compact": True,
-        "compacted_message_count": len(compact_source),
-        "compacted_token_count": memory.count_tokens(compact_source),
-        "raw_window_message_count": len(recent_history),
-        "raw_window_token_count": memory.count_tokens(recent_history),
-    }
 
 
 def build_virtual_history(ctx: TurnContext) -> list[MessageRecord]:
