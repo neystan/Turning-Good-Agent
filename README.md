@@ -42,7 +42,7 @@ recent_window_token_limit = 20000
 max_context_tokens = 300000
 ```
 
-当上次压缩后新增的原文历史超过 `200000` token 时触发压缩；压缩后只保留最近不超过 `20000` token 的完整 user/assistant 对话原文，其余旧消息通过 LLM 生成新的 `summary`。摘要 LLM 调用必须返回真实 usage，并合并进发生压缩的本轮 `true_token_usage.jsonl`；若摘要缺少 usage 或为空，本轮按失败处理。`BUILD` 默认注入 `summary + uncompacted_history`，最终注入模型的上下文受 `max_context_tokens = 300000` 约束；上下文预算使用 tokenizer 计算，包含 `SYSTEM_PROMPT`、长期偏好、工具 schema、summary、未压缩历史和当前用户输入；若本轮构建时仍超过该上限，先拒绝本轮并提示上下文过大。
+当上次压缩后新增的原文历史超过 `200000` token 时触发压缩；压缩后只保留最近不超过 `20000` token 的完整 user/assistant 对话原文，其余旧消息通过 LLM 生成新的 `summary`。摘要 LLM 调用必须返回真实 usage，并合并进发生压缩的本轮 `true_token_usage.jsonl`；若摘要缺少 usage 或为空，本轮按失败处理。`BUILD` 默认注入 `summary + uncompacted_history`，最终模型上下文受 `max_context_tokens = 300000` 约束；工具 schema 只经 OpenAI-compatible 请求的 `tools` 参数发送，不会重复写入 system message，预算只计算一次实际发送的 schema 序列化内容；若本轮构建时仍超过上限，先拒绝本轮并提示上下文过大。
 
 当前配置只从根目录下的 `settings.local.json` 读取。这个文件不会被提交到 GitHub，也不再支持 `TGA_*` 环境变量覆盖。
 
@@ -103,7 +103,8 @@ flowchart TD
 
     Run --> AgentLoop[Runtime AgentLoop]
     AgentLoop --> LLM[OpenAI-compatible LLM]
-    AgentLoop --> Tools[ToolRegistry + ToolExecutor]
+    AgentLoop --> ToolRunner[ToolCallRunner]
+    ToolRunner --> Tools[ToolRegistry + ToolExecutor]
     Tools --> Builtins[echo / now / filesystem / shell / web / weather]
 
     Runtime -. Phase 3 compact .-> Hooks[HookManager]
@@ -132,9 +133,9 @@ CLI 输入
 ```text
 runtime/      状态机、Runtime、AgentLoop
 sessions/     会话、消息、JSONL 持久化、会话锁
-context/      system prompt、summary、uncompacted history、tool schema 组装
+context/      system prompt、summary、uncompacted history 组装和 token 预算
 memory/       短期记忆压缩骨架、长期偏好骨架、事件记忆骨架
-tools/        工具抽象、注册、执行、内置工具
+tools/        工具抽象、注册、执行、当前轮附件、内置工具
 llm/          LLM Provider 抽象和 OpenAI-compatible 实现
 hooks/        会话工具权限、工具结果截断、跨 Channel 状态提示
 observability trace 和 token 记录
@@ -176,7 +177,7 @@ Web、微信、飞书的流式展示后续在 channel 阶段接入
 MCP tools、skills tools、entry_points 插件不属于 Phase 2
 ```
 
-工具系统继续保持轻量，不引入完整插件生态。Phase 3 已完成 Hooks Runtime Extension；Phase 4 支持通过官方 MCP Python SDK 连接 stdio 与 Streamable HTTP Server。默认只发现 MCP Catalog，不向模型注册远端 Tool；在 `settings.local.json` 的 `mcp.servers.<name>.enabled_tools` 中显式列出的 Tool 才以 `mcp_<server>_<tool>` 注册。MCP Tool 与 Resource/Prompt 附件默认需要审批，`/approve on` 可统一跳过逐次确认；HTTP Server 默认要求 HTTPS，仅 localhost、127.0.0.1、::1 可使用 HTTP。旧 HTTP+SSE、OAuth、浏览器授权、sampling 与跨轮附件均不支持。
+工具系统继续保持轻量，不引入完整插件生态。Phase 3 已完成 Hooks Runtime Extension；Phase 4 支持通过官方 MCP Python SDK 连接 stdio 与 Streamable HTTP Server。默认只发现 MCP Catalog，不向模型注册远端 Tool；在 `settings.local.json` 的 `mcp.servers.<name>.enabled_tools` 中显式列出的 Tool 才以 `mcp_<server>_<tool>` 注册。所有远端 MCP Tool 和 Resource/Prompt 附件默认逐次审批，只有当前会话 `/approve on` 可统一跳过确认；MCP annotations 只保留为 metadata，不参与策略。HTTP Server 默认要求 HTTPS，仅 localhost、127.0.0.1、::1 可使用 HTTP。旧 HTTP+SSE、OAuth、浏览器授权、sampling 与跨轮附件均不支持。
 
 Phase 3 实现四项轻量 Hook 能力：`ToolPermissionHook` 对已标记审批的内置工具、MCP Tool 与 MCP 附件读取当前 session 的 `auto_approve_tools`；关闭时由当前 `ChannelAdapter` 请求确认，CLI 使用 `y/N`，未支持审批的 Channel 确定性拒绝。`/approve` 查看状态，`/approve on` 是唯一自动放行开关，`/approve off` 恢复逐次审批；MCP Server 不支持单独配置自动审批。自动审批只跳过人工确认，不能绕过 `security.py` 和 `ToolExecutor` 的二次预检；审批请求本身不持久化，也不包含跨 Channel、超时或恢复机制。工具结果在注入 LLM 前按 `max_tool_result_tokens = 8000` 截断；通用 `ChannelStatusHook` 在工具开始、完成和真实压缩前后发送状态。`TurnMonitorHook` 在可持久化模型会话结束后，将 outcome、总耗时、锁等待和失败工具数写入 `RESPOND.metadata`，不新增监控 JSONL。Runtime 按 `InboundMessage.channel` 通过 `ChannelRouter` 创建单轮 `ChannelAdapter`，CLI 已显示流式文本、按调用 ID 区分的并行工具动画与状态；Web 可注册适配器，微信和飞书当前静默且尚未接入传输层。连续的并行安全工具可通过 `parallel_tool_calls_enabled` 配置并发执行，审批类工具在启动时强制校验为非并行。
 
