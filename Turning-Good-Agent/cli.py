@@ -99,6 +99,7 @@ async def chat(
     runtime = AgentRuntime.create_default(settings, build_llm(settings))
     runtime.channel_router.register(settings.channel, CliChannelAdapter)
     configure_readline_for_unicode_input()
+    await runtime.start()
     print("Turning Good Agent MVP。输入 /exit 退出。")
     try:
         while True:
