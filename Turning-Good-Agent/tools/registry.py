@@ -17,6 +17,16 @@ class ToolRegistry:
         self._schemas_cache = None
         self._openai_tools_cache = None
 
+    def unregister_prefix(self, prefix: str) -> list[str]:
+        """移除指定前缀的工具并使 schema 缓存失效。"""
+        removed = [name for name in self._tools if name.startswith(prefix)]
+        for name in removed:
+            del self._tools[name]
+        if removed:
+            self._schemas_cache = None
+            self._openai_tools_cache = None
+        return removed
+
     def has(self, name: str) -> bool:
         """判断工具是否已注册。"""
         return name in self._tools

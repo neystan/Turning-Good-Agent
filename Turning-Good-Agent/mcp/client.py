@@ -1,14 +1,38 @@
 import asyncio
+from collections.abc import Callable
 from contextlib import AsyncExitStack
 from typing import Any
 
 from mcp import ClientSession
+from mcp import types as mcp_types
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 from pydantic import AnyUrl
 
 from ..config.settings import McpServerSettings
 from .types import McpCapability, McpCatalog
+
+
+class _NotifyingClientSession(ClientSession):
+    """在 SDK 原有通知处理后转发 Catalog 变更。"""
+
+    def __init__(self, *args: Any, on_list_changed: Callable[[], None] | None = None, **kwargs: Any) -> None:
+        """保存可选的目录变更通知回调。"""
+        super().__init__(*args, **kwargs)
+        self._on_list_changed = on_list_changed
+
+    async def _received_notification(self, notification: mcp_types.ServerNotification) -> None:
+        """识别 tools/resources/prompts 的 list_changed 通知。"""
+        await super()._received_notification(notification)
+        if isinstance(
+            notification.root,
+            (
+                mcp_types.ToolListChangedNotification,
+                mcp_types.ResourceListChangedNotification,
+                mcp_types.PromptListChangedNotification,
+            ),
+        ) and self._on_list_changed is not None:
+            self._on_list_changed()
 
 
 class McpClient:
@@ -20,6 +44,11 @@ class McpClient:
         self.settings = settings
         self._stack: AsyncExitStack | None = None
         self._session: ClientSession | Any | None = None
+        self._on_list_changed: Callable[[], None] | None = None
+
+    def set_list_changed_handler(self, handler: Callable[[], None]) -> None:
+        """设置 SDK 收到目录变更通知后的回调。"""
+        self._on_list_changed = handler
 
     async def connect(self) -> None:
         """通过官方 SDK 建立并初始化 MCP Session。"""
@@ -28,7 +57,9 @@ class McpClient:
         stack = AsyncExitStack()
         try:
             read_stream, write_stream = await stack.enter_async_context(self._transport_context())
-            session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
+            session = await stack.enter_async_context(
+                _NotifyingClientSession(read_stream, write_stream, on_list_changed=self._on_list_changed)
+            )
             await self._request(session.initialize())
         except Exception:
             await stack.aclose()
