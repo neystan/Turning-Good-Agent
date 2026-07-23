@@ -176,7 +176,7 @@ Tools 当前边界：
 | 路径 | 职责 |
 | --- | --- |
 | `mcp/types.py` | Server 连接状态、轻量 Catalog 和能力描述。 |
-| `mcp/client.py` | 单 Server 的 stdio / Streamable HTTP SDK Session、初始化、分页发现和协议调用。 |
+| `mcp/client.py` | 单 Server 的 stdio / Streamable HTTP SDK Session、初始化、按协商能力分页发现和协议调用。 |
 | `mcp/manager.py` | 多 Server 生命周期、Catalog、显式 Tool 注册/注销、调用、刷新和 `list_changed` 处理。 |
 | `mcp/adapter.py` | 将显式启用的 MCP Tool 转成 `BaseTool`，保留原始远端名称。 |
 | `mcp/control_tools.py` | 固定的能力搜索、Resource 附加和 Prompt 应用 Tool，不为每项 Resource/Prompt 生成 schema。 |

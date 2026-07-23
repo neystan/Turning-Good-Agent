@@ -20,7 +20,7 @@
 - 不实现 OAuth、浏览器回调、token 刷新、远程审批、审批持久化、MCP 插件、sampling、elicitation、roots、logging 或任务协议。
 - 所有 MCP Tool 默认需要审批；`/approve on` 对内置 Tool、MCP Tool 与 MCP 附件操作统一生效，是唯一自动放行条件。MCP Server 不支持单独自动审批配置。
 - MCP Tool annotations 仅作为名称、描述和后续 Web 展示元数据，不得自动免除审批。
-- `enabled_tools` 默认 `[]`：连接可发现完整 Catalog，但只有显式列出的 Tool 才注册给 LLM。不得以 `"*"` 作为默认值。
+- `enabled_tools` 默认 `[]`：连接只发现 Server 在 initialize capabilities 中声明的 Catalog 类型，但只有显式列出的 Tool 才注册给 LLM。不得以 `"*"` 作为默认值。
 - Resource 与 Prompt Catalog 不进入 system prompt、summary、`messages.jsonl` 或每轮默认 Context。
 - Resource/Prompt 仅在模型通过固定 MCP 控制 Tool 提出、且当前会话许可后，作为本轮临时 Context Attachment 注入；下一轮不自动重放。
 - Resource 默认最多 `8_000` tokens，Prompt 默认最多 `4_000` tokens，单轮 MCP Attachments 合计最多 `12_000` tokens；这些参数集中到 `settings.mcp`。
@@ -142,7 +142,7 @@ class McpManager:
     ) -> ContextAttachment: ...
 ```
 
-每个 Server 持有独立 SDK Session 与退出栈。Catalog 仅保存在内存，包含 Tool、Resource、Resource Template 与 Prompt 的描述，不保存读取内容。收到 `tools/resources/prompts/list_changed` 时，Manager 串行刷新该 Server，先注销旧前缀 Tool，再注册新的显式启用 Tool。
+每个 Server 持有独立 SDK Session 与退出栈。Client 只请求 initialize capabilities 中已声明的 Catalog 类型，因此纯 Tool Server 不需要实现 Resource、Resource Template 或 Prompt 接口。Catalog 仅保存在内存，包含 Server 已声明的 Tool、Resource、Resource Template 与 Prompt 描述，不保存读取内容。收到 `tools/resources/prompts/list_changed` 时，Manager 串行刷新该 Server，先注销旧前缀 Tool，再注册新的显式启用 Tool。
 
 ## 实施任务
 
@@ -221,7 +221,7 @@ class McpManager:
   Expected: 因 `McpManager` 尚不存在而失败。
 
 - [x] **Step 3：实现连接、注册、搜索和动态刷新**
-  `start()` 只连接 `enabled=true` 的 Server。连接成功后发现完整 Catalog，但仅将 `enabled_tools` 中匹配的实际 MCP Tool 注册为 `mcp_<server>_<tool>`。未知 allowlist 项和 Server 错误记录状态但不得中断启动。搜索按 query 对名称、描述和 Server 名称做大小写无关匹配，返回不超过 limit 条描述。刷新在每 Server 锁内先关闭/注销旧资源再连接/发现/注册新资源。
+  `start()` 只连接 `enabled=true` 的 Server。连接成功后仅发现其 initialize capabilities 声明的 Catalog 类型，但仅将 `enabled_tools` 中匹配的实际 MCP Tool 注册为 `mcp_<server>_<tool>`。未知 allowlist 项和 Server 错误记录状态但不得中断启动。搜索按 query 对名称、描述和 Server 名称做大小写无关匹配，返回不超过 limit 条描述。刷新在每 Server 锁内先关闭/注销旧资源再连接/发现/注册新资源。
 
 - [x] **Step 4：运行测试并提交**
   Run: `pytest tests/test_mcp_manager.py -q`
@@ -324,7 +324,7 @@ class McpManager:
 ## 验收标准
 
 - 可以连接一个 stdio 与一个 Streamable HTTP MCP Server，失败互不影响。
-- 每个 Server 完成 initialize、initialized、Tools/Resources/Resource Templates/Prompts 分页发现。
+- 每个 Server 完成 initialize、initialized，并只对已声明的 Tools/Resources/Resource Templates/Prompts 执行分页发现。
 - 明确启用的 MCP Tool 出现在 OpenAI-compatible tool schema；默认不将 Server 的全部 Tool schema 注入 Context。
 - MCP Tool 使用 `mcp_<server>_<tool>` 名称，对远端调用保留原始 Tool 名称。
 - 所有 MCP Tool 默认审批；`/approve on` 是唯一统一跳过条件。

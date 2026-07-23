@@ -45,6 +45,7 @@ class McpClient:
         self._stack: AsyncExitStack | None = None
         self._session: ClientSession | Any | None = None
         self._on_list_changed: Callable[[], None] | None = None
+        self._server_capabilities: dict[str, Any] | None = None
 
     def set_list_changed_handler(self, handler: Callable[[], None]) -> None:
         """设置 SDK 收到目录变更通知后的回调。"""
@@ -61,21 +62,28 @@ class McpClient:
             session = await stack.enter_async_context(
                 _NotifyingClientSession(read_stream, write_stream, on_list_changed=self._on_list_changed)
             )
-            await self._request(session.initialize())
+            initialize_result = await self._request(session.initialize())
         except Exception:
             await stack.aclose()
             raise
         self._stack = stack
         self._session = session
+        self._server_capabilities = self._as_mapping(getattr(initialize_result, "capabilities", None))
 
     async def discover(self) -> McpCatalog:
         """分页读取 Server 的完整能力目录。"""
-        tools = await self._list_capabilities("list_tools", "tools", "tool")
-        resources = await self._list_capabilities("list_resources", "resources", "resource")
-        templates = await self._list_capabilities(
-            "list_resource_templates", "resourceTemplates", "resource_template"
+        tools = await self._list_capabilities("list_tools", "tools", "tool") if self._supports("tools") else []
+        resources = (
+            await self._list_capabilities("list_resources", "resources", "resource")
+            if self._supports("resources")
+            else []
         )
-        prompts = await self._list_capabilities("list_prompts", "prompts", "prompt")
+        templates = (
+            await self._list_capabilities("list_resource_templates", "resourceTemplates", "resource_template")
+            if self._supports("resources")
+            else []
+        )
+        prompts = await self._list_capabilities("list_prompts", "prompts", "prompt") if self._supports("prompts") else []
         return McpCatalog(tools=tools, resources=resources, resource_templates=templates, prompts=prompts)
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
@@ -104,6 +112,7 @@ class McpClient:
         """关闭当前 Server 的 SDK Session 与 transport。"""
         stack, self._stack = self._stack, None
         self._session = None
+        self._server_capabilities = None
         if stack is not None:
             await stack.aclose()
 
@@ -180,6 +189,10 @@ class McpClient:
         if self._session is None:
             raise RuntimeError(f"MCP Server {self.server_name} 尚未连接")
         return self._session
+
+    def _supports(self, capability: str) -> bool:
+        """判断 Server 是否声明指定能力。"""
+        return self._server_capabilities is None or self._server_capabilities.get(capability) is not None
 
     @staticmethod
     def _as_mapping(value: Any) -> dict[str, Any]:
