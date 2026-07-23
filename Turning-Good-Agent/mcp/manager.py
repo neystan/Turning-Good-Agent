@@ -1,16 +1,14 @@
 import asyncio
-import logging
 from collections.abc import Callable
 
-from ..config.settings import McpSettings
+from ..config.settings import McpServerSettings, McpSettings
 from ..sessions.token_counter import TOKEN_ENCODING, count_content_tokens
 from ..tools.context_attachment import ContextAttachment
 from ..tools.registry import ToolRegistry
 from .adapter import McpToolAdapter
 from .client import McpClient
+from .server_worker import McpServerWorker
 from .types import McpCapability, McpCatalog, McpServerStatus
-
-logger = logging.getLogger(__name__)
 
 
 class McpManager:
@@ -24,88 +22,49 @@ class McpManager:
         """保存 MCP 配置与独立 Client 工厂。"""
         self.settings = settings
         self._client_factory = client_factory
-        self.clients: dict[str, McpClient] = {}
+        self.workers: dict[str, McpServerWorker] = {}
         self.catalogs: dict[str, McpCatalog] = {}
         self.statuses: dict[str, McpServerStatus] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._registry: ToolRegistry | None = None
 
-    async def start(self, registry: ToolRegistry) -> None:
-        """连接全部启用 Server，单个失败不影响其他 Server。"""
-        for name, settings in self.settings.servers.items():
-            if settings.enabled:
-                await self.refresh_server(name, registry)
+    async def start_background(self, registry: ToolRegistry) -> None:
+        """后台启动全部启用 Server，不等待连接完成。"""
+        self._registry = registry
+        for name, server_settings in self.settings.servers.items():
+            if server_settings.enabled:
+                await self._start_worker(name, server_settings)
 
     async def close(self) -> None:
-        """关闭全部已建立的 MCP Client。"""
-        clients = list(self.clients.values())
-        self.clients.clear()
+        """等待全部 Worker 在自身 Task 中关闭 Client。"""
+        workers = list(self.workers.values())
+        self.workers.clear()
         self.catalogs.clear()
-        for client in clients:
-            try:
-                await client.close()
-            except Exception:
-                logger.exception("关闭 MCP Server 失败")
+        await asyncio.gather(*(worker.close() for worker in workers), return_exceptions=True)
 
-    async def refresh_server(self, name: str, registry: ToolRegistry) -> McpServerStatus:
-        """串行刷新一个 Server 的连接与 Catalog。"""
-        lock = self._locks.setdefault(name, asyncio.Lock())
-        async with lock:
-            registry.unregister_prefix(self._tool_prefix(name))
-            old_client = self.clients.pop(name, None)
-            self.catalogs.pop(name, None)
-            if old_client is not None:
-                try:
-                    await old_client.close()
-                except Exception:
-                    logger.exception("关闭旧 MCP Server 失败")
-            server_settings = self.settings.servers.get(name)
-            if server_settings is None:
-                status = McpServerStatus(name=name, error="MCP Server 不存在")
-                self.statuses[name] = status
-                return status
-            client = self._client_factory(name, server_settings)
-            set_handler = getattr(client, "set_list_changed_handler", None)
-            if callable(set_handler):
-                set_handler(lambda: asyncio.create_task(self.handle_list_changed(name, registry)))
-            try:
-                await client.connect()
-                catalog = await client.discover()
-            except Exception as exc:
-                status = McpServerStatus(name=name, error=str(exc))
-                self.statuses[name] = status
-                try:
-                    await client.close()
-                except Exception:
-                    logger.exception("清理失败 MCP Server 失败")
-                return status
-            self.clients[name] = client
-            self.catalogs[name] = catalog
-            self._register_enabled_tools(name, catalog, registry)
-            status = McpServerStatus(name=name, connected=True)
+    async def refresh_server(self, name: str, registry: ToolRegistry | None = None) -> McpServerStatus:
+        """请求一个 Server 在所属 Worker 内重新连接。"""
+        if registry is not None:
+            self._registry = registry
+        server_settings = self.settings.servers.get(name)
+        if server_settings is None:
+            status = McpServerStatus(name=name, error="MCP Server 不存在", state="failed")
             self.statuses[name] = status
             return status
+        worker = self.workers.get(name)
+        if worker is None or worker.task is None or worker.task.done():
+            await self._start_worker(name, server_settings)
+        else:
+            await worker.reconnect()
+        return self.statuses[name]
 
-    async def handle_list_changed(self, name: str, registry: ToolRegistry) -> McpServerStatus:
-        """处理某个 Server 的 Catalog 变更通知。"""
-        lock = self._locks.setdefault(name, asyncio.Lock())
-        async with lock:
-            client = self.clients.get(name)
-            if client is None:
-                status = McpServerStatus(name=name, error="MCP Server 未连接")
-                self.statuses[name] = status
-                return status
-            try:
-                catalog = await client.discover()
-            except Exception as exc:
-                status = McpServerStatus(name=name, error=str(exc))
-                self.statuses[name] = status
-                return status
-            registry.unregister_prefix(self._tool_prefix(name))
-            self.catalogs[name] = catalog
-            self._register_enabled_tools(name, catalog, registry)
-            status = McpServerStatus(name=name, connected=True)
-            self.statuses[name] = status
-            return status
+    async def handle_list_changed(self, name: str, registry: ToolRegistry | None = None) -> McpServerStatus:
+        """请求所属 Worker 复用连接刷新 Catalog。"""
+        if registry is not None:
+            self._registry = registry
+        worker = self._worker_or_raise(name)
+        await worker.refresh_catalog()
+        return self.statuses[name]
 
     async def search_capabilities(
         self,
@@ -128,10 +87,7 @@ class McpManager:
 
     async def call_tool(self, server_name: str, tool_name: str, arguments: dict[str, object]) -> str:
         """调用指定 Server 的原始 MCP Tool。"""
-        client = self.clients.get(server_name)
-        if client is None:
-            raise RuntimeError(f"MCP Server 未连接：{server_name}")
-        return await client.call_tool(tool_name, arguments)
+        return await self._worker_or_raise(server_name).call_tool(tool_name, arguments)
 
     async def attach_resource(
         self,
@@ -140,9 +96,8 @@ class McpManager:
         arguments: dict[str, str],
     ) -> ContextAttachment:
         """读取 Resource 并生成受限的当前轮附件。"""
-        client = self._client_or_raise(server_name)
         resolved_uri = uri.format(**arguments) if arguments else uri
-        content = await client.read_resource(resolved_uri)
+        content = await self._worker_or_raise(server_name).read_resource(resolved_uri)
         content = self._truncate_resource(content, self.settings.resource_context_token_limit)
         return self._attachment(f"MCP Resource：{server_name}/{resolved_uri}", [{"role": "user", "content": content}])
 
@@ -153,8 +108,7 @@ class McpManager:
         arguments: dict[str, str],
     ) -> ContextAttachment:
         """读取 Prompt 并拒绝超出单 Prompt 限额的内容。"""
-        client = self._client_or_raise(server_name)
-        messages = await client.get_prompt(prompt_name, arguments)
+        messages = await self._worker_or_raise(server_name).get_prompt(prompt_name, arguments)
         token_count = sum(count_content_tokens(str(message["content"])) for message in messages)
         if token_count > self.settings.prompt_context_token_limit:
             raise RuntimeError(f"MCP Prompt 超过 {self.settings.prompt_context_token_limit} tokens 限制")
@@ -176,12 +130,39 @@ class McpManager:
         for tool_name in sorted(enabled - set(available) - {f"mcp_{name}_{item}" for item in available}):
             logger.warning("MCP Server %s 未发现已启用工具：%s", name, tool_name)
 
-    def _client_or_raise(self, server_name: str) -> McpClient:
-        """返回已连接的指定 MCP Client。"""
-        client = self.clients.get(server_name)
-        if client is None:
-            raise RuntimeError(f"MCP Server 未连接：{server_name}")
-        return client
+    async def _start_worker(self, name: str, server_settings: McpServerSettings) -> None:
+        """创建一个独立连接的 MCP Worker。"""
+        self.statuses[name] = McpServerStatus(name=name, state="connecting")
+
+        async def on_catalog(catalog: McpCatalog) -> None:
+            """将 Worker 发现结果应用到 Manager。"""
+            await self._apply_catalog(name, catalog)
+
+        async def on_status(status: McpServerStatus) -> None:
+            """保存 Worker 发布的状态快照。"""
+            self.statuses[name] = status
+
+        worker = McpServerWorker(name, server_settings, self._client_factory, on_catalog, on_status)
+        self.workers[name] = worker
+        await worker.start()
+
+    async def _apply_catalog(self, name: str, catalog: McpCatalog) -> None:
+        """原子替换一个 Server 的 Catalog 与 Tool 注册。"""
+        registry = self._registry
+        if registry is None:
+            return
+        lock = self._locks.setdefault(name, asyncio.Lock())
+        async with lock:
+            registry.unregister_prefix(self._tool_prefix(name))
+            self.catalogs[name] = catalog
+            self._register_enabled_tools(name, catalog, registry)
+
+    def _worker_or_raise(self, server_name: str) -> McpServerWorker:
+        """返回指定 Server 的 Worker。"""
+        worker = self.workers.get(server_name)
+        if worker is None:
+            raise RuntimeError(f"MCP Server 未启动：{server_name}")
+        return worker
 
     def _attachment(self, source: str, messages: list[dict[str, str]]) -> ContextAttachment:
         """构造带 token 计数的当前轮附件。"""
