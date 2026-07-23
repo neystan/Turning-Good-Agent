@@ -56,7 +56,8 @@ class McpClient:
             return
         stack = AsyncExitStack()
         try:
-            read_stream, write_stream = await stack.enter_async_context(self._transport_context())
+            transport = await stack.enter_async_context(self._transport_context())
+            read_stream, write_stream = transport[:2]
             session = await stack.enter_async_context(
                 _NotifyingClientSession(read_stream, write_stream, on_list_changed=self._on_list_changed)
             )

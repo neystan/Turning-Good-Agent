@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import time
 
 from ..bus.messages import InboundMessage, OutboundMessage
@@ -31,6 +33,8 @@ from .state import (
     save_trace_metadata,
 )
 from .turn_context import TurnContext
+
+logger = logging.getLogger(__name__)
 
 
 def validate_tool_permission_settings(tools: ToolRegistry, settings: Settings) -> None:
@@ -68,6 +72,8 @@ class AgentRuntime:
         self.channel_router = ChannelRouter()
         self.token_monitor = TokenMonitor()
         self.last_trace: list[StateTrace] = []
+        self._mcp_started = False
+        self._mcp_start_lock = asyncio.Lock()
 
     @classmethod
     def create_default(cls, settings: Settings, llm: LLMProvider) -> "AgentRuntime":
@@ -107,6 +113,8 @@ class AgentRuntime:
         msg: InboundMessage,
     ) -> OutboundMessage:
         """执行一轮消息处理并返回出站消息。"""
+        if not msg.content.strip().startswith("/"):
+            await self._start_mcp_once()
         turn_started = time.perf_counter()
         ctx = TurnContext(inbound=msg, channel_adapter=self.channel_router.create(msg.channel))
         lock_wait_started = time.perf_counter()
@@ -152,3 +160,24 @@ class AgentRuntime:
         else:
             await ctx.channel_adapter.on_completed(outbound.content)
         return outbound
+
+    async def close(self) -> None:
+        """关闭 Runtime 持有的 MCP 连接。"""
+        try:
+            await self.mcp.close()
+        except Exception:
+            logger.exception("关闭 MCP Runtime 失败")
+
+    async def _start_mcp_once(self) -> None:
+        """在首次普通对话前启动 MCP，不让启动失败击穿会话。"""
+        if self._mcp_started:
+            return
+        async with self._mcp_start_lock:
+            if self._mcp_started:
+                return
+            try:
+                await self.mcp.start(self.agent_loop.tools)
+            except Exception:
+                logger.exception("启动 MCP Runtime 失败")
+            finally:
+                self._mcp_started = True

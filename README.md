@@ -176,7 +176,7 @@ Web、微信、飞书的流式展示后续在 channel 阶段接入
 MCP tools、skills tools、entry_points 插件不属于 Phase 2
 ```
 
-工具系统继续保持轻量，不引入完整插件生态。Phase 3 已完成 Hooks Runtime Extension；MCP tools 在 Phase 4 通过 adapter 注册进同一个 `ToolRegistry`。
+工具系统继续保持轻量，不引入完整插件生态。Phase 3 已完成 Hooks Runtime Extension；Phase 4 支持通过官方 MCP Python SDK 连接 stdio 与 Streamable HTTP Server。默认只发现 MCP Catalog，不向模型注册远端 Tool；在 `settings.local.json` 的 `mcp.servers.<name>.enabled_tools` 中显式列出的 Tool 才以 `mcp_<server>_<tool>` 注册。MCP Tool 与 Resource/Prompt 附件默认需要审批，`/approve on` 可统一跳过逐次确认；HTTP Server 默认要求 HTTPS，仅 localhost、127.0.0.1、::1 可使用 HTTP。旧 HTTP+SSE、OAuth、浏览器授权、sampling 与跨轮附件均不支持。
 
 Phase 3 实现四项轻量 Hook 能力：`ToolPermissionHook` 对 `write_file`、`edit_file`、`exec`、`write_stdin` 读取当前 session 的 `auto_approve_tools`；关闭时由当前 `ChannelAdapter` 请求确认，CLI 使用 `y/N`，未支持审批的 Channel 确定性拒绝。`/approve` 查看状态，`/approve on` 开启当前会话自动审批，`/approve off` 关闭它。自动审批只跳过人工确认，不能绕过 `security.py` 和 `ToolExecutor` 的二次预检；审批请求本身不持久化，也不包含跨 Channel、超时或恢复机制。工具结果在注入 LLM 前按 `max_tool_result_tokens = 8000` 截断；通用 `ChannelStatusHook` 在工具开始、完成和真实压缩前后发送状态。`TurnMonitorHook` 在可持久化模型会话结束后，将 outcome、总耗时、锁等待和失败工具数写入 `RESPOND.metadata`，不新增监控 JSONL。Runtime 按 `InboundMessage.channel` 通过 `ChannelRouter` 创建单轮 `ChannelAdapter`，CLI 已显示流式文本、按调用 ID 区分的并行工具动画与状态；Web 可注册适配器，微信和飞书当前静默且尚未接入传输层。连续的并行安全工具可通过 `parallel_tool_calls_enabled` 配置并发执行，审批类工具在启动时强制校验为非并行。
 

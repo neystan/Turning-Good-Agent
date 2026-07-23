@@ -100,19 +100,24 @@ async def chat(
     runtime.channel_router.register(settings.channel, CliChannelAdapter)
     configure_readline_for_unicode_input()
     print("Turning Good Agent MVP。输入 /exit 退出。")
-    while True:
-        try:
-            content = input("> ").strip()
-        except EOFError:
-            break
-        if not content:
-            continue
-        msg = InboundMessage.new(content, active_session_id, settings.user_id, settings.channel)
-        await runtime.run_turn(msg)
-        if content == "/exit":
-            break
-        if content == "/new":
-            active_session_id = resolve_cli_session_id(None)
+    try:
+        while True:
+            try:
+                content = input("> ").strip()
+            except EOFError:
+                break
+            if not content:
+                continue
+            msg = InboundMessage.new(content, active_session_id, settings.user_id, settings.channel)
+            await runtime.run_turn(msg)
+            if content == "/exit":
+                break
+            if content == "/new":
+                active_session_id = resolve_cli_session_id(None)
+    finally:
+        close = getattr(runtime, "close", None)
+        if callable(close):
+            await close()
 
 
 def main() -> None:
