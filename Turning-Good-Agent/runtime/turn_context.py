@@ -20,6 +20,8 @@ class TurnContext:
     final_content: str = ""
     shortcut_response: str | None = None
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    loaded_skill_names: list[str] = field(default_factory=list)
+    loaded_skill_token_count: int = 0
     llm_usage: Any | None = None
     trace: list[Any] = field(default_factory=list)
     saved_trace_count: int = 0

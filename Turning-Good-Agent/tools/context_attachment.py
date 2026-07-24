@@ -11,6 +11,8 @@ class ContextAttachment:
     source: str
     messages: list[dict[str, object]]
     token_count: int
+    kind: str = "mcp"
+    verified: bool = False
 
 
 def validate_context_attachment(
@@ -25,11 +27,16 @@ def validate_context_attachment(
         return "本轮上下文附件格式无效"
     if not isinstance(attachment.source, str) or not isinstance(attachment.messages, list):
         return "本轮上下文附件格式无效"
+    if attachment.kind not in {"mcp", "skill"}:
+        return "本轮上下文附件类型无效"
     if not isinstance(attachment.token_count, int) or attachment.token_count < 0:
         return "本轮上下文附件格式无效"
+    allowed_roles = {"user", "assistant"}
+    if attachment.kind == "skill" and attachment.verified and attachment.source.startswith("skill:"):
+        allowed_roles.add("system")
     if any(
         not isinstance(message, dict)
-        or message.get("role") not in {"user", "assistant"}
+        or message.get("role") not in allowed_roles
         or not isinstance(message.get("content"), str)
         for message in attachment.messages
     ):

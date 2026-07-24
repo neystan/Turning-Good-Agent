@@ -100,6 +100,7 @@ async def build(runtime: AgentRuntime, ctx: TurnContext) -> str:
         profile_memory=runtime.profile_memory.read(),
         openai_tools=runtime.agent_loop.tools.openai_tools(),
         include_current_turn=True,
+        skills=runtime.skills.list_skills(),
     )
     if context_tokens["current_context_tokens"] > runtime.settings.runtime.max_context_tokens:
         ctx.error = "上下文过大，已拒绝本轮请求。请先清理会话或提高 max_context_tokens。"
@@ -110,6 +111,7 @@ async def build(runtime: AgentRuntime, ctx: TurnContext) -> str:
         history=ctx.uncompacted_history,
         user_content=msg.content,
         profile_memory=runtime.profile_memory.read(),
+        skills=runtime.skills.list_skills(),
     )
     return "ok"
 
@@ -126,6 +128,8 @@ async def run(runtime: AgentRuntime, ctx: TurnContext) -> str:
     ctx.final_content = result.final_content
     ctx.tool_calls = result.tool_calls
     ctx.llm_usage = result.usage
+    ctx.loaded_skill_names = result.loaded_skill_names
+    ctx.loaded_skill_token_count = result.loaded_skill_token_count
     return "ok"
 
 
@@ -146,6 +150,7 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
         profile_memory=runtime.profile_memory.read(),
         openai_tools=runtime.agent_loop.tools.openai_tools(),
         include_current_turn=False,
+        skills=runtime.skills.list_skills(),
     )
     plan = memory.plan_compaction(
         uncompacted_history,
@@ -193,6 +198,7 @@ async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
             profile_memory=runtime.profile_memory.read(),
             openai_tools=runtime.agent_loop.tools.openai_tools(),
             tool_count=len(ctx.tool_calls),
+            skills=runtime.skills.list_skills(),
         )
     user_record = await runtime.sessions.save_user_message(
         session_id,
@@ -319,6 +325,9 @@ def run_trace_metadata(ctx: TurnContext) -> dict[str, int | list[str]]:
     return {
         "tool_call_count": len(ctx.tool_calls),
         "tool_names": [record["tool_name"] for record in ctx.tool_calls],
+        "loaded_skill_names": list(ctx.loaded_skill_names),
+        "loaded_skill_count": len(ctx.loaded_skill_names),
+        "loaded_skill_token_count": ctx.loaded_skill_token_count,
     }
 
 

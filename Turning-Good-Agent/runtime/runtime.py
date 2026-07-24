@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from pathlib import Path
 
 from ..bus.messages import InboundMessage, OutboundMessage
 from ..channels.base import ChannelRouter
@@ -18,6 +19,9 @@ from ..mcp.control_tools import register_mcp_control_tools
 from ..observability.token_monitor import TokenMonitor
 from ..observability.trace import StateTrace
 from ..proactive.manager import ProactiveManager
+from ..skills.load_skill_tool import LoadSkillTool
+from ..skills.manager import SkillManager
+from ..skills.skill_draft_tools import CreateSkillDraftTool, PublishSkillDraftTool
 from ..sessions.manager import SessionManager
 from ..sessions.store import JsonlSessionStore
 from ..tools.loader import ToolLoader
@@ -59,6 +63,7 @@ class AgentRuntime:
         proactive: ProactiveManager,
         hooks: HookManager,
         mcp: McpManager,
+        skills: SkillManager,
     ) -> None:
         """初始化 Runtime 依赖和唯一 Hook 管理器。"""
         self.settings = settings
@@ -69,11 +74,13 @@ class AgentRuntime:
         self.proactive = proactive
         self.hooks = hooks
         self.mcp = mcp
+        self.skills = skills
         self.channel_router = ChannelRouter()
         self.token_monitor = TokenMonitor()
         self.last_trace: list[StateTrace] = []
         self._mcp_started = False
         self._mcp_start_lock = asyncio.Lock()
+        self._skills_started = False
 
     @classmethod
     def create_default(cls, settings: Settings, llm: LLMProvider) -> "AgentRuntime":
@@ -82,6 +89,10 @@ class AgentRuntime:
         sessions = SessionManager(store)
         tools = ToolRegistry()
         ToolLoader().load(tools, settings)
+        skills = SkillManager(Path.cwd() / settings.skills.directory, settings.skills)
+        tools.register(LoadSkillTool(skills))
+        tools.register(CreateSkillDraftTool(skills))
+        tools.register(PublishSkillDraftTool(skills))
         validate_tool_permission_settings(tools, settings)
         mcp = McpManager(settings.mcp)
         register_mcp_control_tools(mcp, tools)
@@ -101,11 +112,13 @@ class AgentRuntime:
                 settings.llm.streaming_enabled,
                 hooks=hooks,
                 attachment_context_token_limit=settings.mcp.attachment_context_token_limit,
+                skills=settings.skills,
             ),
             profile_memory=ProfileMemory(),
             proactive=ProactiveManager(),
             hooks=hooks,
             mcp=mcp,
+            skills=skills,
         )
 
     async def run_turn(
@@ -168,6 +181,9 @@ class AgentRuntime:
 
     async def start(self) -> None:
         """启动 Runtime 的后台依赖。"""
+        if not self._skills_started:
+            self.skills.scan()
+            self._skills_started = True
         if self._mcp_started:
             return
         async with self._mcp_start_lock:

@@ -4,7 +4,7 @@
 
 ## 1. 项目定位
 
-Turning-Good-Agent 是一个轻量 Runtime-first 通用 Agent。当前仓库处于 MVP 阶段，主路径是 CLI 对话、会话存储、短期压缩、基础工具调用，以及基于 OpenAI Python SDK 的 OpenAI-compatible LLM 接入。Phase 2 的真实 LLM SDK 化、基础 tool calling、工具观测落盘、CLI 流式输出和基础工具，Phase 3 的顺序 Hooks，以及 Phase 4 的 MCP Client 与 Runtime 收口均已完成。
+Turning-Good-Agent 是一个轻量 Runtime-first 通用 Agent。当前仓库处于 MVP 阶段，主路径是 CLI 对话、会话存储、短期压缩、基础工具调用、MCP 与本地 Skills。Phase 2、Phase 3 Hooks、Phase 4 MCP Client/Runtime 收口，以及 Phase 5 Skills 均已完成。
 
 当前运行入口：
 
@@ -28,6 +28,7 @@ python -m Turning-Good-Agent chat
 | `settings.example.json` | 本地配置模板。 |
 | `settings.local.json` | 本地私有配置文件，实际运行时优先读取，已被 `.gitignore` 忽略。 |
 | `.sessions/` | 默认运行数据目录，保存 session、messages、trace、token usage，已被 `.gitignore` 忽略。 |
+| `skills/` | 项目根目录唯一的正式 Skill 目录；`.drafts/` 保存待发布草稿。 |
 | `tests/` | 本地测试目录，已被 `.gitignore` 忽略，不上传 GitHub。 |
 | `README.md` | 项目快速运行说明。 |
 | `pyproject.toml` | Python 项目元数据和运行配置。 |
@@ -67,7 +68,7 @@ python -m Turning-Good-Agent chat
 
 | 路径 | 作用 |
 | --- | --- |
-| `config/settings.py` | 定义 Runtime、Memory、Session、ToolPermission、MCP、LLM 配置和 `Settings.load()`；MCP Server 不支持单独自动审批配置，并可配置连接重试。 |
+| `config/settings.py` | 定义 Runtime、Memory、Session、ToolPermission、MCP、Skills、LLM 配置和 `Settings.load()`；MCP Server 不支持单独自动审批配置，并可配置连接重试。 |
 
 当前配置路径只有项目根目录的 `settings.local.json`。`Settings.load()` 不再支持 `TGA_*` 环境变量覆盖。
 
@@ -78,7 +79,7 @@ python -m Turning-Good-Agent chat
 | 路径 | 作用 |
 | --- | --- |
 | `runtime/state.py` | 定义状态机：`COMMAND -> SESSION -> BUILD -> RUN -> COMPACT -> SAVE -> RESPOND`。 |
-| `runtime/runtime.py` | `AgentRuntime` 总控，串联会话、上下文、AgentLoop、存储、压缩、trace 和响应。 |
+| `runtime/runtime.py` | `AgentRuntime` 总控，串联会话、上下文、AgentLoop、存储、压缩、trace、Skills 启动扫描和响应。 |
 | `runtime/turn_context.py` | 单轮运行上下文，保存 state、uncompacted history、model messages、tool calls、token usage 等中间状态。 |
 | `runtime/agent_loop.py` | LLM 与 tools 的调用循环，负责追加 assistant tool call 和 tool result working messages。 |
 | `runtime/tool_call_runner.py` | 负责工具参数规范化、审批 Hook、并发调度、双重安全检查、执行和结果 Hook。 |
@@ -112,9 +113,9 @@ python -m Turning-Good-Agent chat
 
 | 路径 | 作用 |
 | --- | --- |
-| `context/system_prompt.py` | MVP system prompt。 |
-| `context/builder.py` | 组装 system prompt、长期偏好、summary、uncompacted history 和当前用户消息。 |
-| `context/token_budget.py` | 按实际 OpenAI tools 参数统一计算 BUILD 拒绝判断与 SAVE 观测 token。 |
+| `context/system_prompt.py` | 集中定义根 system prompt、MCP 指导、Skill Catalog 与已加载 Skill 包装。 |
+| `context/builder.py` | 组装包含全量 Skill 元数据的根 system prompt、长期偏好、summary、uncompacted history 和当前用户消息。 |
+| `context/token_budget.py` | 按实际 OpenAI tools 参数和 Skill Catalog 统一计算 BUILD 拒绝判断与 SAVE 观测 token。 |
 
 ### 4.7 `memory/`
 
@@ -146,7 +147,7 @@ python -m Turning-Good-Agent chat
 | `tools/base.py` | 定义 `BaseTool` 协议、`ToolResult`、参数归一化和 JSON Schema 校验函数。 |
 | `tools/registry.py` | 工具注册表，输出并缓存模型可见 schema，并通过 `prepare_call()` 集中处理工具查找、参数归一化、参数校验和稳定排序。 |
 | `tools/executor.py` | 工具执行器，处理调用、耗时和结果序列化。 |
-| `tools/context_attachment.py` | 定义任意 Tool 可提供的当前轮 `ContextAttachment` 与 token/消息校验。 |
+| `tools/context_attachment.py` | 定义任意 Tool 可提供的当前轮 `ContextAttachment`；只有已校验本地 Skill 可使用 system role，MCP 仍限 user/assistant。 |
 | `tools/loader.py` | 自动扫描并加载内置工具，隔离单个坏工具模块，当前不支持 entry_points 插件。 |
 | `tools/builtin_tools.py` | 内置 `echo` 和 `now`。 |
 | `tools/filesystem_tools.py` | 内置 `list_dir`、`find_file`、`read_file`、`write_file`、`edit_file` 和 `grep`。 |
@@ -169,7 +170,22 @@ Tools 当前边界：
 - shell 工具默认执行受限命令，拦截危险模式，限制超时和输出长度。
 - web 工具只允许 http/https，并对外部内容做文本提取和输出截断。
 
-### 4.9 `mcp/`
+### 4.9 `skills/`
+
+职责：管理项目根目录唯一 `skills/` 的 Catalog、按需正文加载和用户触发的草稿发布。
+
+| 路径 | 作用 |
+| --- | --- |
+| `skills/types.py` | 定义 Skill Manifest、Catalog、加载结果和扫描错误等纯数据对象。 |
+| `skills/validator.py` | 解析并校验 `SKILL.md` frontmatter、目录名和正文。 |
+| `skills/manager.py` | 扫描、隔离错误、维护内存 Catalog、读取正文、创建/发布草稿。 |
+| `skills/load_skill_tool.py` | 注册只读 `load_skill`，构造当前轮低优先级 system Attachment。 |
+| `skills/skill_draft_tools.py` | 注册需要审批的草稿创建与发布 Tool。 |
+| `skills/creator.py` | 渲染和校验候选 `SKILL.md`。 |
+
+边界：Runtime 仅在 `runtime.start()` 扫描，发布后由 Manager 刷新 Catalog；CLI 不提供 slash Skill 命令，也不监听文件变化。根 system prompt 只注入所有有效 Skill 的 `name + description`。完整正文只在调用 `load_skill` 的 AgentLoop 当前轮出现，不写入会话、摘要或额外 JSONL。每轮正文限制为单个 8,000、最多 3 个、累计 16,000 tokens，并在追加前校验 working messages + OpenAI Tool schema 的 `max_context_tokens`。`create_skill_draft` 和 `publish_skill_draft` 标记为审批写入 Tool，继续经过既有安全与会话审批链路。
+
+### 4.10 `mcp/`
 
 职责：使用官方 MCP SDK 连接外部 Server，并将 MCP 协议从 Runtime、AgentLoop 与内置 Tool 层隔离。
 
@@ -192,7 +208,7 @@ Tools 当前边界：
 - Runtime Host 启动时调用 `runtime.start()`，不等待任何 MCP Server；每个 Server 独立后台连接，连接级错误按配置退避重试，业务 Tool 错误不重连。
 - Web、微信和飞书 Host 未来只调用 `runtime.start()` / `runtime.close()`，不在 `ChannelAdapter` 内管理 MCP transport。
 
-### 4.10 `llm/`
+### 4.11 `llm/`
 
 职责：模型 Provider 抽象和具体接入。
 
@@ -217,7 +233,7 @@ Tools 当前边界：
 
 工具轮数达到 `max_tool_rounds` 后，AgentLoop 会使用已有 working messages 发起一次不携带 tools 的总结请求。该请求会先缓冲，只有返回有效自然语言时才输出；若出现 `protocol_error`、继续返回 tool call 或空文本，则降级提示用户通过 `/tools` 查看已完成调用的完整结果。
 
-### 4.11 `observability/`
+### 4.12 `observability/`
 
 职责：trace 和 token 记录。
 
@@ -245,6 +261,7 @@ Tools 当前边界：
 当前 SAVE 公开上下文观测字段：
 
 - `system_tokens`
+- `skill_catalog_tokens`
 - `profile_memory_tokens`
 - `summary_tokens`
 - `history_tokens`
@@ -260,6 +277,9 @@ Tools 当前边界：
 
 - `tool_call_count`
 - `tool_names`
+- `loaded_skill_names`
+- `loaded_skill_count`
+- `loaded_skill_token_count`
 
 这些字段只写入 `turn_traces.jsonl` 的 `RUN.metadata`。工具调用过程中的 assistant tool call message 和 tool result message 只参与本轮 `AgentLoop` working messages，不作为独立会话消息写入 `messages.jsonl`。
 
@@ -274,7 +294,7 @@ Tools 当前边界：
 - `duration_ms`
 - `created_at`
 
-### 4.12 `hooks/`
+### 4.13 `hooks/`
 
 职责：提供会话工具权限、工具结果截断、跨 Channel 状态提示和只读终态监控四个顺序 Hook 功能。
 
@@ -316,7 +336,7 @@ security 预检在 `ToolPermissionHook` 前执行，ToolExecutor 在真实执行
 
 参考 nanobot 的顺序组合方式，但只保留当前四个实际功能，不建设完整 Hook 平台。
 
-### 4.13 `proactive/`
+### 4.14 `proactive/`
 
 职责：主动能力扩展入口。
 

@@ -1,6 +1,6 @@
 # Turning-Good-Agent Phase 5 Skills 机制实施设计
 
-状态：设计已确认，待实施。本文是 Phase 5 唯一权威设计与实施边界。
+状态：已完成。本文是 Phase 5 唯一权威设计、实施边界与完成记录。
 
 ## 1. 目标
 
@@ -156,7 +156,7 @@ load_skill_tool / skill_draft_tools / creator
           validator      types
 ```
 
-`AgentLoop`、`McpManager`、`TurnMonitorHook` 不依赖 `skills/`。Runtime 只持有一个 `SkillManager`，在启动时扫描，在 BUILD 时读取 Catalog，在创建 Runtime 时注册 Skill Tools。
+`McpManager`、`TurnMonitorHook` 不依赖 `skills/`；`AgentLoop` 不持有 `SkillManager`，只接收当前轮附件及 `SkillsSettings` 限制。Runtime 只持有一个 `SkillManager`，在启动时扫描，在 BUILD 时读取 Catalog，在创建 Runtime 时注册 Skill Tools。
 
 ## 5. Skill Tools 与 Creator
 
@@ -249,4 +249,16 @@ Phase 5 不实现从普通会话自动生成、自动评估或自动发布 Skill
 
 ## 11. 实施前提
 
-实现会按测试先行、最小改动原则进行。完成本设计评审后，另行编写逐任务实施计划，再开始代码修改。
+已按测试先行和最小改动原则完成实施。
+
+## 12. 完成记录
+
+- 新增 `skills/types.py`、`validator.py`、`manager.py`、`creator.py`、`load_skill_tool.py`、`skill_draft_tools.py`，并保留项目根目录 `skills/` 作为唯一正式目录。
+- `SkillValidator` 校验 `SKILL.md`、必填 frontmatter、目录名、正文和名称规则；未知 frontmatter 进入 `extra_metadata`。无效及重名声明进入 `SkillManager.errors`，不会阻塞有效 Catalog。
+- `runtime.start()` 扫描 Catalog；BUILD 通过 `context/system_prompt.py` 的 `build_system_prompt()` 注入全量元数据，`context/token_budget.py` 记录 `skill_catalog_tokens` 并沿用 300k BUILD 拒绝策略。
+- `load_skill` 只读且不审批。完整正文以固定包装的、已校验本地 system Attachment 进入当前轮；MCP Attachment 的 user/assistant 角色限制没有放宽。
+- `create_skill_draft`、`publish_skill_draft` 标记为审批写入 Tool。发布会再次校验、拒绝覆盖并刷新 Catalog；没有嵌套 LLM、自动创建或自动发布。
+- AgentLoop 分别执行 MCP 12k 附件限制、Skill 单个 8k/每轮 3 个/正文累计 16k 限制，并在每次追加附件前检查实际 working messages 与 Tool schema 的总上下文上限。
+- RUN trace 新增 `loaded_skill_names`、`loaded_skill_count`、`loaded_skill_token_count`；`tool_calls.jsonl` 对成功加载只保存“已加载 Skill：<name>”，不保存正文；未新增 JSONL，未改动 TurnMonitorHook。
+
+验证：`pytest -q`、`git diff --check` 和 CLI `/exit` 冒烟均通过。测试覆盖扫描隔离、Catalog/token 预算、当前轮加载、三项加载预算、草稿冲突/发布、审批属性、RUN trace 和 MCP Attachment 角色边界。

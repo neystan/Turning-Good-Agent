@@ -73,6 +73,16 @@ class McpSettings:
 
 
 @dataclass(slots=True)
+class SkillsSettings:
+    """保存本地 Skill Catalog 和当前轮加载限制。"""
+
+    directory: str = "skills"
+    max_loaded_skills_per_turn: int = 3
+    max_skill_tokens: int = 8_000
+    max_loaded_skill_tokens_per_turn: int = 16_000
+
+
+@dataclass(slots=True)
 class LLMSettings:
     """保存 LLM Provider 配置。"""
 
@@ -99,6 +109,7 @@ class Settings:
     sessions: SessionSettings = field(default_factory=SessionSettings)
     tool_permissions: ToolPermissionSettings = field(default_factory=ToolPermissionSettings)
     mcp: McpSettings = field(default_factory=McpSettings)
+    skills: SkillsSettings = field(default_factory=SkillsSettings)
     llm: LLMSettings = field(default_factory=LLMSettings)
 
     @classmethod
@@ -143,6 +154,7 @@ class Settings:
             if "approval_required_tools" in tool_permissions:
                 settings.tool_permissions.approval_required_tools = tool_permissions["approval_required_tools"]
             settings.mcp = _load_mcp_settings(payload.get("mcp", {}))
+            settings.skills = _load_skills_settings(payload.get("skills", {}))
             llm = payload.get("llm", {})
             for key in (
                 "provider",
@@ -182,6 +194,31 @@ def _load_mcp_settings(payload: object) -> McpSettings:
     if not isinstance(servers, dict):
         raise ValueError("mcp.servers 必须是 object")
     settings.servers = {str(name): _load_mcp_server(str(name), value) for name, value in servers.items()}
+    return settings
+
+
+def _load_skills_settings(payload: object) -> SkillsSettings:
+    """解析并校验本地 Skill 配置。"""
+    if not isinstance(payload, dict):
+        raise ValueError("skills 必须是 object")
+    settings = SkillsSettings()
+    for key in (
+        "max_loaded_skills_per_turn",
+        "max_skill_tokens",
+        "max_loaded_skill_tokens_per_turn",
+    ):
+        if key in payload:
+            value = int(payload[key])
+            if value <= 0:
+                raise ValueError(f"skills.{key} 必须大于 0")
+            setattr(settings, key, value)
+    if "directory" in payload:
+        directory = str(payload["directory"])
+        if directory != "skills":
+            raise ValueError("skills.directory 必须是项目根目录的 skills")
+        settings.directory = directory
+    if settings.max_loaded_skill_tokens_per_turn < settings.max_skill_tokens:
+        raise ValueError("skills.max_loaded_skill_tokens_per_turn 不能小于 skills.max_skill_tokens")
     return settings
 
 

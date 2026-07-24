@@ -42,6 +42,12 @@
       }
     }
   },
+  "skills": {
+    "directory": "skills",
+    "max_loaded_skills_per_turn": 3,
+    "max_skill_tokens": 8000,
+    "max_loaded_skill_tokens_per_turn": 16000
+  },
   "llm": {
     "provider": "openai-compatible",
     "api_key": "replace-with-your-key",

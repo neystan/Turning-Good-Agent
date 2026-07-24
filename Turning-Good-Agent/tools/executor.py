@@ -19,6 +19,7 @@ class ToolExecutor:
         started = time.perf_counter()
         error = None
         context_attachment = None
+        metadata: dict[str, Any] = {}
         try:
             security_error = self.precheck(tool, args)
             if security_error:
@@ -28,6 +29,7 @@ class ToolExecutor:
                 result = await tool.run(args)
                 content = result.content if hasattr(result, "content") else str(result)
                 context_attachment = getattr(result, "context_attachment", None)
+                metadata = dict(getattr(result, "metadata", {}))
         except Exception as exc:
             error = str(exc)
             content = f"工具 {tool.name} 执行失败：{error}"
@@ -38,4 +40,5 @@ class ToolExecutor:
             "duration_ms": (time.perf_counter() - started) * 1000,
             "error": error,
             "context_attachment": context_attachment,
+            "metadata": metadata,
         }
