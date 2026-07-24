@@ -482,11 +482,11 @@ Tools 当前约束：
 
 ## 10. Skills
 
-Phase 5 已完成。所有正式和外部 Skill 只位于项目根目录 `skills/<name>/SKILL.md`，草稿只位于 `skills/.drafts/`。`runtime.start()` 扫描一次，非法、目录名不匹配和重名 Skill 被隔离到 `SkillManager.errors`，不影响其他 Catalog；CLI 不监听目录，也不提供 `/skill` 命令。
+Phase 5 已完成。所有正式和外部 Skill 只位于项目根目录 `.skills/<name>/SKILL.md`，草稿只位于 `.skills/.drafts/`。外部 Skill 可直接复制，或在用户明确请求和审批后由 `install_skill` 从无凭据 HTTPS Git URL 克隆到 `.staging/`、校验后原子发布；不支持 ZIP、Marketplace、自动更新或自动安装。内置 `skill-creator`、`skill-installer` 与 `grilling` 分别提供创建/修改、外部安装和方案压力测试工作流；`grilling` 逐题澄清决策并在用户确认共识前不执行后续操作。它可携带 `agents/openai.yaml` 界面元数据，但当前 Runtime 只读取 `SKILL.md`，不解析或注入该文件。实际文件写入和 Git 克隆仍由既有审批 Tool 执行。`runtime.start()` 扫描一次，非法、目录名不匹配和重名 Skill 被隔离到 `SkillManager.errors`，不影响其他 Catalog；CLI 不监听目录，也不提供 `/skill` 命令。
 
 根 system prompt 每轮注入全部有效 `name + description`。`load_skill(name)` 读取完整正文，以固定低优先级 system Attachment 仅加入当前 AgentLoop working messages；下一轮不会重放，也不写入 `session.json`、`messages.jsonl`、summary 或新的 JSONL。单轮最多 3 个，单个正文最多 8,000 tokens，正文总量最多 16,000 tokens；超限返回 Tool 错误且不截断正文。MCP Attachment 仍严格只允许 user/assistant role。
 
-`create_skill_draft(name, description, instructions)` 和 `publish_skill_draft(name)` 仅供用户明确要求时调用，沿用现有工具审批和 `/approve on`；当前 Agent 直接生成参数，不嵌套第二个 LLM。Skill 不自动执行脚本、不自动创建、评估或发布。
+内置 `skill-creator` 为用户明确创建或修改 Skill 的当前轮工作流模板；Agent 先加载它，再调用 `create_skill_draft(name, description, instructions)`。`create_skill_draft`、`publish_skill_draft(name)` 和 `install_skill(source, ref?, skill_path?)` 都仅供用户明确要求时调用，沿用现有工具审批和 `/approve on`；当前 Agent 直接生成参数，不嵌套第二个 LLM。Skill 不自动执行脚本、不自动创建、评估、发布或安装。
 
 ## 11. MCP
 
@@ -535,7 +535,7 @@ Phase 3 提供四个能力：
 
 Phase 3 的实现范围和验收记录见 `docs/phases/2026-06-15-phase-3-hooks.md`。
 
-`ToolCallRunner` 先完成 Schema 标准化和 security 预检，再进入 `ToolPermissionHook`；自动审批或当前 Channel 同意后由 ToolExecutor 再次执行硬安全校验。`after_tool_call` 在结果注入 LLM 前按 `max_tool_result_tokens = 8000` 统一截断；任意 ToolResult 的 ContextAttachment 只进入当前 AgentLoop working messages，不落入历史、摘要或下一轮 Context。
+`ToolCallRunner` 先完成 Schema 标准化和 security 预检，再进入 `ToolPermissionHook`；自动审批或当前 Channel 同意后由 ToolExecutor 再次执行硬安全校验。`after_tool_call` 在结果注入 LLM 前按 `max_tool_result_tokens = 8000` 统一截断；`AttachmentManager` 集中校验 MCP/Skill Attachment 的角色、独立 token 预算和实际 working messages 上限。任意 ToolResult 的 ContextAttachment 只进入当前 AgentLoop working messages，不落入历史、摘要或下一轮 Context。
 
 `TurnMonitorHook` 不直接写入 JSONL。Runtime 是状态耗时与 `StateTrace` 的唯一生产者，在可持久化模型会话完成 RESPOND 后、创建该 trace 前调用终态 Hook；快捷命令不会触发该 Hook 或为监控创建 session。Web、SSE 与 WebSocket 仍属于后续观测阶段，尚未实现。
 

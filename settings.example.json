@@ -43,7 +43,7 @@
     }
   },
   "skills": {
-    "directory": "skills",
+    "directory": ".skills",
     "max_loaded_skills_per_turn": 3,
     "max_skill_tokens": 8000,
     "max_loaded_skill_tokens_per_turn": 16000

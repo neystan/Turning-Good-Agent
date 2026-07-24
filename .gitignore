@@ -6,3 +6,5 @@ settings.local.json
 tests/
 docs/
 SESSIONS_SPEC.md
+.skills/.drafts/
+.skills/.staging/

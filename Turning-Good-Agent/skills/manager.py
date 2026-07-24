@@ -6,6 +6,7 @@ from pathlib import Path
 from ..config.settings import SkillsSettings
 from ..sessions.token_counter import count_content_tokens
 from .creator import SkillCreator
+from .installer import SkillInstaller
 from .types import LoadedSkill, SkillCatalogEntry, SkillManifest, SkillScanError
 from .validator import SkillValidator
 
@@ -19,6 +20,7 @@ class SkillManager:
         self.settings = settings
         self.validator = SkillValidator()
         self.creator = SkillCreator(self.validator)
+        self.installer = SkillInstaller(directory, self.validator)
         self._manifests: dict[str, SkillManifest] = {}
         self.errors: list[SkillScanError] = []
 
@@ -88,3 +90,11 @@ class SkillManager:
         self.scan()
         if name not in self._manifests:
             raise RuntimeError(f"Skill 发布后校验失败：{name}")
+
+    async def install(self, source: str, ref: str | None, skill_path: str | None) -> SkillManifest:
+        """安装外部 Skill 并刷新内存 Catalog。"""
+        manifest = await self.installer.install(source, ref, skill_path)
+        self.scan()
+        if manifest.name not in self._manifests:
+            raise RuntimeError(f"Skill 安装后校验失败：{manifest.name}")
+        return manifest

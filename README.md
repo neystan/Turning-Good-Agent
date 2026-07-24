@@ -142,7 +142,7 @@ llm/          LLM Provider 抽象和 OpenAI-compatible 实现
 hooks/        会话工具权限、工具结果截断、跨 Channel 状态提示
 observability trace 和 token 记录
 proactive/    主动能力扩展入口
-skills/       项目根目录唯一的正式 Skill 与草稿目录
+.skills/      项目根目录唯一的正式 Skill 与草稿目录
 ```
 
 ## 当前阶段
@@ -167,7 +167,7 @@ tool_calls.jsonl 工具调用明细落盘
 ToolCallRunner 收口参数规范化、审批、并发、双重安全检查和结果 Hook
 ContextAttachment 仅进入当前 AgentLoop working messages
 MCP Client：stdio / Streamable HTTP、后台 Server Worker、Catalog、显式 enabled_tools、list_changed 刷新和连接级重试
-Skills：启动扫描全量元数据、`load_skill` 当前轮完整加载、草稿创建与发布
+Skills：启动扫描全量元数据、`load_skill` 当前轮完整加载、草稿创建/发布与受审批外部安装
 请求失败错误回显
 可恢复 LLM 错误重试
 文件基础工具：list_dir / find_file / read_file / write_file / edit_file / grep
@@ -188,7 +188,7 @@ MCP tools、skills tools、entry_points 插件不属于 Phase 2
 
 Phase 3 实现四项轻量 Hook 能力：`ToolPermissionHook` 对已标记审批的内置工具、MCP Tool 与 MCP 附件读取当前 session 的 `auto_approve_tools`；关闭时由当前 `ChannelAdapter` 请求确认，CLI 使用 `y/N`，未支持审批的 Channel 确定性拒绝。`/approve` 查看状态，`/approve on` 是唯一自动放行开关，`/approve off` 恢复逐次审批；MCP Server 不支持单独配置自动审批。自动审批只跳过人工确认，不能绕过 `security.py` 和 `ToolExecutor` 的二次预检；审批请求本身不持久化，也不包含跨 Channel、超时或恢复机制。工具结果在注入 LLM 前按 `max_tool_result_tokens = 8000` 截断；通用 `ChannelStatusHook` 在工具开始、完成和真实压缩前后发送状态。`TurnMonitorHook` 在可持久化模型会话结束后，将 outcome、总耗时、锁等待和失败工具数写入 `RESPOND.metadata`，不新增监控 JSONL。Runtime 按 `InboundMessage.channel` 通过 `ChannelRouter` 创建单轮 `ChannelAdapter`，CLI 已显示流式文本、按调用 ID 区分的并行工具动画与状态；Web 可注册适配器，微信和飞书当前静默且尚未接入传输层。连续的并行安全工具可通过 `parallel_tool_calls_enabled` 配置并发执行，审批类工具在启动时强制校验为非并行。
 
-Phase 5 使用项目根目录唯一的 `skills/`。`runtime.start()` 扫描正式目录，根 system prompt 每轮注入所有有效 Skill 的 `name + description`；`load_skill` 才会把完整 `SKILL.md` 以低优先级 system Attachment 放进当前 AgentLoop，下一轮不会重放，也不写入消息、摘要或额外 JSONL。`create_skill_draft` 和 `publish_skill_draft` 写入 `skills/.drafts/` 或正式目录，沿用现有 `y/N` 审批与 `/approve on`。单轮最多加载 3 个，单个正文最多 8,000 tokens，正文总量最多 16,000 tokens；追加前还会校验实际 working messages 与 Tool schema 的 300k 上下文上限。MCP Attachment 仍严格仅允许 user/assistant role。`RUN.metadata` 记录实际加载的名称、数量与正文 token 数。
+Phase 5 使用项目根目录唯一的 `.skills/`。`runtime.start()` 扫描正式目录，根 system prompt 每轮注入所有有效 Skill 的 `name + description`；`load_skill` 才会把完整 `SKILL.md` 以低优先级 system Attachment 放进当前 AgentLoop，下一轮不会重放，也不写入消息、摘要或额外 JSONL。内置 `skill-creator` 只在用户明确要求创建或修改 Skill 时加载，用于生成结构化草稿；内置 `skill-installer` 则在用户明确要求安装外部 Skill 时提供 HTTPS Git 安装、来源校验和后续加载的工作流；内置 `grilling` 仅在用户要求压力测试方案、决策或想法时逐题追问并在确认共识前不执行。`create_skill_draft`、`publish_skill_draft` 和 `install_skill` 都沿用现有 `y/N` 审批与 `/approve on`；安装只接受 HTTPS Git 仓库，在临时目录校验后发布，不执行下载内容。单轮最多加载 3 个，单个正文最多 8,000 tokens，正文总量最多 16,000 tokens；追加前还会校验实际 working messages 与 Tool schema 的 300k 上下文上限。MCP Attachment 仍严格仅允许 user/assistant role。`RUN.metadata` 记录实际加载的名称、数量与正文 token 数。
 
 审批类工具可在 `settings.local.json` 中集中配置：
 

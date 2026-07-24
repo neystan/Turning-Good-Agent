@@ -9,7 +9,7 @@ from ..config.settings import Settings
 from ..context.builder import ContextBuilder
 from ..hooks.channel_status import ChannelStatusHook
 from ..hooks.manager import HookManager
-from ..hooks.tool_permission import ToolPermissionHook
+from ..hooks.tool_permission import ToolPermissionHook, validate_tool_permission_tools
 from ..hooks.tool_result_truncation import ToolResultTruncationHook
 from ..hooks.turn_monitor import TurnMonitorHook
 from ..llm.client import LLMProvider
@@ -20,6 +20,7 @@ from ..observability.token_monitor import TokenMonitor
 from ..observability.trace import StateTrace
 from ..proactive.manager import ProactiveManager
 from ..skills.load_skill_tool import LoadSkillTool
+from ..skills.install_skill_tool import InstallSkillTool
 from ..skills.manager import SkillManager
 from ..skills.skill_draft_tools import CreateSkillDraftTool, PublishSkillDraftTool
 from ..sessions.manager import SessionManager
@@ -39,15 +40,6 @@ from .state import (
 from .turn_context import TurnContext
 
 logger = logging.getLogger(__name__)
-
-
-def validate_tool_permission_settings(tools: ToolRegistry, settings: Settings) -> None:
-    """校验审批工具均已注册且不会并行执行。"""
-    for name in settings.tool_permissions.approval_required_tools:
-        if not tools.has(name):
-            raise ValueError(f"审批工具未注册：{name}")
-        if bool(getattr(tools.get(name), "parallel_safe", False)):
-            raise ValueError(f"审批工具不能设置 parallel_safe=true：{name}")
 
 
 class AgentRuntime:
@@ -91,11 +83,12 @@ class AgentRuntime:
         ToolLoader().load(tools, settings)
         skills = SkillManager(Path.cwd() / settings.skills.directory, settings.skills)
         tools.register(LoadSkillTool(skills))
+        tools.register(InstallSkillTool(skills))
         tools.register(CreateSkillDraftTool(skills))
         tools.register(PublishSkillDraftTool(skills))
-        validate_tool_permission_settings(tools, settings)
         mcp = McpManager(settings.mcp)
         register_mcp_control_tools(mcp, tools)
+        validate_tool_permission_tools(tools, settings.tool_permissions.approval_required_tools)
         hooks = HookManager()
         hooks.register(ToolPermissionHook(frozenset(settings.tool_permissions.approval_required_tools), tools))
         hooks.register(ToolResultTruncationHook(settings.runtime.max_tool_result_tokens))

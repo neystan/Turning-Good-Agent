@@ -76,7 +76,7 @@ class McpSettings:
 class SkillsSettings:
     """保存本地 Skill Catalog 和当前轮加载限制。"""
 
-    directory: str = "skills"
+    directory: str = ".skills"
     max_loaded_skills_per_turn: int = 3
     max_skill_tokens: int = 8_000
     max_loaded_skill_tokens_per_turn: int = 16_000
@@ -214,8 +214,8 @@ def _load_skills_settings(payload: object) -> SkillsSettings:
             setattr(settings, key, value)
     if "directory" in payload:
         directory = str(payload["directory"])
-        if directory != "skills":
-            raise ValueError("skills.directory 必须是项目根目录的 skills")
+        if directory != ".skills":
+            raise ValueError("skills.directory 必须是项目根目录的 .skills")
         settings.directory = directory
     if settings.max_loaded_skill_tokens_per_turn < settings.max_skill_tokens:
         raise ValueError("skills.max_loaded_skill_tokens_per_turn 不能小于 skills.max_skill_tokens")

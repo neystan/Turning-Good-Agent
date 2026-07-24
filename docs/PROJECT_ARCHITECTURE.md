@@ -28,7 +28,7 @@ python -m Turning-Good-Agent chat
 | `settings.example.json` | 本地配置模板。 |
 | `settings.local.json` | 本地私有配置文件，实际运行时优先读取，已被 `.gitignore` 忽略。 |
 | `.sessions/` | 默认运行数据目录，保存 session、messages、trace、token usage，已被 `.gitignore` 忽略。 |
-| `skills/` | 项目根目录唯一的正式 Skill 目录；`.drafts/` 保存待发布草稿。 |
+| `.skills/` | 项目根目录唯一的正式 Skill 目录；`.drafts/` 保存待发布草稿。 |
 | `tests/` | 本地测试目录，已被 `.gitignore` 忽略，不上传 GitHub。 |
 | `README.md` | 项目快速运行说明。 |
 | `pyproject.toml` | Python 项目元数据和运行配置。 |
@@ -82,6 +82,7 @@ python -m Turning-Good-Agent chat
 | `runtime/runtime.py` | `AgentRuntime` 总控，串联会话、上下文、AgentLoop、存储、压缩、trace、Skills 启动扫描和响应。 |
 | `runtime/turn_context.py` | 单轮运行上下文，保存 state、uncompacted history、model messages、tool calls、token usage 等中间状态。 |
 | `runtime/agent_loop.py` | LLM 与 tools 的调用循环，负责追加 assistant tool call 和 tool result working messages。 |
+| `runtime/attachment_manager.py` | 管理当前轮 MCP/Skill Attachment 的角色边界、独立预算、总上下文检查和 Skill 观测。 |
 | `runtime/tool_call_runner.py` | 负责工具参数规范化、审批 Hook、并发调度、双重安全检查、执行和结果 Hook。 |
 
 ### 4.5 `sessions/`
@@ -170,9 +171,9 @@ Tools 当前边界：
 - shell 工具默认执行受限命令，拦截危险模式，限制超时和输出长度。
 - web 工具只允许 http/https，并对外部内容做文本提取和输出截断。
 
-### 4.9 `skills/`
+### 4.9 `.skills/`
 
-职责：管理项目根目录唯一 `skills/` 的 Catalog、按需正文加载和用户触发的草稿发布。
+职责：管理项目根目录唯一 `.skills/` 的 Catalog、按需正文加载、草稿发布和受审批的外部安装。
 
 | 路径 | 作用 |
 | --- | --- |
@@ -181,9 +182,15 @@ Tools 当前边界：
 | `skills/manager.py` | 扫描、隔离错误、维护内存 Catalog、读取正文、创建/发布草稿。 |
 | `skills/load_skill_tool.py` | 注册只读 `load_skill`，构造当前轮低优先级 system Attachment。 |
 | `skills/skill_draft_tools.py` | 注册需要审批的草稿创建与发布 Tool。 |
+| `skills/installer.py` | 在临时目录克隆、校验并原子发布外部 HTTPS Git Skill。 |
+| `skills/install_skill_tool.py` | 注册需要审批的 `install_skill`。 |
 | `skills/creator.py` | 渲染和校验候选 `SKILL.md`。 |
+| `.skills/skill-creator/SKILL.md` | 提供本地 Skill 创建、修改与发布前检查流程。 |
+| `.skills/skill-installer/SKILL.md` | 提供外部 Skill 来源确认、受审批安装与当前轮加载流程。 |
+| `.skills/grilling/SKILL.md` | 在用户要求压力测试方案、决策或想法时逐题追问并达成共识。 |
+| `.skills/grilling/agents/openai.yaml` | `grilling` 的可选界面元数据；当前 Runtime 不解析或注入该文件。 |
 
-边界：Runtime 仅在 `runtime.start()` 扫描，发布后由 Manager 刷新 Catalog；CLI 不提供 slash Skill 命令，也不监听文件变化。根 system prompt 只注入所有有效 Skill 的 `name + description`。完整正文只在调用 `load_skill` 的 AgentLoop 当前轮出现，不写入会话、摘要或额外 JSONL。每轮正文限制为单个 8,000、最多 3 个、累计 16,000 tokens，并在追加前校验 working messages + OpenAI Tool schema 的 `max_context_tokens`。`create_skill_draft` 和 `publish_skill_draft` 标记为审批写入 Tool，继续经过既有安全与会话审批链路。
+边界：Runtime 仅在 `runtime.start()` 扫描，发布或安装后由 Manager 刷新 Catalog；CLI 不提供 slash Skill 命令，也不监听文件变化。根 system prompt 只注入所有有效 Skill 的 `name + description`。完整正文只在调用 `load_skill` 的 AgentLoop 当前轮出现，不写入会话、摘要或额外 JSONL。每轮正文限制为单个 8,000、最多 3 个、累计 16,000 tokens，并在追加前校验 working messages + OpenAI Tool schema 的 `max_context_tokens`。`create_skill_draft`、`publish_skill_draft` 和 `install_skill` 标记为审批写入 Tool；安装仅接受无凭据 HTTPS Git URL，在 `.staging/` 目录校验一个 Skill 后原子发布，拒绝覆盖与符号链接。`skill-creator`、`skill-installer` 与 `grilling` 是正式内置 Skill，分别约束草稿创建/发布、外部安装和方案压力测试；它们不替代实际的 Tool 审批和安全检查。
 
 ### 4.10 `mcp/`
 

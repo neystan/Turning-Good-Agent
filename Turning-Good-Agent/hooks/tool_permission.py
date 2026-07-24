@@ -4,6 +4,18 @@ from ..tools.registry import ToolRegistry
 from .base import AgentHook
 
 
+def validate_tool_permission_tools(tools: ToolRegistry, configured_names: list[str]) -> None:
+    """校验审批配置和审批 Tool 都不会并行执行。"""
+    for name in configured_names:
+        if not tools.has(name):
+            raise ValueError(f"审批工具未注册：{name}")
+    names = set(configured_names)
+    names.update(name for name in tools.tool_names if bool(getattr(tools.get(name), "approval_required", False)))
+    for name in names:
+        if bool(getattr(tools.get(name), "parallel_safe", False)):
+            raise ValueError(f"审批工具不能设置 parallel_safe=true：{name}")
+
+
 class ToolPermissionHook(AgentHook):
     """按当前会话设置处理审批类工具。"""
 
