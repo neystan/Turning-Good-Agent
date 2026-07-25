@@ -18,3 +18,6 @@
 
 /* 菜单需要脱离会话行的绘制隔离；短 user 消息保持内容宽度。 */
 .session-row { content-visibility: visible; }.session-actions { z-index: 30; }.session-menu { z-index: 35; }.message.user { text-align: right; }.message.user .markdown { display: inline-block; max-width: 100%; text-align: left; }
+
+/* 浮层脱离侧栏滚动容器，避免操作菜单被裁切。 */
+.overlay-portal { z-index: 100; }.overlay-portal.is-anchored { position: fixed; }.overlay-portal.is-modal { position: fixed; inset: 0; display: grid; place-items: center; padding: 20px; background: rgb(0 0 0 / 38%); }.overlay-dialog-layer { z-index: 100; }.overlay-portal .session-menu { position: static; z-index: auto; }.overlay-portal .rename-dialog { position: static; inset: auto; width: min(360px, 100%); }.overlay-portal.confirm-layer { z-index: 100; background: rgb(0 0 0 / 38%); }
