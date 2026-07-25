@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { Menu, Moon, PanelRight, Sun, X } from "lucide-react";
+import { Menu, Moon, PanelRight, Sun } from "lucide-react";
 
 import { api } from "./api";
 import { ChatTimeline } from "./components/ChatTimeline";
 import { Composer } from "./components/Composer";
 import { NoticeRegion } from "./components/NoticeRegion";
+import { SessionInspector } from "./components/SessionInspector";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { ThinkingTrail } from "./components/ThinkingTrail";
 import { SessionHistoryLoader } from "./state/history_loader";
@@ -33,7 +34,7 @@ export function App() {
   const [theme, setTheme] = useState<"dark" | "light">(() => localStorage.getItem("tga-theme") === "light" ? "light" : "dark");
   const [mobileMenu, setMobileMenu] = useState(false);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
-  const [notices, setNotices] = useState<string[]>([]);
+  const [notices, setNotices] = useState<{ id: string; message: string }[]>([]);
   const socketRef = useRef<SessionSocketClient | null>(null);
   const sessionIdRef = useRef<string | null>(sessionId);
   const historyLoader = useRef(new SessionHistoryLoader());
@@ -50,12 +51,12 @@ export function App() {
   /** 添加短暂可关闭的操作错误提示。 */
   const addNotice = useCallback((message: string) => {
     const notice = `${Date.now()}-${message}`;
-    setNotices((items) => [...items, notice]);
+    setNotices((items) => [...items, { id: notice, message }]);
   }, []);
 
   /** 删除指定提示。 */
-  const dismissNotice = useCallback((notice: string) => {
-    setNotices((items) => items.filter((item) => item !== notice));
+  const dismissNotice = useCallback((noticeId: string) => {
+    setNotices((items) => items.filter((item) => item.id !== noticeId));
   }, []);
 
   /** 切换路由与当前会话，不重建 WebSocket。 */
@@ -231,17 +232,7 @@ export function App() {
       </ChatTimeline>
       <Composer session={current} running={sessionState.running} draft={draft || sessionState.pendingDraft} autoApprove={autoApprove} onDraftChange={changeDraft} onSend={() => send()} onStop={stop} onRestore={() => current && void updateSession(current.id, { archived: false })} onAutoApproveChange={(enabled) => void setApproval(enabled)} />
     </main>
-    {inspectorOpen && <Inspector data={inspector} onClose={() => setInspectorOpen(false)} />}
+    {inspectorOpen && <SessionInspector data={inspector} onClose={() => setInspectorOpen(false)} />}
     <NoticeRegion notices={notices} onDismiss={dismissNotice} />
   </div>;
-}
-
-/** 渲染按需打开的会话观测抽屉。 */
-function Inspector({ data, onClose }: { data: Observability | null; onClose: () => void }) {
-  return <aside className="inspector"><header><div><span className="inspector-kicker">SESSION INSPECTOR</span><h2>会话检查器</h2></div><button className="icon-button" title="关闭检查器" aria-label="关闭会话检查器" onClick={onClose}><X /></button></header>{!data ? <p>正在读取观测数据...</p> : <div className="inspector-body"><InspectorSection title="真实 Token" rows={data.token_usage} /><InspectorSection title="状态追踪" rows={data.traces} /><InspectorSection title="工具调用" rows={data.tool_calls} /></div>}</aside>;
-}
-
-/** 渲染检查器中的一个可折叠数据分区。 */
-function InspectorSection({ title, rows }: { title: string; rows: Record<string, unknown>[] }) {
-  return <section className="inspector-section"><h3>{title}</h3><pre>{rows.length ? JSON.stringify(rows, null, 2) : "暂无记录"}</pre></section>;
 }
