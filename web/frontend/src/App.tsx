@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ArchiveRestore, CircleStop, Menu, Moon, PanelRight, Send, Sun, X } from "lucide-react";
+import { Menu, Moon, PanelRight, Sun, X } from "lucide-react";
 
 import { api } from "./api";
 import { ChatTimeline } from "./components/ChatTimeline";
+import { Composer } from "./components/Composer";
 import { NoticeRegion } from "./components/NoticeRegion";
 import { SessionSidebar } from "./components/SessionSidebar";
+import { ThinkingTrail } from "./components/ThinkingTrail";
 import { SessionHistoryLoader } from "./state/history_loader";
 import { applySessionAction, createSessionState } from "./state/session_state";
 import { SessionSocketClient } from "./state/socket_client";
@@ -160,6 +162,13 @@ export function App() {
     if (!sessionId || !socketRef.current?.send({ type: "task.stop", session_id: sessionId, client_action_id: crypto.randomUUID() })) addNotice("当前没有可停止的任务");
   }, [addNotice, sessionId]);
 
+  /** 提交指定工具审批的允许或拒绝决定。 */
+  const resolveApproval = useCallback((approvalId: string, approved: boolean) => {
+    if (!sessionId || !socketRef.current?.send({ type: "approval.resolve", session_id: sessionId, approval_id: approvalId, approved, client_action_id: crypto.randomUUID() })) {
+      addNotice("审批已失效");
+    }
+  }, [addNotice, sessionId]);
+
   /** 更新全局自动审批策略。 */
   const setApproval = async (enabled: boolean) => {
     try {
@@ -198,8 +207,14 @@ export function App() {
   /** 重发失败的用户消息。 */
   const retryMessage = (message: ChatMessage) => send(message.content);
 
+  /** 同步输入文本并清空停止后保留的 guidance 草稿。 */
+  const changeDraft = (value: string) => {
+    setDraft(value);
+    dispatch({ type: "draft.pending", content: "" });
+  };
+
   const current = useMemo(() => [...sessions, ...archived].find((item) => item.id === sessionId), [archived, sessionId, sessions]);
-  const currentTurnCount = Object.keys(sessionState.turns).length;
+  const currentTurnCount = Object.values(sessionState.turns).reduce((count, turn) => count + turn.events.length, 0);
 
   return <div className="app-shell">
     <a className="skip-link" href="#main-content">跳到对话</a>
@@ -211,10 +226,10 @@ export function App() {
         <div className="title-block"><span className={`connection-dot ${sessionState.running ? "is-running" : ""}`} title={connection} /><h1>{current?.title || "新建会话"}</h1>{current?.archived && <span className="readonly">已归档</span>}</div>
         <div className="top-actions"><button className="icon-button" title="切换主题" aria-label="切换主题" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun /> : <Moon />}</button><button className="icon-button" title="打开会话检查器" aria-label="打开会话检查器" disabled={!sessionId} onClick={() => void openInspector()}><PanelRight /></button></div>
       </header>
-      <ChatTimeline sessionId={sessionId} messages={sessionState.messages} contentVersion={currentTurnCount} onRetry={retryMessage}>
+      <ChatTimeline sessionId={sessionId} messages={sessionState.messages} turns={sessionState.turns} contentVersion={currentTurnCount} onRetry={retryMessage} renderTurn={(turn) => <ThinkingTrail key={turn.requestId} turn={turn} onResolveApproval={resolveApproval} />}>
         {!sessionId && sessionState.messages.length === 0 && <div className="empty-state"><span className="empty-kicker">LOCAL AGENT</span><h2>开始一个工作会话</h2><p>首条消息发送后才会创建本地会话记录。</p></div>}
       </ChatTimeline>
-      <footer className="composer"><label className="approval-toggle"><input type="checkbox" checked={autoApprove} onChange={(event) => void setApproval(event.target.checked)} /><span>自动批准</span></label>{current?.archived ? <button className="restore-session" onClick={() => void updateSession(current.id, { archived: false })}><ArchiveRestore size={16} />恢复并继续</button> : <textarea aria-label="消息内容" name="message" autoComplete="off" value={draft || sessionState.pendingDraft} onChange={(event) => { setDraft(event.target.value); dispatch({ type: "draft.pending", content: "" }); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); } }} placeholder={sessionState.running ? "补充当前任务方向…" : "发送消息…"} rows={1} />}{sessionState.running ? <button className="icon-button stop-button" title="停止任务" aria-label="停止任务" onClick={stop}><CircleStop /></button> : <button className="icon-button send-button" title="发送消息" aria-label="发送消息" onClick={() => send()} disabled={Boolean(current?.archived)}><Send /></button>}</footer>
+      <Composer session={current} running={sessionState.running} draft={draft || sessionState.pendingDraft} autoApprove={autoApprove} onDraftChange={changeDraft} onSend={() => send()} onStop={stop} onRestore={() => current && void updateSession(current.id, { archived: false })} onAutoApproveChange={(enabled) => void setApproval(enabled)} />
     </main>
     {inspectorOpen && <Inspector data={inspector} onClose={() => setInspectorOpen(false)} />}
     <NoticeRegion notices={notices} onDismiss={dismissNotice} />

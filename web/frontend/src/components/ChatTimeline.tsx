@@ -2,20 +2,22 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 
-import type { ChatMessage } from "../types";
+import type { ChatMessage, TurnState } from "../types";
 
 type ChatTimelineProps = {
   sessionId: string | null;
   messages: ChatMessage[];
+  turns?: Record<string, TurnState>;
   contentVersion?: number;
   children?: React.ReactNode;
   onRetry?: (message: ChatMessage) => void;
+  renderTurn?: (turn: TurnState) => React.ReactNode;
 };
 
 const savedScrollTop: Record<string, number> = {};
 
 /** 渲染稳定滚动的聊天消息列表。 */
-export function ChatTimeline({ sessionId, messages, contentVersion = 0, children, onRetry }: ChatTimelineProps) {
+export function ChatTimeline({ sessionId, messages, turns = {}, contentVersion = 0, children, onRetry, renderTurn }: ChatTimelineProps) {
   const scrollRef = useRef<HTMLElement>(null);
   const previousSessionId = useRef<string | null>(null);
   const nearBottom = useRef(true);
@@ -59,8 +61,10 @@ export function ChatTimeline({ sessionId, messages, contentVersion = 0, children
     setHasUnread(false);
   };
 
+  const renderedTurns = new Set(messages.filter((message) => message.role === "assistant" && message.request_id).map((message) => message.request_id as string));
   return <section ref={scrollRef} className="chat-scroll" aria-live="polite" onScroll={onScroll}>
-    {messages.map((message) => <MessageView key={message.id} message={message} onRetry={onRetry} />)}
+    {messages.map((message) => <div key={message.id}><MessageView message={message} onRetry={onRetry} />{message.role === "assistant" && message.request_id && turns[message.request_id] && renderTurn?.(turns[message.request_id])}</div>)}
+    {Object.values(turns).filter((turn) => !renderedTurns.has(turn.requestId)).map((turn) => <div key={turn.requestId}>{renderTurn?.(turn)}</div>)}
     {children}
     {hasUnread && <button className="new-message-button" onClick={scrollToLatest}>有新消息</button>}
   </section>;
