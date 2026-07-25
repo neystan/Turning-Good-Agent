@@ -3,6 +3,9 @@
 .sidebar { overflow-y: auto; overscroll-behavior: contain; padding: 16px 10px; border-right: 1px solid var(--border); background: var(--surface); }
 .conversation { display: grid; grid-template-rows: 56px minmax(0, 1fr) auto; min-width: 0; height: 100dvh; }
 .chat-scroll { position: relative; overflow-y: auto; overscroll-behavior: contain; padding: 34px clamp(18px, 6vw, 92px) 26px; }
-.inspector { position: fixed; z-index: 30; inset: 0 0 0 auto; width: min(410px, 100vw); display: grid; grid-template-rows: auto minmax(0, 1fr); border-left: 1px solid var(--border); background: var(--surface); box-shadow: -16px 0 40px var(--shadow); }
+.inspector { position: fixed; z-index: 30; inset: 0 0 0 auto; width: min(var(--inspector-width), 100vw); display: grid; grid-template-rows: auto minmax(0, 1fr); border-left: 1px solid var(--border); background: var(--surface); box-shadow: -16px 0 40px var(--shadow); }
 .inspector-body { overflow-y: auto; overscroll-behavior: contain; padding: 14px; }
 @media (max-width: 760px) { .app-shell { grid-template-columns: minmax(0, 1fr); }.sidebar { position: fixed; z-index: 40; inset: 0 auto 0 0; width: min(294px, 86vw); transform: translateX(-104%); transition: transform 160ms ease; box-shadow: 12px 0 36px var(--shadow); }.sidebar.is-open { transform: translateX(0); }.scrim { position: fixed; z-index: 35; inset: 0; display: block; border: 0; background: rgb(0 0 0 / 38%); }.mobile-only { display: inline-grid !important; }.chat-scroll { padding: 22px 14px; }.inspector { width: 100vw; padding-bottom: env(safe-area-inset-bottom); }.composer { margin: 8px 10px calc(8px + env(safe-area-inset-bottom)); } }
+
+/* 检查器覆盖主对话时只收窄输入区，不移动消息列。 */
+@media (min-width: 1100px) { .app-shell.is-inspector-open .composer { width: min(var(--chat-max-width), calc(100% - var(--inspector-width) - max(14px, calc((100% - var(--chat-max-width)) / 2)) - 14px)); margin-left: max(14px, calc((100% - var(--chat-max-width)) / 2)); margin-right: auto; } }
