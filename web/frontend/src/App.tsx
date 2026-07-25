@@ -199,7 +199,6 @@ export function App() {
 
   /** 删除经用户确认的非活动会话。 */
   const deleteSession = async (id: string) => {
-    if (!window.confirm("确定删除这个会话及其所有本地记录吗？")) return;
     await api.deleteSession(id);
     if (id === sessionId) navigate(null);
     await refreshSessions();
@@ -217,7 +216,7 @@ export function App() {
   const current = useMemo(() => [...sessions, ...archived].find((item) => item.id === sessionId), [archived, sessionId, sessions]);
   const currentTurnCount = Object.values(sessionState.turns).reduce((count, turn) => count + turn.events.length, 0);
 
-  return <div className="app-shell">
+  return <div className={`app-shell ${inspectorOpen ? "is-inspector-open" : ""}`}>
     <a className="skip-link" href="#main-content">跳到对话</a>
     <SessionSidebar active={sessions} archived={archived} currentId={sessionId} mobileOpen={mobileMenu} onCloseMobile={() => setMobileMenu(false)} onNew={() => navigate(null)} onSelect={navigate} onUpdate={updateSession} onDelete={deleteSession} onError={addNotice} />
     {mobileMenu && <button className="scrim" aria-label="关闭会话栏" onClick={() => setMobileMenu(false)} />}

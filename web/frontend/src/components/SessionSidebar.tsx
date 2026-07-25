@@ -21,6 +21,7 @@ export function SessionSidebar({ active, archived, currentId, mobileOpen, onClos
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<Session | null>(null);
+  const [deleting, setDeleting] = useState<Session | null>(null);
   const [title, setTitle] = useState("");
   const sidebarRef = useRef<HTMLElement>(null);
   const orderedActive = [...active].sort((left, right) => Number(right.pinned) - Number(left.pinned) || right.updated_at.localeCompare(left.updated_at));
@@ -28,7 +29,10 @@ export function SessionSidebar({ active, archived, currentId, mobileOpen, onClos
   useEffect(() => {
     /** 点击侧栏外部或按 Escape 时关闭会话菜单。 */
     const closeMenu = (event: PointerEvent | KeyboardEvent) => {
-      if (event instanceof KeyboardEvent && event.key === "Escape") setOpenMenuId(null);
+      if (event instanceof KeyboardEvent && event.key === "Escape") {
+        setOpenMenuId(null);
+        setDeleting(null);
+      }
       if (event instanceof PointerEvent && sidebarRef.current && !sidebarRef.current.contains(event.target as Node)) setOpenMenuId(null);
     };
     document.addEventListener("pointerdown", closeMenu);
@@ -71,13 +75,20 @@ export function SessionSidebar({ active, archived, currentId, mobileOpen, onClos
     onSelect(sessionId);
   };
 
-  return <aside ref={sidebarRef} className={`sidebar ${mobileOpen ? "is-open" : ""}`} aria-label="会话管理">
+  /** 删除已确认的会话并清理确认状态。 */
+  const deleteConfirmed = async () => {
+    if (!deleting) return;
+    await runAction(() => onDelete(deleting.id));
+    setDeleting(null);
+  };
+
+  return <><aside ref={sidebarRef} className={`sidebar ${mobileOpen ? "is-open" : ""}`} aria-label="会话管理">
     <header className="brand"><span className="brand-mark">TG</span><span>Turning Good</span><button className="icon-button mobile-only" title="关闭会话栏" aria-label="关闭会话栏" onClick={onCloseMobile}><X /></button></header>
     <button className="new-session" onClick={onNew}><FilePlus2 size={16} />新建会话</button>
-    <SessionList label="会话" items={orderedActive} currentId={currentId} openMenuId={openMenuId} onSelect={select} onMenu={setOpenMenuId} onRename={openRename} onAction={runAction} onUpdate={onUpdate} onDelete={onDelete} />
-    {archived.length > 0 && <section className="session-section archived-section"><button className="section-title" onClick={() => setArchivedOpen(!archivedOpen)}><ChevronDown size={14} className={archivedOpen ? "" : "rotated"} />已归档<span>{archived.length}</span></button>{archivedOpen && <SessionList items={archived} currentId={currentId} openMenuId={openMenuId} onSelect={select} onMenu={setOpenMenuId} onRename={openRename} onAction={runAction} onUpdate={onUpdate} onDelete={onDelete} archived />}</section>}
+    <SessionList label="会话" items={orderedActive} currentId={currentId} openMenuId={openMenuId} onSelect={select} onMenu={setOpenMenuId} onRename={openRename} onRequestDelete={setDeleting} onAction={runAction} onUpdate={onUpdate} onDelete={onDelete} />
+    {archived.length > 0 && <section className="session-section archived-section"><button className="section-title" onClick={() => setArchivedOpen(!archivedOpen)}><ChevronDown size={14} className={archivedOpen ? "" : "rotated"} />已归档<span>{archived.length}</span></button>{archivedOpen && <SessionList items={archived} currentId={currentId} openMenuId={openMenuId} onSelect={select} onMenu={setOpenMenuId} onRename={openRename} onRequestDelete={setDeleting} onAction={runAction} onUpdate={onUpdate} onDelete={onDelete} archived />}</section>}
     {renaming && <form className="rename-dialog" role="dialog" aria-label="重命名会话" onSubmit={(event) => void submitRename(event)}><label>会话名称<input name="session-title" autoComplete="off" value={title} onChange={(event) => setTitle(event.target.value)} /></label><div><button type="button" onClick={() => setRenaming(null)}>取消</button><button type="submit">保存</button></div></form>}
-  </aside>;
+  </aside>{deleting && <div className="confirm-layer"><section className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-session-title"><h2 id="delete-session-title">删除会话？</h2><p>将永久删除“{deleting.title}”及其本地记录。</p><div><button onClick={() => setDeleting(null)}>取消</button><button className="danger" onClick={() => void deleteConfirmed()}>删除会话</button></div></section></div>}</>;
 }
 
 type SessionListProps = Omit<SessionSidebarProps, "active" | "archived" | "mobileOpen" | "onCloseMobile" | "onNew" | "onError"> & {
@@ -86,13 +97,14 @@ type SessionListProps = Omit<SessionSidebarProps, "active" | "archived" | "mobil
   openMenuId: string | null;
   onMenu: (id: string | null) => void;
   onRename: (session: Session) => void;
+  onRequestDelete: (session: Session) => void;
   onAction: (action: () => Promise<void>) => Promise<void>;
   archived?: boolean;
 };
 
 /** 渲染一个会话列表，置顶标记保持在标题右侧固定位置。 */
-function SessionList({ label, items, currentId, openMenuId, onSelect, onMenu, onRename, onAction, onUpdate, onDelete, archived = false }: SessionListProps) {
-  const rows = <>{items.map((session) => <div className={`session-row ${session.id === currentId ? "selected" : ""}`} key={session.id}><button className="session-select" onClick={() => onSelect(session.id)}><span>{session.title}</span><span className="pin-slot">{session.pinned && <Pin size={13} fill="currentColor" aria-label="已置顶" />}</span></button><div className="session-actions"><button className="icon-button" title="会话操作" aria-label={`${session.title} 会话操作`} aria-expanded={openMenuId === session.id} onClick={() => onMenu(openMenuId === session.id ? null : session.id)}><MoreHorizontal size={15} /></button>{openMenuId === session.id && <div className="session-menu" role="menu"><button onClick={() => void onAction(async () => onUpdate(session.id, { pinned: !session.pinned }))}><Pin size={14} />{session.pinned ? "取消置顶" : "置顶"}</button><button onClick={() => onRename(session)}><SquarePen size={14} />重命名</button><button onClick={() => void onAction(async () => onUpdate(session.id, { archived: !archived }))}>{archived ? <RotateCcw size={14} /> : <Archive size={14} />}{archived ? "恢复" : "归档"}</button><button className="danger" onClick={() => void onAction(async () => onDelete(session.id))}><Trash2 size={14} />删除</button></div>}</div></div>)}</>;
+function SessionList({ label, items, currentId, openMenuId, onSelect, onMenu, onRename, onRequestDelete, onAction, onUpdate, onDelete, archived = false }: SessionListProps) {
+  const rows = <>{items.map((session) => <div className={`session-row ${session.id === currentId ? "selected" : ""}`} key={session.id}><button className="session-select" onClick={() => onSelect(session.id)}><span>{session.title}</span><span className="pin-slot">{session.pinned && <Pin size={13} fill="currentColor" aria-label="已置顶" />}</span></button><div className="session-actions"><button className="icon-button" title="会话操作" aria-label={`${session.title} 会话操作`} aria-expanded={openMenuId === session.id} onClick={() => onMenu(openMenuId === session.id ? null : session.id)}><MoreHorizontal size={15} /></button>{openMenuId === session.id && <div className="session-menu" role="menu"><button onClick={() => void onAction(async () => onUpdate(session.id, { pinned: !session.pinned }))}><Pin size={14} />{session.pinned ? "取消置顶" : "置顶"}</button><button onClick={() => onRename(session)}><SquarePen size={14} />重命名</button><button onClick={() => void onAction(async () => onUpdate(session.id, { archived: !archived }))}>{archived ? <RotateCcw size={14} /> : <Archive size={14} />}{archived ? "恢复" : "归档"}</button><button className="danger" onClick={() => { onMenu(null); onRequestDelete(session); }}><Trash2 size={14} />删除</button></div>}</div></div>)}</>;
   if (!label) return rows;
   return <section className="session-section"><div className="section-title"><PanelLeftClose size={14} />{label}<span>{items.length}</span></div>{rows}</section>;
 }
