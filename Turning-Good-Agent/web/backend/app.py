@@ -131,6 +131,18 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
                 event = await queue.get()
                 await websocket.send_json(event.as_dict())
 
+        async def send_action_error(message: str, client_action_id: str | None) -> None:
+            """返回可关联的动作错误，保持 WebSocket 连接可用。"""
+            payload: dict[str, str] = {"type": "error", "message": message}
+            if client_action_id:
+                payload["client_action_id"] = client_action_id
+            await websocket.send_json(payload)
+
+        def client_action_id(action: dict[str, Any]) -> str | None:
+            """读取前端生成的可选动作关联标识。"""
+            value = action.get("client_action_id")
+            return str(value) if value else None
+
         try:
             while True:
                 action = await websocket.receive_json()
@@ -151,27 +163,48 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
                         await websocket.send_json(event.as_dict())
                     forwarder = asyncio.create_task(forward_events(subscribed_queue))
                 elif action_type == "message.send":
-                    requested_id = action.get("session_id")
-                    session_id = str(requested_id or f"web-{uuid4()}")
-                    if requested_id:
-                        session = await runtime.sessions.store.load_session(session_id)
-                        if session is not None and session.archived:
-                            await websocket.send_json({"type": "error", "message": "请先恢复已归档会话"})
-                            continue
-                    request_id = await coordinator.send(session_id, str(action.get("content", "")), settings.user_id)
-                    await websocket.send_json({"type": "session.created", "session_id": session_id, "request_id": request_id})
+                    action_id = client_action_id(action)
+                    try:
+                        requested_id = action.get("session_id")
+                        session_id = str(requested_id or f"web-{uuid4()}")
+                        if requested_id:
+                            session = await runtime.sessions.store.load_session(session_id)
+                            if session is not None and session.archived:
+                                raise ValueError("请先恢复已归档会话")
+                        request_id = await coordinator.send(session_id, str(action.get("content", "")), settings.user_id)
+                    except (ValueError, RuntimeError) as exc:
+                        await send_action_error(str(exc), action_id)
+                    else:
+                        await websocket.send_json(
+                            {
+                                "type": "message.accepted",
+                                "session_id": session_id,
+                                "request_id": request_id,
+                                "client_action_id": action_id,
+                            }
+                        )
                 elif action_type == "guidance.send":
-                    await coordinator.send_guidance(str(action["session_id"]), str(action.get("content", "")))
+                    try:
+                        await coordinator.send_guidance(str(action.get("session_id", "")), str(action.get("content", "")))
+                    except (ValueError, RuntimeError) as exc:
+                        await send_action_error(str(exc), client_action_id(action))
                 elif action_type == "task.stop":
-                    await coordinator.stop(str(action["session_id"]))
+                    try:
+                        await coordinator.stop(str(action.get("session_id", "")))
+                    except (ValueError, RuntimeError) as exc:
+                        await send_action_error(str(exc), client_action_id(action))
                 elif action_type == "approval.resolve":
-                    resolved = await coordinator.resolve_approval(
-                        str(action["session_id"]), str(action["approval_id"]), bool(action.get("approved"))
-                    )
-                    if not resolved:
-                        await websocket.send_json({"type": "error", "message": "审批已失效"})
+                    action_id = client_action_id(action)
+                    try:
+                        resolved = await coordinator.resolve_approval(
+                            str(action.get("session_id", "")), str(action.get("approval_id", "")), bool(action.get("approved"))
+                        )
+                        if not resolved:
+                            raise RuntimeError("审批已失效")
+                    except (ValueError, RuntimeError) as exc:
+                        await send_action_error(str(exc), action_id)
                 else:
-                    await websocket.send_json({"type": "error", "message": "不支持的 WebSocket 动作"})
+                    await send_action_error("不支持的 WebSocket 动作", client_action_id(action))
         except WebSocketDisconnect:
             pass
         finally:
