@@ -8,6 +8,8 @@
 
 **Tech Stack:** React、TypeScript、Vite、react-dom、lucide-react、react-markdown、原生 CSS、Playwright（仅本地验证）。
 
+**状态：** 已完成 Task 1--6。当前环境无 Chromium，Playwright 截图验证待后续具备浏览器的环境补充。
+
 ## Global Constraints
 
 - 所有新增或修改函数添加精简中文注释。

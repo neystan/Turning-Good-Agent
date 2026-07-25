@@ -1,6 +1,6 @@
 # Web Workbench Interaction Redesign
 
-状态：已确认设计，待实施。
+状态：已完成。Playwright 截图验证待具备 Chromium 的环境补充。
 
 ## 目标
 
