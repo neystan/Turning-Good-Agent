@@ -18,7 +18,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   listSessions: (archived = false) => request<Session[]>(`/api/sessions?archived=${archived}`),
-  messages: (id: string) => request<ChatMessage[]>(`/api/sessions/${encodeURIComponent(id)}/messages`),
+  messages: (id: string, signal?: AbortSignal) =>
+    request<ChatMessage[]>(`/api/sessions/${encodeURIComponent(id)}/messages`, { signal }),
   observability: (id: string) => request<Observability>(`/api/sessions/${encodeURIComponent(id)}/observability`),
   patchSession: (id: string, payload: Partial<Pick<Session, "title" | "pinned" | "archived">>) =>
     request<Session>(`/api/sessions/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) }),

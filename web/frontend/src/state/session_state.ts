@@ -11,6 +11,7 @@ export type SessionState = {
 
 /** 描述前端会话状态的最小状态变更。 */
 export type SessionAction =
+  | { type: "session.reset" }
   | { type: "history.loaded"; messages: ChatMessage[] }
   | { type: "message.optimistic"; action: PendingActionInput }
   | { type: "action.accepted"; actionId: string; sessionId: string; requestId: string }
@@ -25,12 +26,25 @@ export function createSessionState(): SessionState {
 
 /** 将 WebSocket 和 REST 数据规整为可直接渲染的会话状态。 */
 export function applySessionAction(state: SessionState, action: SessionAction): SessionState {
-  if (action.type === "history.loaded") return { ...state, messages: action.messages };
+  if (action.type === "session.reset") return createSessionState();
+  if (action.type === "history.loaded") return { ...state, messages: mergeHistory(state.messages, action.messages) };
   if (action.type === "draft.pending") return { ...state, pendingDraft: action.content };
   if (action.type === "message.optimistic") return addOptimisticMessage(state, action.action);
   if (action.type === "action.accepted") return acceptAction(state, action);
   if (action.type === "action.failed") return failAction(state, action.actionId, action.message);
   return applyTaskEvent(state, action.event);
+}
+
+/** 合并已落盘历史与当前浏览器尚未消失的乐观消息。 */
+function mergeHistory(current: ChatMessage[], loaded: ChatMessage[]): ChatMessage[] {
+  const remaining = [...loaded];
+  const optimistic = current.filter((message) => message.client_action_id).filter((message) => {
+    const index = remaining.findIndex((item) => item.role === message.role && item.content === message.content);
+    if (index < 0) return true;
+    remaining.splice(index, 1);
+    return false;
+  });
+  return [...remaining, ...optimistic];
 }
 
 /** 添加尚未获服务端确认的用户消息。 */
