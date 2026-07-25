@@ -43,7 +43,7 @@ Phase 5 使用渐进式披露：每轮向模型注入全部有效 Skill 的极�
 ```
 
 - 外部 Skill 可直接复制到 `.skills/<skill-name>/`，或由用户明确请求后通过 `install_skill` 从公开 HTTPS Git URL 安装。安装只克隆到 `.skills/.staging/`，校验一个 Skill 后原子移动到正式目录；不支持 ZIP、Marketplace、自动更新、凭据 URL 或自动安装。
-- `.skills/.drafts/` 只保存 Creator 候选产物，扫描时忽略。
+- `.skills/.drafts/` 只保存 Creator 候选产物；`.skills/.staging/` 只保存安装临时内容。两者扫描时均忽略，异常遗留目录不会进入 Catalog 或错误列表。
 - Catalog 仅在 `runtime.start()` 扫描一次，或由未来 Web `/skill refresh` 显式刷新；CLI 运行期间不监听文件变化。
 
 ### 2.3 外部格式兼容

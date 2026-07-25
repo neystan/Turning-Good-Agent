@@ -16,8 +16,7 @@
 | Phase 1 | [Runtime MVP](./phases/2026-06-15-phase-1-runtime-mvp.md) | 已基本完成 |
 | Phase 2 | [真实 LLM、Tool Calling、CLI 流式输出与基础工具](./phases/2026-06-15-phase-2-real-llm-tool-calling.md) | 已完成 |
 | Phase 3 | [四个轻量 Hooks](./phases/2026-06-15-phase-3-hooks.md) | 已完成；含 Channel 输出、会话工具权限和只读 Turn Monitor |
-| Phase 4 | [MCP Client MVP](./phases/2026-06-15-phase-4-mcp-client.md) | 已完成；支持 stdio、Streamable HTTP、Catalog、会话级审批与当前轮附件 |
-| Phase 4 收口 | [MCP 审批与 Runtime 重构](./phases/2026-07-23-phase-4-mcp-runtime-refactor.md) | 已完成；统一审批、token 预算、压缩计划、工具调用与 Runtime 生命周期边界 |
+| Phase 4 | [MCP Client、审批与 Runtime 收口](./phases/2026-06-15-phase-4-mcp-client.md) | 已完成；支持 stdio、Streamable HTTP、Catalog、会话级审批、当前轮附件、后台 Worker 与连接级重试 |
 | Phase 5 | [Skills 机制](./phases/2026-06-15-phase-5-skills.md) | 计划中 |
 | Phase 6 | [Web 可观测面板](./phases/2026-06-15-phase-6-web-observability.md) | 计划中 |
 | Phase 7 | [主动能力与长期记忆](./phases/2026-06-15-phase-7-proactive-memory.md) | 计划中 |

@@ -482,7 +482,7 @@ Tools 当前约束：
 
 ## 10. Skills
 
-Phase 5 已完成。所有正式和外部 Skill 只位于项目根目录 `.skills/<name>/SKILL.md`，草稿只位于 `.skills/.drafts/`。外部 Skill 可直接复制，或在用户明确请求和审批后由 `install_skill` 从无凭据 HTTPS Git URL 克隆到 `.staging/`、校验后原子发布；不支持 ZIP、Marketplace、自动更新或自动安装。内置 `skill-creator`、`skill-installer` 与 `grilling` 分别提供创建/修改、外部安装和方案压力测试工作流；`grilling` 逐题澄清决策并在用户确认共识前不执行后续操作。它可携带 `agents/openai.yaml` 界面元数据，但当前 Runtime 只读取 `SKILL.md`，不解析或注入该文件。实际文件写入和 Git 克隆仍由既有审批 Tool 执行。`runtime.start()` 扫描一次，非法、目录名不匹配和重名 Skill 被隔离到 `SkillManager.errors`，不影响其他 Catalog；CLI 不监听目录，也不提供 `/skill` 命令。
+Phase 5 已完成。所有正式和外部 Skill 只位于项目根目录 `.skills/<name>/SKILL.md`，草稿只位于 `.skills/.drafts/`。外部 Skill 可直接复制，或在用户明确请求和审批后由 `install_skill` 从无凭据 HTTPS Git URL 克隆到 `.staging/`、校验后原子发布；不支持 ZIP、Marketplace、自动更新或自动安装。内置 `skill-creator`、`skill-installer` 与 `grilling` 分别提供创建/修改、外部安装和方案压力测试工作流；`grilling` 逐题澄清决策并在用户确认共识前不执行后续操作。它可携带 `agents/openai.yaml` 界面元数据，但当前 Runtime 只读取 `SKILL.md`，不解析或注入该文件。实际文件写入和 Git 克隆仍由既有审批 Tool 执行。`runtime.start()` 扫描一次，明确跳过 `.drafts/` 与 `.staging/`；非法、目录名不匹配和重名 Skill 被隔离到 `SkillManager.errors`，不影响其他 Catalog；CLI 不监听目录，也不提供 `/skill` 命令。
 
 根 system prompt 每轮注入全部有效 `name + description`。`load_skill(name)` 读取完整正文，以固定低优先级 system Attachment 仅加入当前 AgentLoop working messages；下一轮不会重放，也不写入 `session.json`、`messages.jsonl`、summary 或新的 JSONL。单轮最多 3 个，单个正文最多 8,000 tokens，正文总量最多 16,000 tokens；超限返回 Tool 错误且不截断正文。MCP Attachment 仍严格只允许 user/assistant role。
 

@@ -12,7 +12,7 @@ from .validator import SkillValidator
 
 
 class SkillManager:
-    """管理唯一 skills 目录的扫描、加载和发布。"""
+    """管理唯一 .skills 目录的扫描、加载和发布。"""
 
     def __init__(self, directory: Path, settings: SkillsSettings) -> None:
         """保存唯一目录、配置和内存 Catalog。"""
@@ -35,7 +35,7 @@ class SkillManager:
         candidates: dict[str, list[SkillManifest]] = {}
         errors: list[SkillScanError] = []
         for child in sorted(self.directory.iterdir(), key=lambda path: path.name):
-            if not child.is_dir() or child.name == ".drafts":
+            if not child.is_dir() or child.name in {".drafts", ".staging"}:
                 continue
             try:
                 manifest = self.validator.validate(child)

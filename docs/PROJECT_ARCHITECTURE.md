@@ -190,7 +190,7 @@ Tools 当前边界：
 | `.skills/grilling/SKILL.md` | 在用户要求压力测试方案、决策或想法时逐题追问并达成共识。 |
 | `.skills/grilling/agents/openai.yaml` | `grilling` 的可选界面元数据；当前 Runtime 不解析或注入该文件。 |
 
-边界：Runtime 仅在 `runtime.start()` 扫描，发布或安装后由 Manager 刷新 Catalog；CLI 不提供 slash Skill 命令，也不监听文件变化。根 system prompt 只注入所有有效 Skill 的 `name + description`。完整正文只在调用 `load_skill` 的 AgentLoop 当前轮出现，不写入会话、摘要或额外 JSONL。每轮正文限制为单个 8,000、最多 3 个、累计 16,000 tokens，并在追加前校验 working messages + OpenAI Tool schema 的 `max_context_tokens`。`create_skill_draft`、`publish_skill_draft` 和 `install_skill` 标记为审批写入 Tool；安装仅接受无凭据 HTTPS Git URL，在 `.staging/` 目录校验一个 Skill 后原子发布，拒绝覆盖与符号链接。`skill-creator`、`skill-installer` 与 `grilling` 是正式内置 Skill，分别约束草稿创建/发布、外部安装和方案压力测试；它们不替代实际的 Tool 审批和安全检查。
+边界：Runtime 仅在 `runtime.start()` 扫描，发布或安装后由 Manager 刷新 Catalog；扫描明确跳过 `.drafts/` 与 `.staging/`，避免异常遗留草稿或安装临时目录污染错误列表。CLI 不提供 slash Skill 命令，也不监听文件变化。根 system prompt 只注入所有有效 Skill 的 `name + description`。完整正文只在调用 `load_skill` 的 AgentLoop 当前轮出现，不写入会话、摘要或额外 JSONL。每轮正文限制为单个 8,000、最多 3 个、累计 16,000 tokens，并在追加前校验 working messages + OpenAI Tool schema 的 `max_context_tokens`。`create_skill_draft`、`publish_skill_draft` 和 `install_skill` 标记为审批写入 Tool；安装仅接受无凭据 HTTPS Git URL，在 `.staging/` 目录校验一个 Skill 后原子发布，拒绝覆盖与符号链接。`skill-creator`、`skill-installer` 与 `grilling` 是正式内置 Skill，分别约束草稿创建/发布、外部安装和方案压力测试；它们不替代实际的 Tool 审批和安全检查。
 
 ### 4.10 `mcp/`
 

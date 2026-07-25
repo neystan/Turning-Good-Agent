@@ -1,10 +1,10 @@
-# Turning-Good-Agent Phase 4 MCP Client Implementation Record
+# Turning-Good-Agent Phase 4 MCP Client 与 Runtime 收口
 
-状态：已完成；后续审批和 Runtime 边界收口见 `2026-07-23-phase-4-mcp-runtime-refactor.md`。
+状态：已完成。本文是 Phase 4 唯一权威实施记录，包含 MCP Client 初始实现、2026-07-23 审批与 Runtime 重构，以及 2026-07-24 后台 Worker 收口。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
-**Goal:** 基于官方 Python MCP SDK 接入 stdio 与 Streamable HTTP Server，将经用户许可的 MCP Tool 接入现有 ToolRegistry，并以轻量 Catalog、自然语言搜索和受控当前轮附件处理 MCP Resource 与 Prompt。
+**Goal:** 基于官方 Python MCP SDK 接入 stdio 与 Streamable HTTP Server，将经用户许可的 MCP Tool 接入现有 ToolRegistry，并以轻量 Catalog、自然语言搜索和受控当前轮附件处理 MCP Resource 与 Prompt；同时收口审批、Context、压缩、工具执行与 Runtime 生命周期边界。
 
 **Architecture:** `mcp/` 负责协议、连接、Server 生命周期和 Catalog；`McpManager` 是 Runtime 与 MCP 的唯一边界。每个启用 Server 由独立 `McpServerWorker` 在后台 Task 中持有 SDK Client，正常对话不等待连接完成。实际 MCP Tool 适配为 `BaseTool`，而 Resource/Prompt 不逐项生成 Tool schema；只有三个固定 MCP 控制 Tool 进入 ToolRegistry，用于搜索能力、读取已确认 Resource、应用已确认 Prompt。MCP 返回内容通过通用 `ContextAttachment` 只在当前 AgentLoop working messages 中可见，不写入对话历史或摘要。
 
@@ -321,6 +321,75 @@ class McpManager:
 - [x] **Step 5：提交**
   `git add README.md Turning-Good-Agent/runtime/runtime.py Turning-Good-Agent/cli.py`
   `git commit -m "feat: integrate mcp runtime lifecycle"`
+
+## 后续收口：审批、Context 与 Runtime（已完成）
+
+后续收口完成于 2026-07-23，并在 2026-07-24 完成 MCP 后台 Worker 生命周期。该部分不改变 Phase 4 的用户可见 MCP 能力，只将职责收回到对应模块，消除重复上下文和跨层审批策略。
+
+### 最终行为契约
+
+#### MCP 审批
+
+1. 所有包装后的远端 MCP Tool `mcp_<server>_<tool>` 默认审批。
+2. `attach_mcp_resource`、`apply_mcp_prompt` 默认审批；`search_mcp_capabilities` 只搜索本地内存 Catalog，不审批。
+3. 只有当前会话 `/approve on` 可以跳过人工确认；`/approve off` 恢复逐次确认。
+4. MCP Server 不支持 `auto_approve_tools`。本地配置出现该字段会明确报错，提示使用 `/approve on`。
+5. `readOnlyHint`、`destructiveHint` 等 MCP annotations 只作为 metadata 和未来展示信息，绝不参与审批决策。
+6. 自动审批只跳过人工确认，不能绕过 `security.py` 或 `ToolExecutor` 的执行前硬安全检查。
+
+#### Context、压缩与工具 schema
+
+1. `ContextBuilder` 只构造 system prompt、长期记忆、summary、`uncompacted_history` 和当前用户输入。
+2. Tool schema 仅通过 OpenAI-compatible 请求的 `tools` 参数发送，不再重复写入 system message。
+3. `context/token_budget.py` 是 BUILD 上限拒绝和 SAVE 上下文观测的唯一 token 分解入口，实际 `openai_tools` 只计算一次。
+4. `TurnContext` 不再保存 `full_history`、`history` 等重复历史；压缩虚拟历史直接从 `uncompacted_history` 构建。
+5. `ShortTermMemory.plan_compaction()` 负责压缩源、完整轮次 recent window 与统计；`state.py` 只协调状态、Hook 和持久化。
+
+#### ToolCallRunner 与当前轮附件
+
+1. `ToolCallRunner` 负责参数规范化、首次安全检查、审批 Hook、受限并发、执行、结果 Hook 和工具记录。
+2. `ToolExecutor` 只执行已准备 Tool，并在真正执行前再次进行硬安全检查。
+3. `AgentLoop` 只负责 LLM 循环、working messages、tool result 回注、合法 Attachment 注入和工具轮数上限收口。
+4. `ContextAttachment` 是通用 `ToolResult` 能力，当前由 MCP 生产；它只附加到本轮 working messages，不写入 `messages.jsonl`、summary、长期记忆或下一轮 Context。
+
+#### Runtime 与 MCP Worker 生命周期
+
+1. `AgentRuntime` 保留生命周期、会话锁、状态机驱动、trace 和 Channel 完成/错误回调职责，不承载 MCP 审批或复杂 token 预算。
+2. Runtime Host 启动时调用 `runtime.start()`；CLI、未来 Web、微信和飞书 Host 均复用 `runtime.start()` / `runtime.close()`，`ChannelAdapter` 不管理 MCP transport。
+3. 每个启用 Server 由独立 `McpServerWorker` 后台连接，首轮和普通会话不等待连接完成；完成发现后，显式启用的 Tool 才在后续 LLM 调用中可见。
+4. 连接级错误使用 `connect_retry_attempts`、`connect_retry_delay_seconds`、`connect_retry_max_delay_seconds` 做有限指数退避。权限、参数、资源不存在及 Tool 业务错误不触发重连；后续连接中断会开始新的重试周期。
+5. 每个 Worker 在创建 transport 的同一 Task 内关闭 Client。`AgentRuntime.close()` 是最终释放操作，不承诺同一 Runtime 可重启。
+
+### 模块边界
+
+| 文件 | 最终职责 |
+| --- | --- |
+| `config/settings.py` | 加载 MCP 连接、超时、显式 Tool allowlist 和有限重试配置；不含 MCP 自动审批配置。 |
+| `hooks/tool_permission.py` | 根据 Session 全局开关和 Tool 的 `approval_required` 决定审批。 |
+| `mcp/server_worker.py` | 在单独 Task 中拥有单 Server Client，负责连接、发现、调用、刷新、重试和关闭。 |
+| `mcp/manager.py` | 管理 Worker、Catalog、Tool 注册、调用转发与状态快照；不包含审批策略。 |
+| `tools/context_attachment.py` | 定义通用 `ContextAttachment` 及格式、token 预算校验。 |
+| `runtime/tool_call_runner.py` | 完成一批 ToolCall 的准备、审批、并发、执行与 Hook。 |
+| `runtime/agent_loop.py` | 完成 LLM、ToolCallRunner 与 working messages 循环。 |
+| `context/token_budget.py` | 计算 BUILD 拒绝判断与 SAVE 观测所用的唯一 token 分解。 |
+| `memory/short_term.py` | 生成并执行短期记忆压缩计划。 |
+| `runtime/state.py` | 处理状态流转和轻量编排，不实现压缩或 token 预算算法。 |
+| `runtime/runtime.py` | 驱动 Runtime、会话锁、状态机和 MCP 生命周期。 |
+
+### 实施证据与验证
+
+- `05bd0d3 refactor: simplify mcp approval policy`
+- `5d3059f refactor: centralize context token budget`
+- `60aecdc refactor: move compaction planning to memory`
+- `7b6efde refactor: isolate tool call execution`
+- `5b99cba docs: clarify mcp runtime lifecycle`
+- `8e38969 feat: configure mcp connection retries`
+- `d6ae0eb feat: run mcp servers in background workers`
+- `458c0e2 refactor: manage mcp workers asynchronously`
+- `77ddd62 feat: start mcp workers with runtime lifecycle`
+- `56b144b fix: restart mcp retries on manual refresh`
+
+最终验证（2026-07-24）：`pytest -q` 为 `194 passed`；`git diff --check` 通过；`printf '/exit\\n' | python -m Turning-Good-Agent chat` 正常启动并关闭 MCP Worker。
 
 ## 验收标准
 

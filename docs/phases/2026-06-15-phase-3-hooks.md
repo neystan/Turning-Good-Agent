@@ -207,4 +207,4 @@ printf '/exit\n' | python -m Turning-Good-Agent chat
 
 ## 后续关系
 
-Phase 4 MCP 已通过同一 `ToolRegistry` 接入，并复用 `ToolPermissionHook`、`ToolResultTruncationHook` 与 Channel 状态输出；其审批和 Runtime 收口见 `2026-07-23-phase-4-mcp-runtime-refactor.md`。Phase 6 Dashboard 应按 `turn_id` 聚合既有 `RESPOND`、RUN、COMPACT、SAVE trace 与 token/tool/message 文件。若未来需要实时推送，再独立设计 `observability/hub.py` 与 SSE/WebSocket，不放入当前 Hook 或 Channel 实现。
+Phase 4 MCP 已通过同一 `ToolRegistry` 接入，并复用 `ToolPermissionHook`、`ToolResultTruncationHook` 与 Channel 状态输出；其审批和 Runtime 收口见 `2026-06-15-phase-4-mcp-client.md`。Phase 6 Dashboard 应按 `turn_id` 聚合既有 `RESPOND`、RUN、COMPACT、SAVE trace 与 token/tool/message 文件。若未来需要实时推送，再独立设计 `observability/hub.py` 与 SSE/WebSocket，不放入当前 Hook 或 Channel 实现。
