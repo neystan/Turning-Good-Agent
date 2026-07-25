@@ -6,6 +6,7 @@ import { ChatTimeline } from "./components/ChatTimeline";
 import { Composer } from "./components/Composer";
 import { NoticeRegion } from "./components/NoticeRegion";
 import { SessionInspector } from "./components/SessionInspector";
+import { SessionSearchDialog } from "./components/SessionSearchDialog";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { ThinkingTrail } from "./components/ThinkingTrail";
 import { SessionHistoryLoader } from "./state/history_loader";
@@ -33,6 +34,7 @@ export function App() {
   const [autoApprove, setAutoApprove] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">(() => localStorage.getItem("tga-theme") === "light" ? "light" : "dark");
   const [mobileMenu, setMobileMenu] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [notices, setNotices] = useState<{ id: string; message: string }[]>([]);
   const socketRef = useRef<SessionSocketClient | null>(null);
@@ -218,7 +220,7 @@ export function App() {
 
   return <div className={`app-shell ${inspectorOpen ? "is-inspector-open" : ""}`}>
     <a className="skip-link" href="#main-content">跳到对话</a>
-    <SessionSidebar active={sessions} archived={archived} currentId={sessionId} mobileOpen={mobileMenu} onCloseMobile={() => setMobileMenu(false)} onNew={() => navigate(null)} onSelect={navigate} onUpdate={updateSession} onDelete={deleteSession} onError={addNotice} />
+    <SessionSidebar active={sessions} archived={archived} currentId={sessionId} mobileOpen={mobileMenu} onCloseMobile={() => setMobileMenu(false)} onNew={() => navigate(null)} onOpenSearch={() => setSearchOpen(true)} onSelect={navigate} onUpdate={updateSession} onDelete={deleteSession} onError={addNotice} />
     {mobileMenu && <button className="scrim" aria-label="关闭会话栏" onClick={() => setMobileMenu(false)} />}
     <main id="main-content" className="conversation">
       <header className="topbar">
@@ -232,6 +234,7 @@ export function App() {
       <Composer session={current} running={sessionState.running} draft={draft || sessionState.pendingDraft} autoApprove={autoApprove} onDraftChange={changeDraft} onSend={() => send()} onStop={stop} onRestore={() => current && void updateSession(current.id, { archived: false })} onAutoApproveChange={(enabled) => void setApproval(enabled)} />
     </main>
     {inspectorOpen && <SessionInspector data={inspector} onClose={() => setInspectorOpen(false)} />}
+    <SessionSearchDialog open={searchOpen} sessions={[...sessions, ...archived]} currentId={sessionId} onClose={() => setSearchOpen(false)} onSelect={navigate} />
     <NoticeRegion notices={notices} onDismiss={dismissNotice} />
   </div>;
 }

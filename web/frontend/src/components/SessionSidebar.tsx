@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Archive, ChevronDown, FilePlus2, MoreHorizontal, PanelLeftClose, Pin, RotateCcw, SquarePen, Trash2, X } from "lucide-react";
+import { Archive, ChevronDown, FilePlus2, MoreHorizontal, PanelLeftClose, Pin, RotateCcw, Search, SquarePen, Trash2, X } from "lucide-react";
 
 import { OverlayPortal } from "./OverlayPortal";
 import type { Session } from "../types";
@@ -11,6 +11,7 @@ type SessionSidebarProps = {
   mobileOpen: boolean;
   onCloseMobile: () => void;
   onNew: () => void;
+  onOpenSearch: () => void;
   onSelect: (id: string) => void;
   onUpdate: (id: string, payload: Partial<Pick<Session, "title" | "pinned" | "archived">>) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
@@ -23,7 +24,7 @@ type MenuState = {
 };
 
 /** 渲染带受控操作菜单的会话侧栏。 */
-export function SessionSidebar({ active, archived, currentId, mobileOpen, onCloseMobile, onNew, onSelect, onUpdate, onDelete, onError }: SessionSidebarProps) {
+export function SessionSidebar({ active, archived, currentId, mobileOpen, onCloseMobile, onNew, onOpenSearch, onSelect, onUpdate, onDelete, onError }: SessionSidebarProps) {
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [renaming, setRenaming] = useState<Session | null>(null);
@@ -77,7 +78,7 @@ export function SessionSidebar({ active, archived, currentId, mobileOpen, onClos
 
   return <><aside className={`sidebar ${mobileOpen ? "is-open" : ""}`} aria-label="会话管理">
     <header className="brand"><span className="brand-mark">TG</span><span>Turning Good</span><button className="icon-button mobile-only" title="关闭会话栏" aria-label="关闭会话栏" onClick={onCloseMobile}><X /></button></header>
-    <button className="new-session" onClick={onNew}><FilePlus2 size={16} />新建会话</button>
+    <div className="sidebar-commands"><button className="new-session" onClick={onNew}><FilePlus2 size={16} />新建会话</button><button className="icon-button" title="搜索会话" aria-label="搜索会话" onClick={onOpenSearch}><Search size={16} /></button></div>
     <SessionList label="会话" items={orderedActive} currentId={currentId} onSelect={select} onMenu={toggleMenu} />
     {archived.length > 0 && <section className="session-section archived-section"><button className="section-title" onClick={() => setArchivedOpen(!archivedOpen)}><ChevronDown size={14} className={archivedOpen ? "" : "rotated"} />已归档<span>{archived.length}</span></button>{archivedOpen && <SessionList items={archived} currentId={currentId} onSelect={select} onMenu={toggleMenu} />}</section>}
   </aside>{menu && <OverlayPortal anchor={menu.anchor} onDismiss={() => setMenu(null)}><SessionMenu session={menu.session} onClose={() => setMenu(null)} onRename={openRename} onDelete={setDeleting} onAction={runAction} onUpdate={onUpdate} /></OverlayPortal>}{renaming && <OverlayPortal className="overlay-dialog-layer" onDismiss={() => setRenaming(null)}><form className="rename-dialog" role="dialog" aria-modal="true" aria-label="重命名会话" onSubmit={(event) => void submitRename(event)}><label>会话名称<input name="session-title" autoComplete="off" autoFocus value={title} onChange={(event) => setTitle(event.target.value)} /></label><div><button type="button" onClick={() => setRenaming(null)}>取消</button><button type="submit">保存</button></div></form></OverlayPortal>}{deleting && <OverlayPortal className="confirm-layer" onDismiss={() => setDeleting(null)}><section className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-session-title"><h2 id="delete-session-title">删除会话？</h2><p>将永久删除“{deleting.title}”及其本地记录。</p><div><button onClick={() => setDeleting(null)}>取消</button><button className="danger" onClick={() => void deleteConfirmed()}>删除会话</button></div></section></OverlayPortal>}</>;
