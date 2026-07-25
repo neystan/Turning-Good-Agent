@@ -1,9 +1,18 @@
 import type { ChatMessage, Observability, Session } from "./types";
 
+/** 保存 REST 调用失败时的状态码与后端错误内容。 */
+export class ApiError extends Error {
+  /** 创建可供通知区显示的 REST 错误。 */
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 /** 调用本机 Web Host 的 REST 接口并统一转换错误。 */
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
-  if (!response.ok) throw new Error(await response.text() || "请求失败");
+  if (!response.ok) throw new ApiError(response.status, await response.text() || "请求失败");
   return response.status === 204 ? (undefined as T) : response.json() as Promise<T>;
 }
 
