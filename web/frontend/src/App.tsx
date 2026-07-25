@@ -8,7 +8,7 @@ import { NoticeRegion } from "./components/NoticeRegion";
 import { SessionInspector } from "./components/SessionInspector";
 import { SessionSearchDialog } from "./components/SessionSearchDialog";
 import { SessionSidebar } from "./components/SessionSidebar";
-import { ThinkingTrail } from "./components/ThinkingTrail";
+import { ActivityCluster } from "./components/ActivityCluster";
 import { SessionHistoryLoader } from "./state/history_loader";
 import { applySessionAction, createSessionState } from "./state/session_state";
 import { SessionSocketClient } from "./state/socket_client";
@@ -229,7 +229,7 @@ export function App() {
         <div className="title-block"><span className={`connection-dot ${sessionState.running ? "is-running" : ""}`} aria-hidden="true" /><h1>{current?.title || "新建会话"}</h1><span className="connection-label">{connectionLabel(connection)}</span>{current?.archived && <span className="readonly">已归档</span>}</div>
         <div className="top-actions"><button className="icon-button" title="切换主题" aria-label="切换主题" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun /> : <Moon />}</button><button className="icon-button" title="打开会话检查器" aria-label="打开会话检查器" disabled={!sessionId} onClick={() => void openInspector()}><PanelRight /></button></div>
       </header>
-      <ChatTimeline sessionId={sessionId} messages={sessionState.messages} turns={sessionState.turns} contentVersion={currentTurnCount} composerRef={composerRef} onRetry={retryMessage} renderTurn={(turn) => <ThinkingTrail key={turn.requestId} turn={turn} onResolveApproval={resolveApproval} />}>
+      <ChatTimeline sessionId={sessionId} messages={sessionState.messages} turns={sessionState.turns} contentVersion={currentTurnCount} composerRef={composerRef} onRetry={retryMessage} renderTurn={(turn) => <ActivityCluster key={turn.requestId} turn={turn} onResolveApproval={resolveApproval} />}>
         {!sessionId && sessionState.messages.length === 0 && <div className="empty-state"><span className="empty-kicker">LOCAL AGENT</span><h2>开始一个工作会话</h2><p>首条消息发送后才会创建本地会话记录。</p></div>}
       </ChatTimeline>
       <Composer rootRef={composerRef} session={current} running={sessionState.running} draft={draft || sessionState.pendingDraft} autoApprove={autoApprove} onDraftChange={changeDraft} onSend={() => send()} onStop={stop} onRestore={() => current && void updateSession(current.id, { archived: false })} onAutoApproveChange={(enabled) => void setApproval(enabled)} />
