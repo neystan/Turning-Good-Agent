@@ -78,7 +78,7 @@ class AgentRuntime:
     def create_default(cls, settings: Settings, llm: LLMProvider) -> "AgentRuntime":
         """创建 MVP 默认 Runtime 配置"""
         store = JsonlSessionStore(settings.data_dir)
-        sessions = SessionManager(store)
+        sessions = SessionManager(store, settings)
         tools = ToolRegistry()
         ToolLoader().load(tools, settings)
         skills = SkillManager(Path.cwd() / settings.skills.directory, settings.skills)
@@ -120,7 +120,7 @@ class AgentRuntime:
     ) -> OutboundMessage:
         """执行一轮消息处理并返回出站消息。"""
         turn_started = time.perf_counter()
-        ctx = TurnContext(inbound=msg, channel_adapter=self.channel_router.create(msg.channel))
+        ctx = TurnContext(inbound=msg, channel_adapter=self.channel_router.create(msg))
         lock_wait_started = time.perf_counter()
         lock = self.sessions.locks.lock_for(msg.session_id)
         async with lock:

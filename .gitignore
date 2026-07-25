@@ -8,3 +8,6 @@ docs/
 SESSIONS_SPEC.md
 .skills/.drafts/
 .skills/.staging/
+web/static/
+web/frontend/node_modules/
+web/frontend/*.tsbuildinfo

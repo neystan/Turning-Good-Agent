@@ -32,7 +32,7 @@ class JsonlSessionStore:
     async def create_session(self, session_id: str, user_id: str, channel: str) -> Session:
         """创建新会话并写入独立目录。"""
         now = utc_now_iso()
-        session = Session(session_id, user_id, channel, session_id, "", False, [], now, now)
+        session = Session(session_id, user_id, channel, session_id, "", False, False, [], now, now)
         session_dir = self._new_session_dir(session_id, now)
         session_dir.mkdir(parents=True, exist_ok=True)
         self._write_session(session, session_dir)
@@ -111,14 +111,40 @@ class JsonlSessionStore:
         session.updated_at = utc_now_iso()
         self._write_session(session)
 
-    async def update_auto_approve_tools(self, session_id: str, enabled: bool) -> None:
-        """更新会话工具自动审批状态。"""
+    async def list_sessions(self, archived: bool | None = None) -> list[Session]:
+        """读取会话列表并按置顶和最后活动时间排序。"""
+        sessions = [
+            self._dict_to_session(json.loads((path / "session.json").read_text(encoding="utf-8")))
+            for path in self._all_session_dirs()
+            if (path / "session.json").exists()
+        ]
+        if archived is not None:
+            sessions = [item for item in sessions if item.archived is archived]
+        sessions.sort(key=lambda item: item.updated_at, reverse=True)
+        sessions.sort(key=lambda item: not item.pinned)
+        return sessions
+
+    async def update_session_metadata(
+        self,
+        session_id: str,
+        *,
+        title: str | None = None,
+        pinned: bool | None = None,
+        archived: bool | None = None,
+    ) -> Session | None:
+        """更新会话可管理元数据。"""
         session = await self.load_session(session_id)
         if session is None:
-            return
-        session.auto_approve_tools = enabled
+            return None
+        if title is not None:
+            session.title = title
+        if pinned is not None:
+            session.pinned = pinned
+        if archived is not None:
+            session.archived = archived
         session.updated_at = utc_now_iso()
         self._write_session(session)
+        return session
 
     async def update_uncompacted_history(self, session_id: str, history: list[MessageRecord]) -> None:
         """更新会话未压缩上下文窗口。"""
@@ -185,6 +211,14 @@ class JsonlSessionStore:
     async def all_tool_calls(self, session_id: str) -> list[ToolCallRecord]:
         """读取指定会话的全部工具调用记录。"""
         return [self._dict_to_tool_call(row) for row in self._read_jsonl(self._tool_calls_file(session_id))]
+
+    async def all_turn_traces(self, session_id: str) -> list[dict[str, Any]]:
+        """读取指定会话的全部状态追踪。"""
+        return self._read_jsonl(self._traces_file(session_id))
+
+    async def all_true_token_usage(self, session_id: str) -> list[dict[str, Any]]:
+        """读取指定会话的全部真实 token 用量。"""
+        return self._read_jsonl(self._true_tokens_file(session_id))
 
     async def last_total_tokens(self, session_id: str) -> int:
         """读取当前会话最后一条累计 token。"""
@@ -313,7 +347,8 @@ class JsonlSessionStore:
             channel=row["channel"],
             title=row["title"],
             summary=row["summary"],
-            auto_approve_tools=bool(row.get("auto_approve_tools", False)),
+            pinned=bool(row.get("pinned", False)),
+            archived=bool(row.get("archived", False)),
             uncompacted_history=uncompacted_history,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -327,7 +362,8 @@ class JsonlSessionStore:
             "channel": session.channel,
             "title": session.title,
             "summary": session.summary,
-            "auto_approve_tools": session.auto_approve_tools,
+            "pinned": session.pinned,
+            "archived": session.archived,
             "uncompacted_history": [
                 self._context_message_to_dict(record)
                 for record in session.uncompacted_history

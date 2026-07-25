@@ -87,6 +87,14 @@ class CliChannelAdapter:
         answer = input(f"\n[审批] 允许执行 {call.name} {args}？[y/N] ").strip().lower()
         return None if answer in {"y", "yes", "允许"} else "用户拒绝执行工具"
 
+    async def consume_guidance(self) -> list[str]:
+        """CLI 当前不支持运行中追加引导。"""
+        return []
+
+    def is_stop_requested(self) -> bool:
+        """CLI 当前不支持独立停止请求。"""
+        return False
+
     async def _animate_tools(self) -> None:
         """周期性重绘全部运行中工具。"""
         dots = 1

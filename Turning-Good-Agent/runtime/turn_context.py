@@ -22,6 +22,8 @@ class TurnContext:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     loaded_skill_names: list[str] = field(default_factory=list)
     loaded_skill_token_count: int = 0
+    consumed_guidance: list[str] = field(default_factory=list)
+    cancelled: bool = False
     llm_usage: Any | None = None
     trace: list[Any] = field(default_factory=list)
     saved_trace_count: int = 0

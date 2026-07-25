@@ -4,12 +4,15 @@
 
 ## 1. 项目定位
 
-Turning-Good-Agent 是一个轻量 Runtime-first 通用 Agent。当前仓库处于 MVP 阶段，主路径是 CLI 对话、会话存储、短期压缩、基础工具调用、MCP 与本地 Skills。Phase 2、Phase 3 Hooks、Phase 4 MCP Client/Runtime 收口，以及 Phase 5 Skills 均已完成。
+Turning-Good-Agent 是一个轻量 Runtime-first 通用 Agent。当前仓库处于 MVP 阶段，主路径是 CLI/Web 对话、会话存储、短期压缩、基础工具调用、MCP 与本地 Skills。Phase 2、Phase 3 Hooks、Phase 4 MCP Client/Runtime 收口、Phase 5 Skills 和 Phase 6 Web Channel 均已完成。
 
 当前运行入口：
 
 ```bash
 python -m Turning-Good-Agent chat
+
+# 本机 Web 工作台
+python -m Turning-Good-Agent web
 ```
 
 当前真实模型能力：
@@ -25,6 +28,7 @@ python -m Turning-Good-Agent chat
 | --- | --- |
 | `Turning-Good-Agent/` | 主 Python 包，包含 runtime、session、context、tools、llm、memory 等核心代码。 |
 | `docs/` | 项目文档目录，包含当前 spec、架构说明、阶段计划和历史文档。 |
+| `web/frontend/` | React、TypeScript、Vite 的 Web 工作台源代码；构建产物 `web/static/` 不提交。 |
 | `settings.example.json` | 本地配置模板。 |
 | `settings.local.json` | 本地私有配置文件，实际运行时优先读取，已被 `.gitignore` 忽略。 |
 | `.sessions/` | 默认运行数据目录，保存 session、messages、trace、token usage，已被 `.gitignore` 忽略。 |
@@ -68,7 +72,7 @@ python -m Turning-Good-Agent chat
 
 | 路径 | 作用 |
 | --- | --- |
-| `config/settings.py` | 定义 Runtime、Memory、Session、ToolPermission、MCP、Skills、LLM 配置和 `Settings.load()`；MCP Server 不支持单独自动审批配置，并可配置连接重试。 |
+| `config/settings.py` | 定义 Runtime、Memory、Session、ToolPermission、Web、MCP、Skills、LLM 配置和 `Settings.load()`；全局自动批准写入本地配置，MCP Server 不支持单独自动审批配置。 |
 
 当前配置路径只有项目根目录的 `settings.local.json`。`Settings.load()` 不再支持 `TGA_*` 环境变量覆盖。
 
@@ -85,16 +89,20 @@ python -m Turning-Good-Agent chat
 | `runtime/attachment_manager.py` | 管理当前轮 MCP/Skill Attachment 的角色边界、独立预算、总上下文检查和 Skill 观测。 |
 | `runtime/tool_call_runner.py` | 负责工具参数规范化、审批 Hook、并发调度、双重安全检查、执行和结果 Hook。 |
 
+`AgentLoop` 在每次 LLM 请求和每批 Tool 前后读取当前 Channel 的 `TurnControl`：运行中 guidance 以固定 user 包装只追加当前 working messages，Stop 则在安全检查点阻止新的 LLM/Tool 调用。已消费 guidance 与取消回复仍由既有 `SAVE` 持久化。
+
 ### 4.5 `sessions/`
 
 职责：会话生命周期和 JSON 文件存储。
 
 | 路径 | 作用 |
 | --- | --- |
-| `sessions/types.py` | 定义 `Session` 和 `MessageRecord`，其中 `Session.auto_approve_tools` 保存会话级自动审批开关。 |
+| `sessions/types.py` | 定义 `Session` 和 `MessageRecord`；Session 保存 title、pinned、archived、summary 和未压缩历史。 |
 | `sessions/store.py` | JSON/JSONL 文件存储实现。每个 session 使用独立目录。 |
 | `sessions/manager.py` | 处理 `/history`、`/context`、`/tools`、`/approve`、`/clear`、`/new`、`/exit` 等命令。 |
 | `sessions/locks.py` | 按 session_id 提供异步锁，避免同一会话并发写入。 |
+
+Web 会话列表先按 `pinned`、再按 `updated_at` 排序。运行中、等待审批和 stopping 会话只能置顶或重命名，不能归档或删除。`tool_permissions.auto_approve_tools` 是跨 CLI/Web 的唯一自动批准策略，不再写入 `session.json`。
 
 默认数据结构：
 
@@ -209,11 +217,11 @@ Tools 当前边界：
 
 - 只支持 stdio 与 Streamable HTTP；不支持旧 SSE、OAuth 或远程审批。
 - `enabled_tools` 默认空列表，MCP Tool 只有显式启用后才进入 `ToolRegistry`。
-- 所有远端 MCP Tool、Resource 与 Prompt 附件默认审批；只有会话 `/approve on` 可统一跳过，annotations 不参与审批。
+- 所有远端 MCP Tool、Resource 与 Prompt 附件默认审批；只有全局 `/approve on` 或 Web 自动批准开关可统一跳过，annotations 不参与审批。
 - Resource 与 Prompt 仅以 Catalog 存在；经用户确认后才作为通用当前轮 Attachment 注入，且不持久化到消息或摘要。
 - `McpManager` 是未来 Web 一键增删启停的唯一服务边界。
 - Runtime Host 启动时调用 `runtime.start()`，不等待任何 MCP Server；每个 Server 独立后台连接，连接级错误按配置退避重试，业务 Tool 错误不重连。
-- Web、微信和飞书 Host 未来只调用 `runtime.start()` / `runtime.close()`，不在 `ChannelAdapter` 内管理 MCP transport。
+- Web Host 已调用 `runtime.start()` / `runtime.close()`；微信和飞书 Host 后续也只复用这一生命周期，不在 `ChannelAdapter` 内管理 MCP transport。
 
 ### 4.11 `llm/`
 
@@ -308,16 +316,29 @@ Tools 当前边界：
 | 路径 | 作用 |
 | --- | --- |
 | `hooks/events.py` | hook 事件定义骨架。 |
-| `hooks/base.py` | 定义工具调用前后、工具开始和压缩前后的 Hook 接口；工具前 Hook 接收标准化调用、当前 `ChannelAdapter` 和会话自动审批开关。 |
+| `hooks/base.py` | 定义工具调用前后、工具开始和压缩前后的 Hook 接口；工具前 Hook 接收标准化调用、当前 `ChannelAdapter` 和全局自动审批开关。 |
 | `hooks/manager.py` | 按注册顺序执行 Hook，并隔离单个 Hook 异常。 |
 | `hooks/channel_status.py` | 向当前 `ChannelAdapter` 输出工具开始、结束与压缩状态。 |
-| `hooks/tool_permission.py` | 对配置中的审批类工具读取会话自动审批状态，必要时委托当前 `ChannelAdapter` 确认。 |
+| `hooks/tool_permission.py` | 对配置中的审批类工具读取全局自动审批状态，必要时委托当前 `ChannelAdapter` 确认。 |
 | `hooks/tool_result_truncation.py` | 按工具类型和 token 上限截断模型可见结果。 |
 | `hooks/turn_monitor.py` | 在可持久化会话结束时计算 RESPOND 终态监控字段。 |
 
-`channels/base.py` 定义 `ChannelAdapter`、`SilentChannelAdapter` 和 `ChannelRouter`。CLI 的 `CliChannelAdapter` 在同一类中实现流式输出、工具状态、最终响应和 `y/N` 工具审批；未知或尚未接入的 Channel 使用静默适配器，并对审批类工具返回“当前 Channel 不支持工具审批。”。
+`channels/base.py` 定义 `ChannelAdapter`、`SilentChannelAdapter`、`TurnControl` 和 `ChannelRouter`。CLI 的 `CliChannelAdapter` 实现流式输出、工具状态、最终响应和 `y/N` 工具审批；`channels/web.py` 的 `WebChannelAdapter` 只把相同回调映射为会话实时事件，并实现 guidance/Stop/审批控制。未知或尚未接入的 Channel 使用静默适配器，并对审批类工具返回“当前 Channel 不支持工具审批。”。
 
-第一版调用关系：
+### 4.14 `web/`
+
+职责：为本机单用户提供 Web Channel Host，不复制 Runtime 业务规则。
+
+| 路径 | 作用 |
+| --- | --- |
+| `web/backend/app.py` | 创建 FastAPI lifespan、REST API、WebSocket endpoint 和本地静态资源托管。 |
+| `web/backend/coordinator.py` | 调度单会话 turn、guidance、Stop、审批 Future、全局并发槽位和 MessageBus 消费。 |
+| `web/backend/events.py` | 保存每会话有界 WebSocket 事件窗口、订阅与快照回退。 |
+| `web/frontend/` | React、TypeScript、Vite 工作台源代码，包含会话栏、聊天、任务轨迹、审批和检查器。 |
+
+Web Host 的 `runtime.start()` / `runtime.close()` 只在 FastAPI lifespan 中调用一次。REST 只读取既有会话与观测文件，WebSocket 只传输内存事件，不新增 JSONL；草稿只存在浏览器，首条非空消息才创建 session。
+
+第一版 Hook 调用关系：
 
 ```text
 ToolCallRunner: Schema -> security -> ToolPermissionHook -> Channel tool notice -> ToolExecutor security -> result truncation
@@ -337,13 +358,13 @@ RESPOND:   TurnMonitorHook -> RESPOND trace metadata
 - hook 不替代 MessageBus。MessageBus 负责 channel 与 Runtime 通信，hook 负责 Runtime 内部生命周期扩展。
 - hook 不替代 tools 或 skills。tools 执行动作，skills 提供上下文指令，hook 负责在明确时机执行策略或副作用。
 - hook 不替代 `.sessions` 核心持久化。Session、message、tool call、token 和 trace 仍由现有 Store 可靠落盘。
-- 当前不持久化审批请求，不实现跨 Channel 审批和暂停恢复；会话自动审批开关会随 `session.json` 持久化。
+- 当前不持久化审批请求，不实现跨 Channel 审批和暂停恢复；唯一自动批准开关持久化在 `settings.local.json`。
 
 security 预检在 `ToolPermissionHook` 前执行，ToolExecutor 在真实执行前再次校验。自动审批或用户允许都不能绕过路径、命令和 URL 的硬安全限制。
 
 参考 nanobot 的顺序组合方式，但只保留当前四个实际功能，不建设完整 Hook 平台。
 
-### 4.14 `proactive/`
+### 4.15 `proactive/`
 
 职责：主动能力扩展入口。
 

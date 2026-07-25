@@ -41,6 +41,17 @@ class ToolPermissionSettings:
     approval_required_tools: list[str] = field(
         default_factory=lambda: ["write_file", "edit_file", "exec", "write_stdin"]
     )
+    auto_approve_tools: bool = False
+
+
+@dataclass(slots=True)
+class WebSettings:
+    """保存本机 Web Host 的运行参数。"""
+
+    host: str = "127.0.0.1"
+    port: int = 8000
+    max_concurrent_sessions: int = 6
+    event_buffer_size: int = 512
 
 
 @dataclass(slots=True)
@@ -108,9 +119,11 @@ class Settings:
     memory: MemorySettings = field(default_factory=MemorySettings)
     sessions: SessionSettings = field(default_factory=SessionSettings)
     tool_permissions: ToolPermissionSettings = field(default_factory=ToolPermissionSettings)
+    web: WebSettings = field(default_factory=WebSettings)
     mcp: McpSettings = field(default_factory=McpSettings)
     skills: SkillsSettings = field(default_factory=SkillsSettings)
     llm: LLMSettings = field(default_factory=LLMSettings)
+    local_config_path: Path | None = field(default=None, repr=False)
 
     @classmethod
     def load(
@@ -122,6 +135,7 @@ class Settings:
         """从本地配置文件加载集中配置。"""
         settings = cls()
         config_path = local_config_path or Path.cwd() / "settings.local.json"
+        settings.local_config_path = config_path
         if config_path.exists():
             payload = json.loads(config_path.read_text(encoding="utf-8"))
             if "data_dir" in payload:
@@ -153,6 +167,9 @@ class Settings:
             tool_permissions = payload.get("tool_permissions", {})
             if "approval_required_tools" in tool_permissions:
                 settings.tool_permissions.approval_required_tools = tool_permissions["approval_required_tools"]
+            if "auto_approve_tools" in tool_permissions:
+                settings.tool_permissions.auto_approve_tools = bool(tool_permissions["auto_approve_tools"])
+            settings.web = _load_web_settings(payload.get("web", {}))
             settings.mcp = _load_mcp_settings(payload.get("mcp", {}))
             settings.skills = _load_skills_settings(payload.get("skills", {}))
             llm = payload.get("llm", {})
@@ -174,6 +191,17 @@ class Settings:
             settings.default_session_id = default_session_id
         return settings
 
+    def update_auto_approve_tools(self, enabled: bool) -> None:
+        """更新并持久化全局工具自动审批开关。"""
+        self.tool_permissions.auto_approve_tools = enabled
+        path = self.local_config_path or Path.cwd() / "settings.local.json"
+        payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        permissions = payload.setdefault("tool_permissions", {})
+        if not isinstance(permissions, dict):
+            raise ValueError("tool_permissions 必须是 object")
+        permissions["auto_approve_tools"] = enabled
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
 
 def _load_mcp_settings(payload: object) -> McpSettings:
     """解析并校验 MCP 本地配置。"""
@@ -194,6 +222,25 @@ def _load_mcp_settings(payload: object) -> McpSettings:
     if not isinstance(servers, dict):
         raise ValueError("mcp.servers 必须是 object")
     settings.servers = {str(name): _load_mcp_server(str(name), value) for name, value in servers.items()}
+    return settings
+
+
+def _load_web_settings(payload: object) -> WebSettings:
+    """解析并校验本机 Web Host 配置。"""
+    if not isinstance(payload, dict):
+        raise ValueError("web 必须是 object")
+    settings = WebSettings()
+    if "host" in payload:
+        host = str(payload["host"])
+        if host not in {"127.0.0.1", "localhost", "::1"}:
+            raise ValueError("web.host 仅支持本机监听地址")
+        settings.host = host
+    for key in ("port", "max_concurrent_sessions", "event_buffer_size"):
+        if key in payload:
+            value = int(payload[key])
+            if value <= 0:
+                raise ValueError(f"web.{key} 必须大于 0")
+            setattr(settings, key, value)
     return settings
 
 

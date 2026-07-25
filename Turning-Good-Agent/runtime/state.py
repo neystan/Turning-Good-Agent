@@ -123,13 +123,15 @@ async def run(runtime: AgentRuntime, ctx: TurnContext) -> str:
     result = await runtime.agent_loop.run(
         ctx.model_messages,
         ctx.channel_adapter,
-        ctx.session.auto_approve_tools,
+        runtime.settings.tool_permissions.auto_approve_tools,
     )
     ctx.final_content = result.final_content
     ctx.tool_calls = result.tool_calls
     ctx.llm_usage = result.usage
     ctx.loaded_skill_names = result.loaded_skill_names
     ctx.loaded_skill_token_count = result.loaded_skill_token_count
+    ctx.consumed_guidance = result.consumed_guidance
+    ctx.cancelled = result.cancelled
     return "ok"
 
 
@@ -166,18 +168,21 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
     ctx.should_compact = plan.should_compact
     if not ctx.should_compact:
         ctx.session.uncompacted_history = uncompacted_history
-        ctx.true_token_usage = await build_true_token_usage(runtime, ctx, compacted=False)
+        if not ctx.cancelled or ctx.llm_usage.total_tokens > 0:
+            ctx.true_token_usage = await build_true_token_usage(runtime, ctx, compacted=False)
         return "ok"
     if not plan.compact_source:
         ctx.session.uncompacted_history = uncompacted_history
-        ctx.true_token_usage = await build_true_token_usage(runtime, ctx, compacted=False)
+        if not ctx.cancelled or ctx.llm_usage.total_tokens > 0:
+            ctx.true_token_usage = await build_true_token_usage(runtime, ctx, compacted=False)
         return "ok"
     await runtime.hooks.run_before_compact(ctx)
     summary, summary_usage = await memory.compact(ctx.session.summary, plan.compact_source, runtime.agent_loop.llm)
     ctx.llm_usage = ctx.llm_usage.add(summary_usage)
     ctx.session.summary = summary
     ctx.session.uncompacted_history = plan.recent_window
-    ctx.true_token_usage = await build_true_token_usage(runtime, ctx, compacted=True)
+    if not ctx.cancelled or ctx.llm_usage.total_tokens > 0:
+        ctx.true_token_usage = await build_true_token_usage(runtime, ctx, compacted=True)
     await runtime.hooks.run_after_compact(ctx)
     return "ok"
 
@@ -187,9 +192,14 @@ async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
     session_id = ctx.inbound.session_id
     if ctx.llm_usage is None:
         raise RuntimeError("本轮 LLM 响应缺少 usage，无法写入 true_token_usage.jsonl。")
-    if not ctx.true_token_usage:
+    if not ctx.true_token_usage and not ctx.cancelled:
         raise RuntimeError("本轮缺少 true_token_usage，无法执行 SAVE。")
     if ctx.session is not None:
+        if ctx.session.title == ctx.session.id:
+            title = " ".join(ctx.inbound.content.split())[:48]
+            if title:
+                ctx.session.title = title
+                await runtime.sessions.store.update_session_metadata(session_id, title=title)
         ctx.context_tokens = build_save_context_token_breakdown(
             summary=ctx.session.summary,
             uncompacted_history=ctx.session.uncompacted_history,
@@ -200,26 +210,25 @@ async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
             tool_count=len(ctx.tool_calls),
             skills=runtime.skills.list_skills(),
         )
-    user_record = await runtime.sessions.save_user_message(
+    await runtime.sessions.save_user_message(
         session_id,
         ctx.inbound.content,
         count_content_tokens(ctx.inbound.content),
     )
-    assistant_record = await runtime.sessions.save_assistant_message(
+    for guidance in ctx.consumed_guidance:
+        await runtime.sessions.save_user_message(session_id, guidance, count_content_tokens(guidance))
+    await runtime.sessions.save_assistant_message(
         session_id,
         ctx.final_content,
         count_content_tokens(ctx.final_content),
+        metadata={"incomplete": True, "outcome": "cancelled"} if ctx.cancelled else None,
     )
     if ctx.session is not None:
-        ctx.session.uncompacted_history = replace_current_turn_records(
-            ctx.session.uncompacted_history,
-            user_record,
-            assistant_record,
-        )
         await runtime.sessions.store.update_summary(session_id, ctx.session.summary)
         await runtime.sessions.store.update_uncompacted_history(session_id, ctx.session.uncompacted_history)
     await runtime.sessions.store.save_tool_calls(ctx.turn_id, session_id, ctx.tool_calls)
-    await runtime.sessions.store.save_true_token_usage(ctx.turn_id, session_id, ctx.true_token_usage)
+    if ctx.true_token_usage:
+        await runtime.sessions.store.save_true_token_usage(ctx.turn_id, session_id, ctx.true_token_usage)
     await runtime.proactive.emit(CONVERSATION_COMPLETED, {"session_id": session_id, "turn_id": ctx.turn_id})
     return "ok"
 
@@ -230,6 +239,8 @@ async def respond(ctx: TurnContext) -> str:
         ctx.outbound = OutboundMessage.error(ctx.inbound.session_id, ctx.inbound.channel, ctx.final_content)
     else:
         ctx.outbound = OutboundMessage.completed(ctx.inbound.session_id, ctx.inbound.channel, ctx.final_content)
+        if ctx.cancelled:
+            ctx.outbound.metadata["outcome"] = "cancelled"
     return "ok"
 
 
@@ -262,19 +273,23 @@ def build_virtual_history(ctx: TurnContext) -> list[MessageRecord]:
     if ctx.llm_usage is None:
         raise RuntimeError("本轮 LLM 响应缺少 usage，无法执行 COMPACT。")
     now = utc_now_iso()
-    return [
+    user_messages = [ctx.inbound.content, *ctx.consumed_guidance]
+    records = [
         *ctx.uncompacted_history,
-        MessageRecord(
+    ]
+    for content in user_messages:
+        records.append(MessageRecord(
             id=str(uuid4()),
             session_id=ctx.inbound.session_id,
             role="user",
-            content=ctx.inbound.content,
+            content=content,
             name=None,
             tool_call_id=None,
-            token_count=count_content_tokens(ctx.inbound.content),
+            token_count=count_content_tokens(content),
             created_at=now,
             metadata={},
-        ),
+        ))
+    records.append(
         MessageRecord(
             id=str(uuid4()),
             session_id=ctx.inbound.session_id,
@@ -285,28 +300,9 @@ def build_virtual_history(ctx: TurnContext) -> list[MessageRecord]:
             token_count=count_content_tokens(ctx.final_content),
             created_at=now,
             metadata={},
-        ),
-    ]
-
-
-def replace_current_turn_records(
-    history: list[MessageRecord],
-    user_record: MessageRecord,
-    assistant_record: MessageRecord,
-) -> list[MessageRecord]:
-    """用真实落盘消息替换本轮临时消息。"""
-    if len(history) < 2:
-        return history
-    tail_user = history[-2]
-    tail_assistant = history[-1]
-    if (
-        tail_user.role == "user"
-        and tail_user.content == user_record.content
-        and tail_assistant.role == "assistant"
-        and tail_assistant.content == assistant_record.content
-    ):
-        return [*history[:-2], user_record, assistant_record]
-    return history
+        )
+    )
+    return records
 
 
 def compact_trace_metadata(ctx: TurnContext) -> dict[str, int]:

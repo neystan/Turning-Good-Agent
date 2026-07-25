@@ -1,4 +1,5 @@
 from ..bus.messages import InboundMessage
+from ..config.settings import Settings
 from ..context.session_context import build_session_context, count_message_tokens
 from .locks import SessionLocks
 from .store import JsonlSessionStore
@@ -9,7 +10,7 @@ COMMANDS: dict[str, str] = {
     "/history": "查看当前会话的完整历史消息",
     "/context": "查看当前会注入模型的会话上下文",
     "/tools": "查看当前会话的工具调用记录",
-    "/approve": "查看或设置当前会话工具自动审批",
+    "/approve": "查看或设置全局工具自动审批",
     "/clear": "清空当前会话的消息和摘要",
     "/new": "开始一个新会话，CLI 会切换到新的 session",
     "/exit": "退出当前 CLI 会话",
@@ -19,8 +20,9 @@ COMMANDS: dict[str, str] = {
 class SessionManager:
     """封装会话加载、保存和快捷命令。"""
 
-    def __init__(self, store: JsonlSessionStore) -> None:
+    def __init__(self, store: JsonlSessionStore, settings: Settings | None = None) -> None:
         self.store = store
+        self.settings = settings
         self.locks = SessionLocks()
 
     async def load_or_create(self, session_id: str, user_id: str, channel: str) -> Session:
@@ -45,11 +47,11 @@ class SessionManager:
         if command == "/tools":
             return await self.tools_view(session_id)
         if command == "/approve":
-            return await self.auto_approve_status(session_id)
+            return self.auto_approve_status()
         if command == "/approve on":
-            return await self.enable_auto_approve(session_id, msg.user_id, msg.channel)
+            return self.enable_auto_approve()
         if command == "/approve off":
-            return await self.disable_auto_approve(session_id)
+            return self.disable_auto_approve()
         if command.startswith("/approve"):
             return "用法：/approve [on|off]"
         if command == "/clear":
@@ -106,25 +108,22 @@ class SessionManager:
             lines.append(f"duration_ms: {item.duration_ms:.3f}")
         return "\n".join(lines)
 
-    async def auto_approve_status(self, session_id: str) -> str:
-        """返回当前会话的工具自动审批状态。"""
-        session = await self.store.load_session(session_id)
-        enabled = session is not None and session.auto_approve_tools
-        return f"当前会话工具自动审批：{'已开启' if enabled else '已关闭'}。"
+    def auto_approve_status(self) -> str:
+        """返回全局工具自动审批状态。"""
+        enabled = bool(self.settings and self.settings.tool_permissions.auto_approve_tools)
+        return f"全局工具自动审批：{'已开启' if enabled else '已关闭'}。"
 
-    async def enable_auto_approve(self, session_id: str, user_id: str, channel: str) -> str:
-        """按需创建会话并开启工具自动审批。"""
-        await self.load_or_create(session_id, user_id, channel)
-        await self.store.update_auto_approve_tools(session_id, True)
-        return "当前会话已开启工具自动审批。\n审批类工具将不再逐次确认；安全检查仍然生效。"
+    def enable_auto_approve(self) -> str:
+        """开启全局工具自动审批。"""
+        if self.settings is not None:
+            self.settings.update_auto_approve_tools(True)
+        return "已开启全局工具自动审批。\n审批类工具将不再逐次确认；安全检查仍然生效。"
 
-    async def disable_auto_approve(self, session_id: str) -> str:
-        """关闭已存在会话的工具自动审批。"""
-        session = await self.store.load_session(session_id)
-        if session is not None:
-            await self.store.update_auto_approve_tools(session_id, False)
-            return "当前会话已关闭工具自动审批。\n审批类工具将恢复逐次确认。"
-        return "当前会话已关闭工具自动审批。"
+    def disable_auto_approve(self) -> str:
+        """关闭全局工具自动审批。"""
+        if self.settings is not None:
+            self.settings.update_auto_approve_tools(False)
+        return "已关闭全局工具自动审批。\n审批类工具将恢复逐次确认。"
 
     async def save_user_message(
         self,
@@ -140,9 +139,10 @@ class SessionManager:
         session_id: str,
         content: str,
         token_count: int = 0,
+        metadata: dict[str, object] | None = None,
     ) -> MessageRecord:
         """保存 assistant 回复。"""
-        return await self.store.save_message(session_id, "assistant", content, token_count)
+        return await self.store.save_message(session_id, "assistant", content, token_count, metadata=metadata)
 
     async def recent_messages(self, session_id: str, limit: int) -> list[MessageRecord]:
         """读取最近消息。"""
@@ -151,3 +151,7 @@ class SessionManager:
     async def all_messages(self, session_id: str) -> list[MessageRecord]:
         """读取当前会话全部消息。"""
         return await self.store.all_messages(session_id)
+
+    async def update_session_metadata(self, session_id: str, **values: object) -> Session | None:
+        """更新 Web 会话管理需要的元数据。"""
+        return await self.store.update_session_metadata(session_id, **values)

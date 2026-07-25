@@ -26,7 +26,8 @@ class Session:
     channel: str
     title: str
     summary: str
-    auto_approve_tools: bool
+    pinned: bool
+    archived: bool
     uncompacted_history: list[MessageRecord]
     created_at: str
     updated_at: str

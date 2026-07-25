@@ -478,7 +478,7 @@ Tools 当前约束：
 - 当 `streaming_enabled = true` 时，LLM 层通过 OpenAI SDK `stream=True` 产出文本增量，CLI 逐段打印；如果模型返回 tool call delta，则先合并成完整 `ToolCall` 后交给现有工具循环。
 - `messages.jsonl` 只保存最终完整 assistant message，不保存每个 chunk。
 - `turn_traces.jsonl` 可以记录本轮是否启用 streaming，但不记录完整 chunk 序列。
-- Web、微信、飞书的流式展示不属于 Phase 2，后续在 channel 阶段接入统一事件协议。
+- Web 的流式展示已在 Phase 6 通过统一事件协议接入；微信和飞书仍在后续 channel 阶段接入。
 
 ## 10. Skills
 
@@ -514,7 +514,7 @@ MCP Tool、Resource 与 Prompt 的控制权不同：
 
 Phase 3 提供四个能力：
 
-- 工具调用前：会话级自动审批控制 `write_file`、`edit_file`、`exec`、`write_stdin`
+- 工具调用前：全局自动审批控制 `write_file`、`edit_file`、`exec`、`write_stdin`
 - 工具调用后：按 token 上限截断模型可见结果
 - 工具开始、会话压缩前后：通用状态 Hook 交给当前 Channel 输出实现
 - 会话结束后：只读终态 Hook 将 outcome、总耗时、锁等待和失败工具数写入 `RESPOND.metadata`
@@ -528,8 +528,8 @@ Phase 3 提供四个能力：
 - 工具 Hook 直接使用标准化 `ToolCall` 和工具记录，不依赖 `TurnContext`，也不增加专用上下文或决策对象。
 - `before_tool_call` 返回 `None` 表示允许，返回字符串表示拒绝原因。
 - Core security 仍由现有工具层负责，Hook 不能绕过路径、命令、URL 和参数校验。
-- Runtime 按 `InboundMessage.channel` 通过 `ChannelRouter` 创建单轮 `ChannelAdapter`。CLI 已支持文本 delta、工具状态和审批；Web 可注册适配器，微信和飞书当前静默且尚未接入传输层。
-- `Session.auto_approve_tools` 默认关闭并持久化在 `session.json`。`/approve on` 按需创建会话并开启；`/approve off` 不会创建不存在的会话。审批请求本身不持久化，不支持跨 Channel、超时或暂停恢复。
+- Runtime 按 `InboundMessage.channel` 通过 `ChannelRouter` 创建单轮 `ChannelAdapter`。CLI 与本机 Web 已支持文本 delta、工具状态和审批；微信和飞书当前静默且尚未接入传输层。
+- `tool_permissions.auto_approve_tools` 默认关闭并持久化在 `settings.local.json`。CLI `/approve on|off` 与 Web 输入区开关操作同一策略；已出现的审批卡不会被后续开关自动通过。
 - `ToolPermissionHook` 对 `ToolPermissionSettings.approval_required_tools` 中的工具及任意 `approval_required=true` 的注册 Tool 请求确认。自动审批不绕过 `security.py` 与 `ToolExecutor` 的二次预检；启动时会拒绝未知或 `parallel_safe=true` 的审批工具配置。
 - 连续并行安全工具调用已经实现；结果按模型原始顺序回注。`ChannelAdapter` 具有工具开始和结束方法，CLI 以调用 ID 渲染工具动画。
 
@@ -537,11 +537,13 @@ Phase 3 的实现范围和验收记录见 `docs/phases/2026-06-15-phase-3-hooks.
 
 `ToolCallRunner` 先完成 Schema 标准化和 security 预检，再进入 `ToolPermissionHook`；自动审批或当前 Channel 同意后由 ToolExecutor 再次执行硬安全校验。`after_tool_call` 在结果注入 LLM 前按 `max_tool_result_tokens = 8000` 统一截断；`AttachmentManager` 集中校验 MCP/Skill Attachment 的角色、独立 token 预算和实际 working messages 上限。任意 ToolResult 的 ContextAttachment 只进入当前 AgentLoop working messages，不落入历史、摘要或下一轮 Context。
 
-`TurnMonitorHook` 不直接写入 JSONL。Runtime 是状态耗时与 `StateTrace` 的唯一生产者，在可持久化模型会话完成 RESPOND 后、创建该 trace 前调用终态 Hook；快捷命令不会触发该 Hook 或为监控创建 session。Web、SSE 与 WebSocket 仍属于后续观测阶段，尚未实现。
+`TurnMonitorHook` 不直接写入 JSONL。Runtime 是状态耗时与 `StateTrace` 的唯一生产者，在可持久化模型会话完成 RESPOND 后、创建该 trace 前调用终态 Hook；快捷命令不会触发该 Hook 或为监控创建 session。
 
 ## 13. Observability
 
-最终 Web observability 面板至少包含：
+Phase 6 已完成本机 Web Channel 与会话检查器。FastAPI Host 在生命周期内只启动一个既有 Runtime；`WebSessionCoordinator` 通过 `AsyncMessageBus` 调度同会话串行、跨会话最多 6 个运行槽位、guidance、Stop 与审批 Future。`WebChannelAdapter` 将已有 Channel 回调映射为有界内存 WebSocket 事件；事件重连使用 `after_event_id` 回放，过期时发送快照。服务不会恢复在途任务，也不新建流式 JSONL。
+
+Web 工作台包含：
 
 - session 列表
 - 单 session 完整消息
@@ -553,7 +555,7 @@ Phase 3 的实现范围和验收记录见 `docs/phases/2026-06-15-phase-3-hooks.
 - tool calls
 - 错误信息
 
-第一版优先读取本地 JSON/JSONL，不先引入数据库。
+会话检查器只读取 `session.json`、`messages.jsonl`、`turn_traces.jsonl`、`true_token_usage.jsonl` 和 `tool_calls.jsonl`，不引入数据库或重复监控文件。`SAVE` 仍是唯一可靠持久化点。运行中 guidance 在 AgentLoop 的 LLM/Tool 安全检查点以固定 user 包装注入；Stop 不强杀在飞 Tool，等待审批时自动拒绝，已输出回复以 `incomplete=true`、`outcome=cancelled` 保存。
 
 ## 14. Proactive
 
@@ -598,7 +600,7 @@ Main Agent
 3. Phase 3：Hooks Runtime Extension
 4. Phase 4：MCP client MVP 与审批/Runtime 收口（已完成）
 5. Phase 5：Skills 机制（已完成）
-6. Phase 6：Web observability
+6. Phase 6：Web Channel 与会话观测工作台（已完成）
 7. Phase 7：主动能力与长期记忆
 8. Phase 8：Multi-Agent 协作模式
 9. Phase 9：多 Channel 接入

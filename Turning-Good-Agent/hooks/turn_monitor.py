@@ -13,7 +13,7 @@ class TurnMonitorHook(AgentHook):
     ) -> dict[str, int | float | str]:
         """返回结果状态、耗时、锁等待和失败工具数量。"""
         rejected = any(trace.state == "BUILD" and trace.event == "rejected" for trace in ctx.trace)
-        outcome = "rejected" if rejected else "failed" if ctx.error else "completed"
+        outcome = "rejected" if rejected else "cancelled" if ctx.cancelled else "failed" if ctx.error else "completed"
         return {
             "outcome": outcome,
             "turn_duration_ms": turn_duration_ms,

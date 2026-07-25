@@ -13,7 +13,7 @@ Tech Stack：Python 3.11+、asyncio、pytest、现有 JSON/JSONL Session 存储�
 ## 完成范围
 
 - [x] `AgentHook` 与 `HookManager` 提供顺序注册、异常隔离、工具前阻断、工具结果管道、压缩通知与终态元数据合并。
-- [x] `ToolPermissionHook` 为副作用工具提供会话级自动审批。
+- [x] `ToolPermissionHook` 为副作用工具提供全局自动审批。
 - [x] `ToolResultTruncationHook` 在模型注入与 `tool_calls.jsonl` 落盘前统一截断工具结果。
 - [x] `ChannelStatusHook` 通过当前 `ChannelAdapter` 显示工具与压缩生命周期状态。
 - [x] `ChannelAdapter` 收口 CLI 的流式输出、工具动画、最终成功/失败输出与 `y/N` 审批。
@@ -52,6 +52,8 @@ class ChannelAdapter(Protocol):
     async def on_completed(self, content: str) -> None: ...
     async def on_error(self, content: str) -> None: ...
     async def request_tool_approval(self, call: ToolCall) -> str | None: ...
+    async def consume_guidance(self) -> list[str]: ...
+    def is_stop_requested(self) -> bool: ...
 ```
 
 `CliChannelAdapter` 负责：
@@ -72,14 +74,14 @@ InboundMessage.channel
   -> TurnContext.channel_adapter
   -> AgentLoop delta / ChannelStatusHook
   -> ChannelAdapter
-  -> CLI 或未来 Channel 传输层
+  -> CLI 或具体 Channel 传输层
 
 Runtime final response
   -> ChannelAdapter.on_completed / on_error
   -> OutboundMessage
 ```
 
-## 会话级工具审批
+## 全局工具审批
 
 审批类工具由 `ToolPermissionSettings.approval_required_tools` 集中配置，默认是：
 
@@ -90,15 +92,7 @@ exec
 write_stdin
 ```
 
-`Session.auto_approve_tools` 默认 `false`，显式保存于 `session.json`。旧会话缺少该字段时安全默认 `false`。
-
-| 命令 | 已存在会话 | 不存在会话 |
-| --- | --- | --- |
-| `/approve` | 显示当前状态。 | 显示关闭，不创建目录。 |
-| `/approve on` | 保存 `true`。 | 创建当前 session 并保存 `true`。 |
-| `/approve off` | 保存 `false`。 | 返回关闭，不创建目录。 |
-
-`/new` 创建的新会话默认关闭；`/clear` 删除会话目录与审批设置。重启后重新打开同一 session 时，已保存的审批开关继续生效。
+`tool_permissions.auto_approve_tools` 默认 `false`，只保存于 `settings.local.json`，不写入 `session.json`。`/approve` 查询该全局策略，`/approve on|off` 与 Web 输入区开关更新同一个设置，且不会创建会话目录。已出现的审批卡不会因为随后开启开关而自动通过。
 
 工具执行顺序固定为：
 
@@ -167,7 +161,7 @@ web_search, weather, write_file, read_file, web_fetch
 | --- | --- |
 | `hooks/base.py` | 声明六个最小 Hook 生命周期。 |
 | `hooks/manager.py` | 按顺序调度 Hook、隔离异常、合并工具记录和终态元数据。 |
-| `hooks/tool_permission.py` | 对审批类工具读取会话自动审批状态并委托 Channel 确认。 |
+| `hooks/tool_permission.py` | 对审批类工具读取全局自动审批状态并委托 Channel 确认。 |
 | `hooks/tool_result_truncation.py` | 按 token 上限处理模型可见工具结果。 |
 | `hooks/channel_status.py` | 转发工具与压缩生命周期状态。 |
 | `hooks/turn_monitor.py` | 计算只读终态监控字段。 |
@@ -177,14 +171,14 @@ web_search, weather, write_file, read_file, web_fetch
 | `runtime/state.py` | 在 COMPACT 触发压缩 Hook。 |
 | `runtime/runtime.py` | 创建 ChannelAdapter、注册 Hook、创建 trace 并在终态合并监控字段。 |
 | `runtime/turn_context.py` | 保存单轮 ChannelAdapter、工具记录与 trace。 |
-| `sessions/types.py` / `sessions/store.py` / `sessions/manager.py` | 保存审批开关并处理 `/approve` 命令。 |
-| `config/settings.py` | 保存审批工具列表和并行调用配置。 |
+| `sessions/manager.py` | 处理不创建会话的 `/approve` 命令。 |
+| `config/settings.py` | 保存审批工具列表、全局自动批准、并行调用配置。 |
 | `cli.py` | 注册 CLI ChannelAdapter。 |
 
 ## 明确不实现
 
-- Web、SSE、WebSocket、FastAPI、Dashboard、微信或飞书传输与审批交互。
-- MessageBus 流式消费、delta 持久化、取消、重连或事件回放。
+- 微信或飞书传输与审批交互；Web Host、WebSocket、FastAPI 与本机工作台已在 Phase 6 实现。
+- 流式 delta 持久化；MessageBus 消费、协作式取消、内存重连和事件回放已在 Phase 6 的 Web Host 实现。
 - 审批请求持久化、超时、恢复、跨 Channel 审批或跨进程等待。
 - 用户级审批偏好、临时授权、白名单、黑名单、RBAC 或动态策略语言。
 - 通用 `HookContext`、`HookResult`、事件 Hook、远程 Hook、shell Hook、HTTP Hook 或第三方 Hook 插件系统。
@@ -207,4 +201,4 @@ printf '/exit\n' | python -m Turning-Good-Agent chat
 
 ## 后续关系
 
-Phase 4 MCP 已通过同一 `ToolRegistry` 接入，并复用 `ToolPermissionHook`、`ToolResultTruncationHook` 与 Channel 状态输出；其审批和 Runtime 收口见 `2026-06-15-phase-4-mcp-client.md`。Phase 6 Dashboard 应按 `turn_id` 聚合既有 `RESPOND`、RUN、COMPACT、SAVE trace 与 token/tool/message 文件。若未来需要实时推送，再独立设计 `observability/hub.py` 与 SSE/WebSocket，不放入当前 Hook 或 Channel 实现。
+Phase 4 MCP 已通过同一 `ToolRegistry` 接入，并复用 `ToolPermissionHook`、`ToolResultTruncationHook` 与 Channel 状态输出；其审批和 Runtime 收口见 `2026-06-15-phase-4-mcp-client.md`。Phase 6 已通过 `WebSessionCoordinator`、`SessionEventHub` 和 WebSocket 聚合既有 `RESPOND`、RUN、COMPACT、SAVE trace 与 token/tool/message 文件，不把实时传输逻辑放入 Hook。

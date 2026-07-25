@@ -143,7 +143,7 @@ class McpManager:
     ) -> ContextAttachment: ...
 ```
 
-每个 `McpServerWorker` 在自己的后台 Task 中持有独立 SDK Session 与退出栈，并在同一 Task 内关闭 Client。Runtime Host 调用 `runtime.start()` 后只创建 Worker，不等待连接；CLI、未来 Web、微信和飞书 Host 均复用这一生命周期。Client 只请求 initialize capabilities 中已声明的 Catalog 类型，因此纯 Tool Server 不需要实现 Resource、Resource Template 或 Prompt 接口。Catalog 仅保存在内存，包含 Server 已声明的 Tool、Resource、Resource Template 与 Prompt 描述，不保存读取内容。收到 `tools/resources/prompts/list_changed` 时，Worker 复用当前连接刷新 Catalog，Manager 串行注销旧前缀 Tool 后注册新的显式启用 Tool。连接级错误按配置从 1 秒开始指数退避；每次后续连接级中断开启新的重试周期，业务 Tool 错误不重连。
+每个 `McpServerWorker` 在自己的后台 Task 中持有独立 SDK Session 与退出栈，并在同一 Task 内关闭 Client。Runtime Host 调用 `runtime.start()` 后只创建 Worker，不等待连接；CLI 与已实现的 Web Host、后续微信和飞书 Host 均复用这一生命周期。Client 只请求 initialize capabilities 中已声明的 Catalog 类型，因此纯 Tool Server 不需要实现 Resource、Resource Template 或 Prompt 接口。Catalog 仅保存在内存，包含 Server 已声明的 Tool、Resource、Resource Template 与 Prompt 描述，不保存读取内容。收到 `tools/resources/prompts/list_changed` 时，Worker 复用当前连接刷新 Catalog，Manager 串行注销旧前缀 Tool 后注册新的显式启用 Tool。连接级错误按配置从 1 秒开始指数退避；每次后续连接级中断开启新的重试周期，业务 Tool 错误不重连。
 
 ## 实施任务
 
@@ -249,7 +249,7 @@ class McpManager:
   Expected: 因 Adapter 和策略尚不存在而失败。
 
 - [x] **Step 3：实现 Adapter 与策略查询**
-  Adapter 的 `run()` 仅委托 `McpManager.call_tool()`，并将 text 内容交给现有 `ToolResultTruncationHook`。`ToolPermissionHook` 只使用 Tool 的 `approval_required` 元数据和 session `auto_approve_tools=true` 决策；后者必须优先允许全部 Tool。
+  Adapter 的 `run()` 仅委托 `McpManager.call_tool()`，并将 text 内容交给现有 `ToolResultTruncationHook`。`ToolPermissionHook` 只使用 Tool 的 `approval_required` 元数据和全局 `tool_permissions.auto_approve_tools=true` 决策；后者必须优先允许全部 Tool。
 
 - [x] **Step 4：运行测试并提交**
   Run: `pytest tests/test_mcp_adapter.py tests/test_mcp_permissions.py -q`
@@ -355,7 +355,7 @@ class McpManager:
 #### Runtime 与 MCP Worker 生命周期
 
 1. `AgentRuntime` 保留生命周期、会话锁、状态机驱动、trace 和 Channel 完成/错误回调职责，不承载 MCP 审批或复杂 token 预算。
-2. Runtime Host 启动时调用 `runtime.start()`；CLI、未来 Web、微信和飞书 Host 均复用 `runtime.start()` / `runtime.close()`，`ChannelAdapter` 不管理 MCP transport。
+2. Runtime Host 启动时调用 `runtime.start()`；CLI 与已实现的 Web Host、后续微信和飞书 Host 均复用 `runtime.start()` / `runtime.close()`，`ChannelAdapter` 不管理 MCP transport。
 3. 每个启用 Server 由独立 `McpServerWorker` 后台连接，首轮和普通会话不等待连接完成；完成发现后，显式启用的 Tool 才在后续 LLM 调用中可见。
 4. 连接级错误使用 `connect_retry_attempts`、`connect_retry_delay_seconds`、`connect_retry_max_delay_seconds` 做有限指数退避。权限、参数、资源不存在及 Tool 业务错误不触发重连；后续连接中断会开始新的重试周期。
 5. 每个 Worker 在创建 transport 的同一 Task 内关闭 Client。`AgentRuntime.close()` 是最终释放操作，不承诺同一 Runtime 可重启。

@@ -23,6 +23,8 @@ class AgentLoopResult:
     usage: LLMUsage | None = None
     loaded_skill_names: list[str] = field(default_factory=list)
     loaded_skill_token_count: int = 0
+    consumed_guidance: list[str] = field(default_factory=list)
+    cancelled: bool = False
 
 
 class AgentLoop:
@@ -67,7 +69,10 @@ class AgentLoop:
         )
         tool_records: list[dict[str, Any]] = []
         usage = LLMUsage()
+        consumed_guidance: list[str] = []
         for _ in range(self.runtime.max_tool_rounds):
+            if await self._apply_turn_control(working, channel_adapter, consumed_guidance):
+                return AgentLoopResult("", working, tool_records, usage, attachments.skill_names, attachments.skill_tokens, consumed_guidance, True)
             response = await self._complete(working, openai_tools, channel_adapter)
             usage = usage.add(response.usage)
             if not response.tool_calls:
@@ -78,9 +83,12 @@ class AgentLoop:
                     usage,
                     attachments.skill_names,
                     attachments.skill_tokens,
+                    consumed_guidance,
                 )
             calls = response.tool_calls[: self.runtime.max_tool_calls_per_round]
             working.append(self._assistant_tool_message(response.content, calls))
+            if await self._apply_turn_control(working, channel_adapter, consumed_guidance):
+                return AgentLoopResult(response.content, working, tool_records, usage, attachments.skill_names, attachments.skill_tokens, consumed_guidance, True)
             records = await self.tool_call_runner.execute_calls(calls, channel_adapter, auto_approve_tools)
             for call, record in zip(calls, records, strict=True):
                 tool_records.append(record)
@@ -94,6 +102,8 @@ class AgentLoop:
                 working.append(tool_message)
                 if attachment_error is None:
                     attachments.commit(attachment, record, working)
+            if await self._apply_turn_control(working, channel_adapter, consumed_guidance):
+                return AgentLoopResult(response.content, working, tool_records, usage, attachments.skill_names, attachments.skill_tokens, consumed_guidance, True)
         working.append({"role": "system", "content": TOOL_ROUND_LIMIT_SUMMARY_PROMPT})
         summary = await self._complete(working, [], channel_adapter)
         usage = usage.add(summary.usage)
@@ -108,7 +118,36 @@ class AgentLoop:
             usage,
             attachments.skill_names,
             attachments.skill_tokens,
+            consumed_guidance,
         )
+
+    async def _apply_turn_control(
+        self,
+        working: list[dict[str, Any]],
+        channel_adapter: ChannelAdapter,
+        consumed_guidance: list[str],
+    ) -> bool:
+        """在安全检查点追加引导或确认协作式停止。"""
+        is_stop_requested = getattr(channel_adapter, "is_stop_requested", None)
+        if callable(is_stop_requested) and is_stop_requested():
+            return True
+        consume_guidance = getattr(channel_adapter, "consume_guidance", None)
+        guidance = await consume_guidance() if callable(consume_guidance) else []
+        for content in guidance:
+            text = content.strip()
+            if not text:
+                continue
+            consumed_guidance.append(text)
+            working.append(
+                {
+                    "role": "user",
+                    "content": "【用户正在引导当前任务】\n"
+                    "用户在任务执行中补充了以下方向。请在系统约束和安全审批不变的前提下调整后续计划；"
+                    "不要重复已经完成的操作。\n\n"
+                    f"{text}",
+                }
+            )
+        return False
 
     @staticmethod
     def _assistant_tool_message(content: str, calls: list[ToolCall]) -> dict[str, Any]:

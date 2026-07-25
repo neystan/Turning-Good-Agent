@@ -28,6 +28,9 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("--api-key", help="真实 LLM API Key")
     chat.add_argument("--base-url", help="OpenAI-compatible API Base URL")
     chat.add_argument("--model", help="真实 LLM 模型名")
+    web = subcommands.add_parser("web", help="启动本机 Web 工作台")
+    web.add_argument("--host", help="本机监听地址")
+    web.add_argument("--port", type=int, help="本机监听端口")
     return parser
 
 
@@ -121,11 +124,29 @@ async def chat(
             await close()
 
 
+def web(host: str | None, port: int | None) -> None:
+    """启动复用现有 Runtime 的本机 Web Host。"""
+    import uvicorn
+
+    from .web.backend.app import create_app
+
+    settings = Settings.load()
+    if host is not None:
+        settings.web.host = host
+    if port is not None:
+        settings.web.port = port
+    runtime = AgentRuntime.create_default(settings, build_llm(settings))
+    uvicorn.run(create_app(settings, runtime), host=settings.web.host, port=settings.web.port)
+
+
 def main() -> None:
     """执行 CLI 入口。"""
     parser = build_parser()
     args = parser.parse_args()
     if args.command == "chat":
         asyncio.run(chat(args.session, args.data_dir, args.llm, args.api_key, args.base_url, args.model))
+        return
+    if args.command == "web":
+        web(args.host, args.port)
         return
     parser.print_help()

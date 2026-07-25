@@ -1,7 +1,18 @@
 from collections.abc import Callable
 from typing import Protocol
 
+from ..bus.messages import InboundMessage
 from ..llm.types import ToolCall
+
+
+class TurnControl(Protocol):
+    """定义单轮运行中引导与停止控制。"""
+
+    async def consume_guidance(self) -> list[str]:
+        """取走当前安全检查点前积累的用户引导。"""
+
+    def is_stop_requested(self) -> bool:
+        """返回当前任务是否已请求协作式停止。"""
 
 
 class ChannelAdapter(Protocol):
@@ -27,6 +38,12 @@ class ChannelAdapter(Protocol):
 
     async def request_tool_approval(self, call: ToolCall) -> str | None:
         """请求用户确认工具调用。"""
+
+    async def consume_guidance(self) -> list[str]:
+        """取走当前任务的运行中引导。"""
+
+    def is_stop_requested(self) -> bool:
+        """返回当前任务是否需要停止。"""
 
 
 class SilentChannelAdapter:
@@ -61,8 +78,16 @@ class SilentChannelAdapter:
         del call
         return "当前 Channel 不支持工具审批。"
 
+    async def consume_guidance(self) -> list[str]:
+        """返回空引导列表。"""
+        return []
 
-AdapterFactory = Callable[[], ChannelAdapter]
+    def is_stop_requested(self) -> bool:
+        """始终不请求停止。"""
+        return False
+
+
+AdapterFactory = Callable[[InboundMessage], ChannelAdapter]
 
 
 class ChannelRouter:
@@ -76,7 +101,13 @@ class ChannelRouter:
         """注册指定 Channel 的适配器工厂。"""
         self._factories[channel] = factory
 
-    def create(self, channel: str) -> ChannelAdapter:
+    def create(self, message: InboundMessage | str) -> ChannelAdapter:
         """创建指定 Channel 的单轮适配器。"""
+        channel = message if isinstance(message, str) else message.channel
         factory = self._factories.get(channel)
-        return factory() if factory is not None else SilentChannelAdapter()
+        if factory is None:
+            return SilentChannelAdapter()
+        try:
+            return factory(message)  # type: ignore[arg-type]
+        except TypeError:
+            return factory()  # type: ignore[call-arg]

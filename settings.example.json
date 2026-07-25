@@ -22,7 +22,14 @@
       "edit_file",
       "exec",
       "write_stdin"
-    ]
+    ],
+    "auto_approve_tools": false
+  },
+  "web": {
+    "host": "127.0.0.1",
+    "port": 8000,
+    "max_concurrent_sessions": 6,
+    "event_buffer_size": 512
   },
   "mcp": {
     "resource_context_token_limit": 8000,
