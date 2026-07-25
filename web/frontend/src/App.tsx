@@ -224,7 +224,7 @@ export function App() {
     <main id="main-content" className="conversation">
       <header className="topbar">
         <button className="icon-button mobile-only" title="打开会话栏" aria-label="打开会话栏" onClick={() => setMobileMenu(true)}><Menu /></button>
-        <div className="title-block"><span className={`connection-dot ${sessionState.running ? "is-running" : ""}`} title={connection} /><h1>{current?.title || "新建会话"}</h1>{current?.archived && <span className="readonly">已归档</span>}</div>
+        <div className="title-block"><span className={`connection-dot ${sessionState.running ? "is-running" : ""}`} aria-hidden="true" /><h1>{current?.title || "新建会话"}</h1><span className="connection-label">{connectionLabel(connection)}</span>{current?.archived && <span className="readonly">已归档</span>}</div>
         <div className="top-actions"><button className="icon-button" title="切换主题" aria-label="切换主题" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun /> : <Moon />}</button><button className="icon-button" title="打开会话检查器" aria-label="打开会话检查器" disabled={!sessionId} onClick={() => void openInspector()}><PanelRight /></button></div>
       </header>
       <ChatTimeline sessionId={sessionId} messages={sessionState.messages} turns={sessionState.turns} contentVersion={currentTurnCount} onRetry={retryMessage} renderTurn={(turn) => <ThinkingTrail key={turn.requestId} turn={turn} onResolveApproval={resolveApproval} />}>
@@ -235,4 +235,9 @@ export function App() {
     {inspectorOpen && <SessionInspector data={inspector} onClose={() => setInspectorOpen(false)} />}
     <NoticeRegion notices={notices} onDismiss={dismissNotice} />
   </div>;
+}
+
+/** 将连接状态转换为紧凑的用户可见文本。 */
+function connectionLabel(state: ConnectionState): string {
+  return { connecting: "正在连接", connected: "已连接", reconnecting: "正在重连", disconnected: "已断开" }[state];
 }

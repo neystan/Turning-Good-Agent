@@ -6,7 +6,7 @@ type InspectorSummary = { inputTokens: number; outputTokens: number; compactions
 
 /** 渲染先摘要、后明细的会话观测抽屉。 */
 export function SessionInspector({ data, onClose }: { data: Observability | null; onClose: () => void }) {
-  if (!data) return <aside className="inspector" aria-label="会话检查器"><header><h2>会话检查器</h2><button className="icon-button" title="关闭检查器" aria-label="关闭会话检查器" onClick={onClose}><X /></button></header><p>正在读取观测数据...</p></aside>;
+  if (!data) return <aside className="inspector" aria-label="会话检查器"><header><h2>会话检查器</h2><button className="icon-button" title="关闭检查器" aria-label="关闭会话检查器" onClick={onClose}><X /></button></header><p>正在读取观测数据…</p></aside>;
   const summary = buildSummary(data);
   return <aside className="inspector" aria-label="会话检查器"><header><div><span className="inspector-kicker">SESSION INSPECTOR</span><h2>会话检查器</h2></div><button className="icon-button" title="关闭检查器" aria-label="关闭会话检查器" onClick={onClose}><X /></button></header><div className="inspector-body"><dl className="inspector-summary"><Metric label="累计输入" value={`${summary.inputTokens} tokens`} /><Metric label="累计输出" value={`${summary.outputTokens} tokens`} /><Metric label="当前上下文" value={`${summary.contextTokens} tokens`} /><Metric label="压缩次数" value={String(summary.compactions)} /><Metric label="工具失败" value={String(summary.toolFailures)} /></dl><InspectorSection title="Token 账本" rows={data.token_usage} /><InspectorSection title="压缩与上下文" rows={data.traces.filter((trace) => trace.state === "COMPACT" || trace.state === "SAVE")} /><InspectorSection title="工具调用" rows={data.tool_calls} /><InspectorSection title="状态 Trace" rows={data.traces} /></div></aside>;
 }

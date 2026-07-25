@@ -1,6 +1,6 @@
 # Web Workbench Redesign Design
 
-状态：待最终审阅。
+状态：已实施，待运行环境补充 Playwright 截图验证。
 
 ## 目标
 

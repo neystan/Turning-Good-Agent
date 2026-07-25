@@ -29,7 +29,7 @@ Tech Stack: Python 3.13、FastAPI、asyncio、React、TypeScript、Vite、lucide
 
 ## Task 1: WebSocket Action Correlation
 
-- [ ] 写本地 FastAPI/WebSocket 测试：空 message.send 带 client_action_id 时返回 error、相同 action ID；首条草稿成功时返回 message.accepted、真实 session_id、request_id 和 action ID；归档会话拒绝但连接保持可用。
+- [x] 写本地 FastAPI/WebSocket 测试：空 message.send 带 client_action_id 时返回 error、相同 action ID；首条草稿成功时返回 message.accepted、真实 session_id、request_id 和 action ID；归档会话拒绝但连接保持可用。
 - [ ] 运行该测试，确认当前 endpoint 没有回显 action ID 且异常路径不符合预期。
 - [ ] app.py 读取 action 的可选 client_action_id；message.send、guidance.send、task.stop、approval.resolve 捕获 ValueError 和 RuntimeError，返回 error event；成功消息返回 message.accepted，替代旧 session.created 回包。
 - [ ] 运行 tests/test_web_host.py，预期全部通过。
@@ -38,7 +38,7 @@ Tech Stack: Python 3.13、FastAPI、asyncio、React、TypeScript、Vite、lucide
 ## Task 2: Session State and Reconnect
 
 - [ ] 写本地 reducer 断言：匹配的 action error 只标记对应 optimistic 消息失败；tool event 只进入同 request_id 的 turn。
-- [ ] types.ts 定义 ConnectionState、PendingAction、TurnState；TurnState 包含 requestId、状态、事件、guidanceCount 和开始时间。
+- [x] types.ts 定义 ConnectionState、PendingAction、TurnState；TurnState 包含 requestId、状态、事件、guidanceCount 和开始时间。
 - [ ] api.ts 定义 ApiError，保存 REST status 与后端 detail。
 - [ ] session_state.ts 按 request_id 建立 turn；task.status 内容“已加入运行中引导”增加 guidanceCount，映射为“已引导”，不添加新事件。
 - [ ] socket_client.ts 按 250ms、500ms、1s、2s、4s、最多 5s 重连；成功后按最后 event ID 重订阅当前会话；close 取消计时器。
@@ -47,7 +47,7 @@ Tech Stack: Python 3.13、FastAPI、asyncio、React、TypeScript、Vite、lucide
 ## Task 3: Navigation, Scrolling and Notices
 
 - [ ] 本地 Playwright 用例延迟会话 A 历史响应，先选择 A 再选择 B，断言 B 不被 A 覆盖；向上滚动后接收新消息，断言不自动回底部。
-- [ ] App.tsx 的历史加载使用 AbortController 和递增版本号；仅最新 session 的响应可更新状态；终态 WebSocket event 不再全量 reload 历史。
+- [x] App.tsx 的历史加载使用 AbortController 和递增版本号；仅最新 session 的响应可更新状态；终态 WebSocket event 不再全量 reload 历史。
 - [ ] ChatTimeline 为每个会话保存 scrollTop；距底部 96px 内或用户发送才自动滚动；其他情况显示“有新消息”按钮。
 - [ ] SessionSidebar 删除置顶分组，保持 pinned-first 排序；标题右侧固定 28px 标记位，置顶才显示 Pin。
 - [ ] 三点菜单使用 openMenuId；点击外部、Escape、选择会话和完成动作都关闭；重命名使用受控弹层；错误进入 NoticeRegion 的 aria-live 区域。
@@ -55,7 +55,7 @@ Tech Stack: Python 3.13、FastAPI、asyncio、React、TypeScript、Vite、lucide
 
 ## Task 4: Thinking Trail and Composer
 
-- [ ] ThinkingTrail 根据真实事件显示步骤：已引导、正在调用工具、MCP server/tool、Skill name、等待你的批准、正在整理上下文、已完成、失败、已停止。
+- [x] ThinkingTrail 根据真实事件显示步骤：已引导、正在调用工具、MCP server/tool、Skill name、等待你的批准、正在整理上下文、已完成、失败、已停止。
 - [ ] 运行状态标题固定为“思考中”并显示动态点；终态折叠为“状态、工具数、耗时”；动态点只使用 opacity 和 transform，减少动效模式下静止。
 - [ ] ChatTimeline 将每个 turn 放在对应 assistant 回复下方；运行中默认展开，完成后折叠；完整工具结果只留在检查器。
 - [ ] 发送 guidance 后立即写入 user optimistic 消息和当前 turn 的“已引导”；message.accepted 标记 sent，关联 error 标记 failed 并提供重试。
@@ -65,7 +65,7 @@ Tech Stack: Python 3.13、FastAPI、asyncio、React、TypeScript、Vite、lucide
 
 ## Task 5: Themes, Layout and Inspector
 
-- [ ] tokens.css 定义深色石墨 token：#0f1115、#171a21、#222734、#6ea8fe、#e7b45b、#e06c75、#eef1f6、#9aa4b5，并定义完整浅色对应 token；组件不硬编码颜色。
+- [x] tokens.css 定义深色石墨 token：#0f1115、#171a21、#222734、#6ea8fe、#e7b45b、#e06c75、#eef1f6、#9aa4b5，并定义完整浅色对应 token；组件不硬编码颜色。
 - [ ] layout.css 将 app-shell 固定为 100dvh 且 overflow hidden；sidebar、conversation、inspector 使用 min-height 0 和独立纵向滚动；移动抽屉加入 safe area 与 overscroll containment。
 - [ ] SessionInspector 顶部展示累计 input/output token、当前上下文、压缩次数、工具失败数；下方 token、压缩、工具与 trace 分区默认展示摘要、按需展开 JSON。
 - [ ] Composer、会话侧栏、步骤、审批、通知和抽屉使用 components.css；保留所有图标 tooltip、可访问名称、焦点状态与可读长文本。

@@ -555,6 +555,8 @@ Web 工作台包含：
 - tool calls
 - 错误信息
 
+前端重构后，聊天历史使用 AbortController 与版本闸门防止旧会话慢响应覆盖当前会话；终态只刷新会话列表，不重置聊天滚动。每个 `request_id` 独立渲染“思考中”步骤，步骤只来自 guidance、工具/MCP/Skill、审批、压缩、Stop 和终态事件，不展示或推断模型内部思维链。WebSocket 错误带回 `client_action_id`，失败消息可定位并重试；连接按有限退避重连后使用 `after_event_id` 回放。
+
 会话检查器只读取 `session.json`、`messages.jsonl`、`turn_traces.jsonl`、`true_token_usage.jsonl` 和 `tool_calls.jsonl`，不引入数据库或重复监控文件。`SAVE` 仍是唯一可靠持久化点。运行中 guidance 在 AgentLoop 的 LLM/Tool 安全检查点以固定 user 包装注入；Stop 不强杀在飞 Tool，等待审批时自动拒绝，已输出回复以 `incomplete=true`、`outcome=cancelled` 保存。
 
 ## 14. Proactive

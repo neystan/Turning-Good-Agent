@@ -11,6 +11,8 @@ python -m Turning-Good-Agent chat
 python -m Turning-Good-Agent web
 ```
 
+Web 默认深色，可在右上角切换并记住浅色主题。工作台采用对话优先布局：会话栏独立滚动，聊天历史不会在任务完成后重置；真实的工具、审批、压缩、Stop 与终态事件按 `request_id` 归入可折叠“思考中”步骤。会话检查器只汇总既有 token、trace 与工具记录，不新增 JSONL。
+
 ## 交互命令
 
 ```text

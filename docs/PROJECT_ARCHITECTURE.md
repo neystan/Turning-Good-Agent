@@ -331,12 +331,12 @@ Tools 当前边界：
 
 | 路径 | 作用 |
 | --- | --- |
-| `web/backend/app.py` | 创建 FastAPI lifespan、REST API、WebSocket endpoint 和本地静态资源托管。 |
+| `web/backend/app.py` | 创建 FastAPI lifespan、REST API、WebSocket endpoint 和本地静态资源托管；动作回包使用 `client_action_id` 关联乐观消息错误。 |
 | `web/backend/coordinator.py` | 调度单会话 turn、guidance、Stop、审批 Future、全局并发槽位和 MessageBus 消费。 |
 | `web/backend/events.py` | 保存每会话有界 WebSocket 事件窗口、订阅与快照回退。 |
-| `web/frontend/` | React、TypeScript、Vite 工作台源代码，包含会话栏、聊天、任务轨迹、审批和检查器。 |
+| `web/frontend/` | React、TypeScript、Vite 工作台源代码，包含稳定历史加载、有限重连、会话栏、按 turn 的任务轨迹、审批和摘要优先检查器。 |
 
-Web Host 的 `runtime.start()` / `runtime.close()` 只在 FastAPI lifespan 中调用一次。REST 只读取既有会话与观测文件，WebSocket 只传输内存事件，不新增 JSONL；草稿只存在浏览器，首条非空消息才创建 session。
+Web Host 的 `runtime.start()` / `runtime.close()` 只在 FastAPI lifespan 中调用一次。REST 只读取既有会话与观测文件，WebSocket 只传输内存事件，不新增 JSONL；草稿只存在浏览器，首条非空消息才创建 session。浏览器以 `client_action_id` 对齐乐观消息与错误、以 `after_event_id` 重订阅；运行中 guidance 成功排队后通过既有 `task.status` 在当前 turn 显示“已引导”，不新增 `guidance.consumed`。
 
 第一版 Hook 调用关系：
 

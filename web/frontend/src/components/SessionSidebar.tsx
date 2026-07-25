@@ -76,7 +76,7 @@ export function SessionSidebar({ active, archived, currentId, mobileOpen, onClos
     <button className="new-session" onClick={onNew}><FilePlus2 size={16} />新建会话</button>
     <SessionList label="会话" items={orderedActive} currentId={currentId} openMenuId={openMenuId} onSelect={select} onMenu={setOpenMenuId} onRename={openRename} onAction={runAction} onUpdate={onUpdate} onDelete={onDelete} />
     {archived.length > 0 && <section className="session-section archived-section"><button className="section-title" onClick={() => setArchivedOpen(!archivedOpen)}><ChevronDown size={14} className={archivedOpen ? "" : "rotated"} />已归档<span>{archived.length}</span></button>{archivedOpen && <SessionList items={archived} currentId={currentId} openMenuId={openMenuId} onSelect={select} onMenu={setOpenMenuId} onRename={openRename} onAction={runAction} onUpdate={onUpdate} onDelete={onDelete} archived />}</section>}
-    {renaming && <form className="rename-dialog" role="dialog" aria-label="重命名会话" onSubmit={(event) => void submitRename(event)}><label>会话名称<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} /></label><div><button type="button" onClick={() => setRenaming(null)}>取消</button><button type="submit">保存</button></div></form>}
+    {renaming && <form className="rename-dialog" role="dialog" aria-label="重命名会话" onSubmit={(event) => void submitRename(event)}><label>会话名称<input name="session-title" autoComplete="off" value={title} onChange={(event) => setTitle(event.target.value)} /></label><div><button type="button" onClick={() => setRenaming(null)}>取消</button><button type="submit">保存</button></div></form>}
   </aside>;
 }
 
