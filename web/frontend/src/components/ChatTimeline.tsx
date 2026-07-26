@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "re
 import { Check, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 
-import { IconTooltip } from "./IconTooltip";
 import type { ChatMessage, TurnState } from "../types";
 import { shouldFollowLatest } from "../state/chat_scroll";
 import { buildTimelineEntries } from "../state/timeline_entries";
@@ -89,7 +88,7 @@ export function ChatTimeline({ sessionId, messages, turns = {}, contentVersion =
 function MessageView({ message, onRetry }: { message: ChatMessage; onRetry?: (message: ChatMessage) => void }) {
   const stopped = message.role === "assistant" && Boolean(message.metadata.incomplete);
   const failed = message.delivery === "failed";
-  return <article className={`message ${message.role}`}><div className="message-meta">{message.role === "user" ? "你" : "Turning Good"}{stopped && <span className="stopped-badge">已停止</span>}{message.delivery === "sending" && <span>发送中</span>}{failed && <><span className="message-error">发送失败</span>{onRetry && <button className="message-retry" onClick={() => onRetry(message)}>重试</button>}</>}</div><div className="markdown"><ReactMarkdown components={{ code: CodeBlock }}>{message.content}</ReactMarkdown></div></article>;
+  return <article className={`message ${message.role}`}><div className="message-meta">{message.role === "user" ? "你" : "TGA"}{stopped && <span className="stopped-badge">已停止</span>}{message.delivery === "sending" && <span>发送中</span>}{failed && <><span className="message-error">发送失败</span>{onRetry && <button className="message-retry" onClick={() => onRetry(message)}>重试</button>}</>}</div><div className="markdown"><ReactMarkdown components={{ code: CodeBlock }}>{message.content}</ReactMarkdown></div></article>;
 }
 
 /** 渲染带语言标记和复制按钮的代码块。 */
@@ -105,5 +104,5 @@ function CodeBlock({ className, children, ...props }: { className?: string; chil
   if (!className) return <code {...props}>{children}</code>;
   const language = className.replace("language-", "") || "text";
   const label = copied ? "已复制代码" : "复制代码";
-  return <span className="code-block"><span className="code-language">{language}</span><IconTooltip label={label}><button className="icon-button" aria-label={label} onClick={() => void copy()}>{copied ? <Check size={14} /> : <Copy size={14} />}</button></IconTooltip><code className={className} {...props}>{children}</code></span>;
+  return <span className="code-block"><span className="code-language">{language}</span><button className="icon-button" aria-label={label} onClick={() => void copy()}>{copied ? <Check size={14} /> : <Copy size={14} />}</button><code className={className} {...props}>{children}</code></span>;
 }

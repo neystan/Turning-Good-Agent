@@ -1,12 +1,12 @@
 # Web Workbench Visual System Design
 
-状态：已完成。
+状态：已被 [固定布局与控制面设计](./2026-07-26-web-workbench-fixed-layout-design.md) 取代。本文保留为第二轮视觉重构的历史设计快照；其中 Tooltip 与 Switch 方案不再适用。
 
 ## 目标
 
 在不改变 Runtime、Session、Memory、Tool、MCP、REST、WebSocket 与 JSON/JSONL 边界的前提下，完成 Turning-Good-Agent Web 工作台的第二轮视觉与交互重构。
 
-本轮不迁入 Fluent、Material 或其他完整设计系统。采用“自定义工作台视觉 + Radix 交互基础组件”的方式：Radix 处理菜单、对话框、确认框、Tooltip 与 Switch 的可访问性和焦点行为；TGA 保留自己的 Token、布局、聊天体验与观测表达。
+本轮不迁入 Fluent、Material 或其他完整设计系统。采用“自定义工作台视觉 + Radix 交互基础组件”的方式：Radix 处理菜单、对话框和确认框的语义与焦点行为；TGA 保留自己的 Token、布局、聊天体验与观测表达。
 
 ## 设计定位
 

@@ -555,7 +555,7 @@ Web 工作台包含：
 - tool calls
 - 错误信息
 
-前端重构后，聊天历史使用 AbortController 与版本闸门防止旧会话慢响应覆盖当前会话；终态只刷新会话列表，不重置聊天滚动。每个 `request_id` 独立渲染位于 user 与 assistant 消息之间的“思考中”活动簇，步骤只来自 guidance、工具/MCP/Skill、审批、压缩、Stop 和终态事件，不展示或推断模型内部思维链。会话菜单、搜索、重命名与删除确认使用 Radix Primitive；输入区以全局“工具审批”开关表达后续审批策略。WebSocket 错误带回 `client_action_id`，失败消息可定位并重试；连接按有限退避重连后使用 `after_event_id` 回放。
+前端重构后，聊天历史使用 AbortController 与版本闸门防止旧会话慢响应覆盖当前会话；终态只刷新会话列表，不重置聊天滚动。每个 `request_id` 独立渲染位于 user 与 assistant 消息之间的“思考中”活动簇，步骤只来自 guidance、工具/MCP/Skill、审批、压缩、Stop 和终态事件，不展示或推断模型内部思维链。会话菜单、搜索、重命名与删除确认使用 Radix Primitive；输入区以“默认权限 / 完全访问”菜单表达全局后续审批策略，底层仍使用 `tool_permissions.auto_approve_tools`。WebSocket 错误带回 `client_action_id`，失败消息可定位并重试；连接按有限退避重连后使用 `after_event_id` 回放。
 
 会话检查器只读取 `session.json`、`messages.jsonl`、`turn_traces.jsonl`、`true_token_usage.jsonl` 和 `tool_calls.jsonl`，不引入数据库或重复监控文件。它默认展示数字摘要与结构化记录，原始 JSON 仅在单条记录中按需展开；桌面端打开时不移动聊天左锚点且不遮挡消息或 Composer，平板和移动端使用全屏阅读。`SAVE` 仍是唯一可靠持久化点。运行中 guidance 在 AgentLoop 的 LLM/Tool 安全检查点以固定 user 包装注入；Stop 不强杀在飞 Tool，等待审批时自动拒绝，已输出回复以 `incomplete=true`、`outcome=cancelled` 保存。
 

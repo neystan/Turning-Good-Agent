@@ -1,19 +1,21 @@
 # Web Workbench Fixed Layout Implementation Plan
 
+状态：已完成。2026-07-27 已按用户逐项视觉验收收口；当前环境缺少 Chromium，Playwright 截图验证未执行且不下载浏览器。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
 **Goal:** 将 Web 工作台改为随检查器开关重新居中的稳定会话布局，并以大圆角控制面完成权限菜单、工具审批、活动流和 Composer 的第三轮精修。
 
 **Architecture:** 桌面端保留左侧会话栏和主工作区；检查器关闭时主工作区使用单列，消息列与 Composer 居中。打开时内部 Grid 增加右侧检查器列，主会话容器左边界不动、右边界收缩，消息列与 Composer 在新的可用区域内居中。React 继续使用已有 REST、WebSocket、TaskEvent、SessionInspector 与全局 auto_approve_tools API；本次不增加事件、后端接口或持久化字段。
 
-**Tech Stack:** React、TypeScript、Vite、原生 CSS、lucide-react、Radix DropdownMenu、Radix Tooltip、Playwright（本地可选）。
+**Tech Stack:** React、TypeScript、Vite、原生 CSS、lucide-react、Radix DropdownMenu、Playwright（本地可选）。
 
 ## Global Constraints
 
 - 只修改 Web 前端和相关文档；不得修改 Runtime、Session、Memory、Tool、MCP、REST、WebSocket 或 JSON/JSONL。
 - 桌面端检查器关闭时不占列；打开时检查器列使用相对 CSS 约束适应可用空间，主会话容器左边界不动、右边界收缩，聊天列与 Composer 在新的区域内居中且等宽。
 - 窄屏检查器保持全屏覆盖层，左侧会话栏维持既有移动抽屉行为。
-- 权限菜单仅显示“默认权限”和“自动批准”；使用现有 onAutoApproveChange(boolean)，不展示额外安全说明，不改变二次安全检查。
+- 权限菜单仅显示“默认权限”和“完全访问”；使用现有 onAutoApproveChange(boolean)，不展示额外安全说明或鼠标悬浮文字，不改变二次安全检查。
 - 活动簇只渲染真实 TaskEvent，不得展示、推断、保存或伪造模型 reasoning。
 - 保留 lucide-react 为唯一图标库；不引入 Tailwind、shadcn、Fluent、Material 或完整 UI Kit。
 - 每个新增或修改函数必须带精简中文注释；纯 JSX/CSS 结构不新增无意义注释。
@@ -25,7 +27,7 @@
 
 - web/frontend/src/App.tsx：根据检查器状态切换主工作区内部 Grid；保留现有读取与关闭语义。
 - web/frontend/src/components/SessionInspector.tsx：只渲染已打开的检查器内容，不自行请求数据。
-- web/frontend/src/components/Composer.tsx：用 Radix DropdownMenu.RadioGroup 替换 Switch，并保留输入、发送和 Stop 行为。
+- web/frontend/src/components/Composer.tsx：使用 Radix DropdownMenu.RadioGroup 提供全局权限菜单，并保留输入、发送和 Stop 行为。
 - web/frontend/src/components/ActivityCluster.tsx：把真实事件收敛成低对比度活动流，并重做审批面板的 JSX 结构。
 - web/frontend/src/styles/tokens.css：统一相对检查器列、圆角和深浅主题控制面 token。
 - web/frontend/src/styles/layout.css：定义检查器开关下的单列/双列工作区与移动端全屏检查器。
@@ -138,7 +140,7 @@ InspectorLayer 在关闭时不显示且不占列；打开时渲染 SessionInspec
       await page.getByRole("button", { name: "工具权限：默认权限" }).click();
       await expect(page.getByRole("menuitemradio", { name: "默认权限" }))
         .toHaveAttribute("data-state", "checked");
-      await expect(page.getByRole("menuitemradio", { name: "自动批准" })).toBeVisible();
+      await expect(page.getByRole("menuitemradio", { name: "完全访问" })).toBeVisible();
       await expect(page.getByText("安全限制始终生效")).toHaveCount(0);
     });
 
@@ -170,14 +172,14 @@ InspectorLayer 在关闭时不显示且不占列；打开时渲染 SessionInspec
               默认权限<DropdownMenu.ItemIndicator><Check size={15} /></DropdownMenu.ItemIndicator>
             </DropdownMenu.RadioItem>
             <DropdownMenu.RadioItem className="is-warning" value="auto">
-              <TriangleAlert size={15} />自动批准<DropdownMenu.ItemIndicator><Check size={15} /></DropdownMenu.ItemIndicator>
+              <TriangleAlert size={15} />完全访问<DropdownMenu.ItemIndicator><Check size={15} /></DropdownMenu.ItemIndicator>
             </DropdownMenu.RadioItem>
           </DropdownMenu.RadioGroup>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
 
-permissionLabel 的值为 autoApprove ? "自动批准" : "默认权限"，按钮 aria-label 前缀为“工具权限：”。为 PermissionMenu 加“渲染全局工具权限选择菜单”的中文注释。发送按钮改为带 IconTooltip 的 40px 圆形 button，使用 aria-label="发送消息"；运行时同一位置渲染带图标和“停止”的圆角 Stop 按钮，aria-label="停止任务"。保留 Enter 发送、Shift+Enter 换行、220px 高度限制与已有 API 错误处理。
+permissionLabel 的值为 autoApprove ? "完全访问" : "默认权限"，按钮 aria-label 前缀为“工具权限：”。为 PermissionMenu 加“渲染全局工具权限选择菜单”的中文注释。发送与 Stop 在同一圆形操作槽切换，分别使用上箭头与方形图标，不显示文字或鼠标悬浮说明。保留 Enter 发送、Shift+Enter 换行、220px 高度限制与已有 API 错误处理。
 
 - [ ] **Step 4: 编写 Composer 控制面样式**
 
@@ -294,7 +296,7 @@ permissionLabel 的值为 autoApprove ? "自动批准" : "默认权限"，按钮
 
 - [ ] **Step 4: 检查 session 菜单、检查器与主题细节**
 
-检查 SessionSidebar 的 Radix DropdownMenu.Portal 不受检查器显示层裁切；SessionInspector 的关闭按钮保留 Tooltip 和 aria-label。在浅色主题验证正文、次级文字、琥珀审批与按钮焦点有足够对比度；在深色主题验证 Composer 不使用大面积高饱和蓝色。
+检查 SessionSidebar 的 Radix DropdownMenu.Portal 不受检查器显示层裁切；SessionInspector 的关闭按钮保留 aria-label 而不显示悬浮说明。在浅色主题验证正文、次级文字、琥珀审批与按钮焦点有足够对比度；在深色主题验证 Composer 不使用大面积高饱和蓝色。
 
 - [ ] **Step 5: 验证并提交视觉收口源码**
 

@@ -224,6 +224,7 @@ def _mount_static(app: FastAPI) -> None:
     index = static_dir / "index.html"
     if not index.exists():
         return
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
     app.mount("/assets", StaticFiles(directory=static_dir / "assets"), name="assets")
 
     @app.get("/")

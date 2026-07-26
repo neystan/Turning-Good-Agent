@@ -18,7 +18,7 @@
 | Phase 3 | [四个轻量 Hooks](./phases/2026-06-15-phase-3-hooks.md) | 已完成；含 Channel 输出、会话工具权限和只读 Turn Monitor |
 | Phase 4 | [MCP Client、审批与 Runtime 收口](./phases/2026-06-15-phase-4-mcp-client.md) | 已完成；支持 stdio、Streamable HTTP、Catalog、全局审批、当前轮附件、后台 Worker 与连接级重试 |
 | Phase 5 | [Skills 机制](./phases/2026-06-15-phase-5-skills.md) | 已完成 |
-| Phase 6 | [Web Channel 与会话观测工作台](./phases/2026-06-15-phase-6-web-observability.md) | 已完成 |
+| Phase 6 | [Web Channel 与会话观测工作台](./phases/2026-06-15-phase-6-web-observability.md) | 已完成；含固定会话布局、结构化检查器、真实事件活动流与全局权限菜单 |
 | Phase 7 | [主动能力与长期记忆](./phases/2026-06-15-phase-7-proactive-memory.md) | 计划中 |
 | Phase 8 | [Multi-Agent 协作模式](./phases/2026-06-15-phase-8-multi-agent.md) | 计划中 |
 | Phase 9 | [多 Channel 接入](./phases/2026-06-15-phase-9-channel-adapters.md) | 计划中 |

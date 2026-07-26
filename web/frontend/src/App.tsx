@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Menu, Moon, PanelRight, Sun } from "lucide-react";
-import * as Tooltip from "@radix-ui/react-tooltip";
 
 import { api } from "./api";
 import { ChatTimeline } from "./components/ChatTimeline";
 import { Composer } from "./components/Composer";
-import { IconTooltip } from "./components/IconTooltip";
 import { NoticeRegion } from "./components/NoticeRegion";
 import { SessionInspector } from "./components/SessionInspector";
 import { SessionSearchDialog } from "./components/SessionSearchDialog";
@@ -221,16 +219,15 @@ export function App() {
   const current = useMemo(() => [...sessions, ...archived].find((item) => item.id === sessionId), [archived, sessionId, sessions]);
   const currentTurnCount = Object.values(sessionState.turns).reduce((count, turn) => count + turn.events.length, 0);
 
-  return <Tooltip.Provider delayDuration={450}>
-    <div className="app-shell">
+  return <div className="app-shell">
     <a className="skip-link" href="#main-content">跳到对话</a>
     <SessionSidebar active={sessions} archived={archived} currentId={sessionId} mobileOpen={mobileMenu} onCloseMobile={() => setMobileMenu(false)} onNew={() => navigate(null)} onOpenSearch={() => setSearchOpen(true)} onSelect={navigate} onUpdate={updateSession} onDelete={deleteSession} onError={addNotice} />
     {mobileMenu && <button className="scrim" aria-label="关闭会话栏" onClick={() => setMobileMenu(false)} />}
     <main id="main-content" className={`conversation ${inspectorOpen ? "is-inspector-open" : ""}`}>
       <header className="topbar">
-        <IconTooltip label="打开会话栏"><button className="icon-button mobile-only" aria-label="打开会话栏" onClick={() => setMobileMenu(true)}><Menu /></button></IconTooltip>
+        <button className="icon-button mobile-only" aria-label="打开会话栏" onClick={() => setMobileMenu(true)}><Menu /></button>
         <div className="title-block"><span className={`connection-dot ${sessionState.running ? "is-running" : ""}`} aria-hidden="true" /><h1>{current?.title || "新建会话"}</h1><span className="connection-label">{connectionLabel(connection)}</span>{current?.archived && <span className="readonly">已归档</span>}</div>
-        <div className="top-actions"><IconTooltip label="切换主题"><button className="icon-button" aria-label="切换主题" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun /> : <Moon />}</button></IconTooltip><IconTooltip label="打开会话检查器"><button className="icon-button" aria-label="打开会话检查器" disabled={!sessionId} onClick={() => void openInspector()}><PanelRight /></button></IconTooltip></div>
+        <div className="top-actions"><button className="icon-button" aria-label="切换主题" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun /> : <Moon />}</button><button className="icon-button" aria-label="打开会话检查器" disabled={!sessionId} onClick={() => void openInspector()}><PanelRight /></button></div>
       </header>
       <ChatTimeline sessionId={sessionId} messages={sessionState.messages} turns={sessionState.turns} contentVersion={currentTurnCount} composerRef={composerRef} onRetry={retryMessage} renderTurn={(turn) => <ActivityCluster key={turn.requestId} turn={turn} onResolveApproval={resolveApproval} />}>
         {!sessionId && sessionState.messages.length === 0 && <div className="empty-state"><h2>开始一个工作会话</h2><p>首条消息发送后才会创建本地会话记录。</p></div>}
@@ -240,8 +237,7 @@ export function App() {
     </main>
     <SessionSearchDialog open={searchOpen} sessions={[...sessions, ...archived]} currentId={sessionId} onClose={() => setSearchOpen(false)} onSelect={navigate} />
     <NoticeRegion notices={notices} onDismiss={dismissNotice} />
-    </div>
-  </Tooltip.Provider>;
+    </div>;
 }
 
 /** 渲染检查器视觉留白层，避免开关改变内容列。 */

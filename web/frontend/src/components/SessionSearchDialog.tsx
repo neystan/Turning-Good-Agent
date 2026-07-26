@@ -3,6 +3,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Search } from "lucide-react";
 
 import { filterSessions } from "../state/session_search";
+import { ScrollArea } from "./ScrollArea";
 import type { Session } from "../types";
 
 type SessionSearchDialogProps = {
@@ -53,5 +54,5 @@ export function SessionSearchDialog({ open, sessions, currentId, onClose, onSele
     }
   };
 
-  return <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}><Dialog.Portal><Dialog.Overlay className="dialog-overlay" /><Dialog.Content className="session-search-dialog"><Dialog.Title className="sr-only">搜索会话</Dialog.Title><Dialog.Description className="sr-only">按会话标题筛选本地会话。</Dialog.Description><label className="session-search-input"><Search size={18} aria-hidden="true" /><span className="sr-only">搜索会话</span><input name="session-search" autoComplete="off" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={onKeyDown} placeholder="搜索会话…" /></label><div className="session-search-results" role="listbox" aria-label="会话结果">{results.length ? results.map((session, index) => <button key={session.id} role="option" aria-selected={index === activeIndex} className={index === activeIndex ? "is-active" : ""} onMouseEnter={() => setActiveIndex(index)} onClick={() => select(session.id)}><span>{session.title}</span>{session.id === currentId && <small>当前会话</small>}{session.archived && <small>已归档</small>}</button>) : <p>没有匹配的会话。</p>}</div></Dialog.Content></Dialog.Portal></Dialog.Root>;
+  return <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}><Dialog.Portal><Dialog.Overlay className="dialog-overlay" /><Dialog.Content className="session-search-dialog"><Dialog.Title className="sr-only">搜索会话</Dialog.Title><Dialog.Description className="sr-only">按会话标题筛选本地会话。</Dialog.Description><label className="session-search-input"><Search size={18} aria-hidden="true" /><span className="sr-only">搜索会话</span><input name="session-search" autoComplete="off" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={onKeyDown} placeholder="搜索会话…" /></label><ScrollArea className="session-search-results" role="listbox" aria-label="会话结果">{results.length ? results.map((session, index) => <button key={session.id} role="option" aria-selected={index === activeIndex} className={index === activeIndex ? "is-active" : ""} onMouseEnter={() => setActiveIndex(index)} onClick={() => select(session.id)}><span>{session.title}</span>{session.id === currentId && <small>当前会话</small>}{session.archived && <small>已归档</small>}</button>) : <p>没有匹配的会话。</p>}</ScrollArea></Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
