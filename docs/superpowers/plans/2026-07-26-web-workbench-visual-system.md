@@ -4,6 +4,8 @@
 
 **Goal:** 将 TGA Web 改造成统一、可信且不遮挡对话内容的本机 Agent 工作台，并以 Radix Primitive 收口浮层与审批交互。
 
+**状态：已完成。** Chromium 不在当前环境，Playwright 浏览器断言保留为本地验收项，未下载浏览器。
+
 **Architecture:** 保留 React、TypeScript、Vite、既有 REST/WebSocket、会话状态和原生 CSS。Radix 只处理菜单、对话框、确认框、Tooltip 与 Switch 的语义和焦点行为，视觉继续由 TGA Token 与布局控制。活动簇和检查器只读取现有消息、TaskEvent 与观测记录。
 
 **Tech Stack:** React、TypeScript、Vite、原生 CSS、lucide-react、Radix DropdownMenu、Dialog、AlertDialog、Tooltip、Switch。
