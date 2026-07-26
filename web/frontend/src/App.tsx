@@ -236,18 +236,17 @@ export function App() {
         {!sessionId && sessionState.messages.length === 0 && <div className="empty-state"><h2>开始一个工作会话</h2><p>首条消息发送后才会创建本地会话记录。</p></div>}
       </ChatTimeline>
       <Composer rootRef={composerRef} session={current} running={sessionState.running} draft={draft || sessionState.pendingDraft} autoApprove={autoApprove} onDraftChange={changeDraft} onSend={() => send()} onStop={stop} onRestore={() => current && void updateSession(current.id, { archived: false })} onAutoApproveChange={(enabled) => void setApproval(enabled)} />
+      <InspectorLayer open={inspectorOpen} data={inspector} onClose={() => setInspectorOpen(false)} />
     </main>
-    <InspectorRail open={inspectorOpen} data={inspector} canOpen={Boolean(sessionId)} onOpen={() => void openInspector()} onClose={() => setInspectorOpen(false)} />
     <SessionSearchDialog open={searchOpen} sessions={[...sessions, ...archived]} currentId={sessionId} onClose={() => setSearchOpen(false)} onSelect={navigate} />
     <NoticeRegion notices={notices} onDismiss={dismissNotice} />
     </div>
   </Tooltip.Provider>;
 }
 
-/** 渲染常驻检查器轨道，避免开关改变中央会话区域。 */
-function InspectorRail({ open, data, canOpen, onOpen, onClose }: { open: boolean; data: Observability | null; canOpen: boolean; onOpen: () => void; onClose: () => void }) {
-  if (open) return <aside className="inspector-rail"><SessionInspector data={data} onClose={onClose} /></aside>;
-  return <aside className="inspector-rail"><IconTooltip label="打开会话检查器"><button className="inspector-rail-trigger" aria-label="打开会话检查器" disabled={!canOpen} onClick={onOpen}><PanelRight size={17} aria-hidden="true" /><span>检查器</span></button></IconTooltip></aside>;
+/** 渲染检查器视觉留白层，避免开关改变内容列。 */
+function InspectorLayer({ open, data, onClose }: { open: boolean; data: Observability | null; onClose: () => void }) {
+  return <aside className={`inspector-layer ${open ? "is-open" : ""}`} aria-hidden={!open}>{open && <SessionInspector data={data} onClose={onClose} />}</aside>;
 }
 
 /** 将连接状态转换为紧凑的用户可见文本。 */

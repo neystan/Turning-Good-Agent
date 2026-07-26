@@ -1,13 +1,14 @@
-.app-shell { height: 100dvh; overflow: hidden; display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--inspector-width); background: var(--page); }
-.sidebar, .conversation, .chat-scroll, .inspector-rail, .inspector, .inspector-body { min-height: 0; }
+.app-shell { height: 100dvh; overflow: hidden; display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); background: var(--page); }
+.sidebar, .conversation, .chat-scroll, .inspector-layer, .inspector, .inspector-body { min-height: 0; }
 .sidebar { overflow-y: auto; overscroll-behavior: contain; padding: 16px 10px; border-right: 1px solid var(--border); background: var(--surface); }
-.conversation { display: grid; grid-template-rows: 56px minmax(0, 1fr) auto; min-width: 0; height: 100dvh; }
-.chat-scroll { position: relative; overflow-y: auto; overscroll-behavior: contain; padding: 34px clamp(18px, 6vw, 92px) 26px; }
-.inspector-rail { min-width: 0; display: grid; border-left: 1px solid var(--border); background: var(--surface); }
-.inspector-rail-trigger { min-height: 56px; display: flex; align-items: center; justify-content: flex-start; gap: 8px; border: 0; padding: 0 16px; background: transparent; color: var(--muted); cursor: pointer; text-align: left; }
-.inspector-rail-trigger:hover { background: var(--surface-hover); color: var(--text); }
-.inspector-rail-trigger:disabled { cursor: not-allowed; opacity: .45; }
+.conversation { display: grid; grid-template-columns: minmax(0, 1fr) var(--inspector-reserve); grid-template-rows: 56px minmax(0, 1fr) auto; min-width: 0; height: 100dvh; }
+.topbar { grid-column: 1 / -1; grid-row: 1; }
+.chat-scroll { grid-column: 1; grid-row: 2; position: relative; overflow-y: auto; overscroll-behavior: contain; padding: 34px var(--content-gutter) 26px; }
+.composer { grid-column: 1; grid-row: 3; width: min(var(--chat-max-width), calc(100% - var(--content-gutter) - var(--content-gutter))); margin: 10px auto 12px; }
+.inspector-layer { grid-column: 2; grid-row: 1 / -1; min-width: 0; background: var(--page); }
+.inspector-layer.is-open { z-index: 2; border-left: 1px solid var(--border); background: var(--surface); }
+.inspector-layer.is-open .inspector { height: 100dvh; box-shadow: -16px 0 40px var(--shadow); }
 .inspector { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--surface); }
 .inspector-body { overflow-y: auto; overscroll-behavior: contain; padding: 14px; }
-@media (max-width: 1099px) { .app-shell { grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }.inspector-rail { display: contents; }.inspector-rail-trigger { display: none; }.inspector { position: fixed; z-index: 50; inset: 0; width: 100vw; padding-bottom: env(safe-area-inset-bottom); box-shadow: -16px 0 40px var(--shadow); } }
-@media (max-width: 760px) { .app-shell { grid-template-columns: minmax(0, 1fr); }.sidebar { position: fixed; z-index: 40; inset: 0 auto 0 0; width: min(294px, 86vw); transform: translateX(-104%); transition: transform 160ms ease; box-shadow: 12px 0 36px var(--shadow); }.sidebar.is-open { transform: translateX(0); }.scrim { position: fixed; z-index: 35; inset: 0; display: block; border: 0; background: rgb(0 0 0 / 38%); }.mobile-only { display: inline-grid !important; }.chat-scroll { padding: 22px 14px; }.composer { margin: 8px 10px calc(8px + env(safe-area-inset-bottom)); } }
+@media (max-width: 1099px) { .conversation { grid-template-columns: minmax(0, 1fr); }.inspector-layer { display: contents; }.inspector-layer.is-open .inspector { position: fixed; z-index: 50; inset: 0; width: 100vw; padding-bottom: env(safe-area-inset-bottom); box-shadow: -16px 0 40px var(--shadow); } }
+@media (max-width: 760px) { .app-shell { grid-template-columns: minmax(0, 1fr); }.sidebar { position: fixed; z-index: 40; inset: 0 auto 0 0; width: min(294px, 86vw); transform: translateX(-104%); transition: transform 160ms ease; box-shadow: 12px 0 36px var(--shadow); }.sidebar.is-open { transform: translateX(0); }.scrim { position: fixed; z-index: 35; inset: 0; display: block; border: 0; background: rgb(0 0 0 / 38%); }.mobile-only { display: inline-grid !important; }.chat-scroll { padding: 22px 14px; }.composer { width: calc(100% - 28px); margin: 8px 14px calc(8px + env(safe-area-inset-bottom)); } }
