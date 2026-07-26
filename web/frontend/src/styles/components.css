@@ -33,3 +33,6 @@
 
 /* 权限策略保持低干扰，危险模式只通过文字和状态色提示边界。 */
 .permission-trigger { min-height: 32px; }.permission-trigger[aria-expanded="true"] { border-color: var(--border-strong); background: var(--surface-hover); }.permission-menu { z-index: 101; }.composer-action { min-width: 86px; justify-content: center; }.composer-action.is-stop { border: 1px solid color-mix(in srgb, var(--danger) 48%, transparent); }.composer-action.is-stop:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+
+/* Tooltip 只服务无文字图标，不改变按钮自身布局。 */
+.icon-tooltip { z-index: 120; border: 1px solid var(--border-strong); border-radius: 6px; padding: 5px 7px; background: var(--surface-raised); box-shadow: 0 8px 20px var(--shadow); color: var(--text); font-size: 12px; line-height: 1.35; }.icon-tooltip-arrow { fill: var(--surface-raised); }

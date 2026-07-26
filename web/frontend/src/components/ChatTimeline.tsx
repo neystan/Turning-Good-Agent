@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "re
 import { Check, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 
+import { IconTooltip } from "./IconTooltip";
 import type { ChatMessage, TurnState } from "../types";
 import { shouldFollowLatest } from "../state/chat_scroll";
 
@@ -103,5 +104,6 @@ function CodeBlock({ className, children, ...props }: { className?: string; chil
   };
   if (!className) return <code {...props}>{children}</code>;
   const language = className.replace("language-", "") || "text";
-  return <span className="code-block"><span className="code-language">{language}</span><button className="icon-button" title={copied ? "已复制" : "复制代码"} aria-label={copied ? "已复制代码" : "复制代码"} onClick={() => void copy()}>{copied ? <Check size={14} /> : <Copy size={14} />}</button><code className={className} {...props}>{children}</code></span>;
+  const label = copied ? "已复制代码" : "复制代码";
+  return <span className="code-block"><span className="code-language">{language}</span><IconTooltip label={label}><button className="icon-button" aria-label={label} onClick={() => void copy()}>{copied ? <Check size={14} /> : <Copy size={14} />}</button></IconTooltip><code className={className} {...props}>{children}</code></span>;
 }
