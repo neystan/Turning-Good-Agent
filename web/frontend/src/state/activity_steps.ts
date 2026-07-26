@@ -15,6 +15,11 @@ export function buildActivitySteps(events: Pick<TaskEvent, "event_id" | "type" |
   });
 }
 
+/** 返回最近一个可展示的真实任务动作。 */
+export function latestActivityStep(steps: ActivityStep[]): ActivityStep | null {
+  return steps.at(-1) || null;
+}
+
 /** 映射单个白名单事件，未知事件一律不展示。 */
 function toActivityStep(event: Pick<TaskEvent, "event_id" | "type" | "payload">, index: number): ActivityStep | null {
   const key = `${event.event_id ?? index}-${event.type}`;

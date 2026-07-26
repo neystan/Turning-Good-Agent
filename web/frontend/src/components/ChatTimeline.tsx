@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown";
 import { IconTooltip } from "./IconTooltip";
 import type { ChatMessage, TurnState } from "../types";
 import { shouldFollowLatest } from "../state/chat_scroll";
+import { buildTimelineEntries } from "../state/timeline_entries";
 
 type ChatTimelineProps = {
   sessionId: string | null;
@@ -76,10 +77,9 @@ export function ChatTimeline({ sessionId, messages, turns = {}, contentVersion =
     setHasUnread(false);
   };
 
-  const renderedTurns = new Set(messages.filter((message) => message.role === "assistant" && message.request_id).map((message) => message.request_id as string));
+  const entries = buildTimelineEntries(messages, turns);
   return <section ref={scrollRef} className="chat-scroll" aria-live="polite" onScroll={onScroll}>
-    {messages.map((message) => <div key={message.id}><MessageView message={message} onRetry={onRetry} />{message.role === "assistant" && message.request_id && turns[message.request_id] && renderTurn?.(turns[message.request_id])}</div>)}
-    {Object.values(turns).filter((turn) => !renderedTurns.has(turn.requestId)).map((turn) => <div key={turn.requestId}>{renderTurn?.(turn)}</div>)}
+    {entries.map((entry) => entry.kind === "message" ? <MessageView key={entry.id} message={entry.message} onRetry={onRetry} /> : <div key={entry.id}>{renderTurn?.(entry.turn)}</div>)}
     {children}
     {hasUnread && <button className="new-message-button" onClick={scrollToLatest}>有新消息</button>}
   </section>;

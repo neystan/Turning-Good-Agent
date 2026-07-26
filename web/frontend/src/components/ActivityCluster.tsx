@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, CircleAlert, CircleStop, LoaderCircle, ShieldAlert } from "lucide-react";
 
-import { buildActivitySteps } from "../state/activity_steps";
+import { buildActivitySteps, latestActivityStep } from "../state/activity_steps";
 import type { TaskEvent, TurnState } from "../types";
 
 type ActivityClusterProps = {
@@ -15,6 +15,7 @@ export function ActivityCluster({ turn, onResolveApproval }: ActivityClusterProp
   const [open, setOpen] = useState(running);
   const [now, setNow] = useState(Date.now());
   const steps = useMemo(() => buildActivitySteps(turn.events), [turn.events]);
+  const latestStep = latestActivityStep(steps);
   const approval = useMemo(() => pendingApproval(turn.events), [turn.events]);
   const stepListRef = useRef<HTMLOListElement>(null);
   const atBottomRef = useRef(true);
@@ -43,10 +44,23 @@ export function ActivityCluster({ turn, onResolveApproval }: ActivityClusterProp
     if (open && list && atBottomRef.current) list.scrollTop = list.scrollHeight;
   }, [open, steps.length]);
 
-  if (!steps.length && !approval) return null;
+  if (!steps.length && !approval && !running) return null;
   const toolCount = turn.events.filter((event) => event.type === "tool.started").length;
-  const summary = running ? `思考中 · 已用 ${durationLabel(turn.startedAt, now)}` : `${turnStatusLabel(turn.status)}${toolCount ? ` · ${toolCount} 个工具` : ""} · ${durationLabel(turn.startedAt, Date.parse(turn.finishedAt || new Date().toISOString()))}`;
+  const summary = running ? runningSummary(latestStep, turn.startedAt, now) : completedSummary(turn.status, toolCount, turn.startedAt, turn.finishedAt);
   return <section className={`activity-cluster is-${turn.status}`} aria-label="任务执行过程"><button className="activity-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>{running ? <LoaderCircle className="activity-spinner" size={16} aria-hidden="true" /> : <StatusIcon status={turn.status} />}<span>{summary}</span><ChevronDown size={15} className={open ? "" : "rotated"} aria-hidden="true" /></button>{open && <ol ref={stepListRef} className="activity-steps" onScroll={() => { const list = stepListRef.current; if (list) atBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 20; }}>{steps.map((step) => <li className={`is-${step.tone}`} key={step.key}><span className="activity-marker" /><div><strong>{step.label}</strong>{step.detail && <small>{step.detail}</small>}</div></li>)}</ol>}{approval && <ApprovalBar approval={approval} onResolve={onResolveApproval} />}</section>;
+}
+
+/** 优先显示最近真实动作，空事件阶段才显示中性运行状态。 */
+function runningSummary(step: ReturnType<typeof latestActivityStep>, startedAt: string, now: number): string {
+  if (step) return `${step.label}${step.detail ? ` ${step.detail}` : ""}`;
+  return `思考中，已用 ${durationLabel(startedAt, now)}`;
+}
+
+/** 使用紧凑中文摘要表达已结束的真实任务。 */
+function completedSummary(status: TurnState["status"], toolCount: number, startedAt: string, finishedAt?: string): string {
+  const parts = [turnStatusLabel(status), durationLabel(startedAt, Date.parse(finishedAt || new Date().toISOString()))];
+  if (toolCount) parts.push(`调用 ${toolCount} 个工具`);
+  return parts.join("，");
 }
 
 /** 计算开始时间到当前或结束时间的紧凑耗时。 */
