@@ -5,8 +5,8 @@
 .topbar { grid-column: 1 / -1; grid-row: 1; }
 .chat-scroll { grid-column: 1; grid-row: 2; position: relative; overflow-y: auto; overscroll-behavior: contain; padding: 34px var(--content-gutter) 26px; }
 .composer { grid-column: 1; grid-row: 3; width: min(var(--chat-max-width), calc(100% - var(--content-gutter) - var(--content-gutter))); margin: 10px auto 12px; }
-.inspector-layer { grid-column: 2; grid-row: 1 / -1; min-width: 0; background: var(--page); }
-.inspector-layer.is-open { z-index: 2; border-left: 1px solid var(--border); background: var(--surface); }
+.inspector-layer { grid-column: 2; grid-row: 2 / -1; min-width: 0; background: var(--page); }
+.inspector-layer.is-open { z-index: 2; grid-row: 1 / -1; border-left: 1px solid var(--border); background: var(--surface); }
 .inspector-layer.is-open .inspector { height: 100dvh; box-shadow: -16px 0 40px var(--shadow); }
 .inspector { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--surface); }
 .inspector-body { overflow-y: auto; overscroll-behavior: contain; padding: 14px; }
