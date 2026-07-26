@@ -226,7 +226,7 @@ export function App() {
     <a className="skip-link" href="#main-content">跳到对话</a>
     <SessionSidebar active={sessions} archived={archived} currentId={sessionId} mobileOpen={mobileMenu} onCloseMobile={() => setMobileMenu(false)} onNew={() => navigate(null)} onOpenSearch={() => setSearchOpen(true)} onSelect={navigate} onUpdate={updateSession} onDelete={deleteSession} onError={addNotice} />
     {mobileMenu && <button className="scrim" aria-label="关闭会话栏" onClick={() => setMobileMenu(false)} />}
-    <main id="main-content" className="conversation">
+    <main id="main-content" className={`conversation ${inspectorOpen ? "is-inspector-open" : ""}`}>
       <header className="topbar">
         <IconTooltip label="打开会话栏"><button className="icon-button mobile-only" aria-label="打开会话栏" onClick={() => setMobileMenu(true)}><Menu /></button></IconTooltip>
         <div className="title-block"><span className={`connection-dot ${sessionState.running ? "is-running" : ""}`} aria-hidden="true" /><h1>{current?.title || "新建会话"}</h1><span className="connection-label">{connectionLabel(connection)}</span>{current?.archived && <span className="readonly">已归档</span>}</div>
