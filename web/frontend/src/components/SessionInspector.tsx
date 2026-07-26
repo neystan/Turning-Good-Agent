@@ -6,10 +6,10 @@ import type { Observability } from "../types";
 
 /** 渲染先摘要、后结构化明细的会话观测抽屉。 */
 export function SessionInspector({ data, onClose }: { data: Observability | null; onClose: () => void }) {
-  if (!data) return <aside className="inspector" aria-label="会话检查器"><InspectorHeader onClose={onClose} /><p>正在读取观测数据…</p></aside>;
+  if (!data) return <section className="inspector" aria-label="会话检查器"><InspectorHeader onClose={onClose} /><p>正在读取观测数据…</p></section>;
   const summary = buildInspectorSummary(data);
   const sections = buildInspectorSections(data);
-  return <aside className="inspector" aria-label="会话检查器"><InspectorHeader onClose={onClose} /><div className="inspector-body"><dl className="inspector-summary"><Metric label="累计输入" value={formatTokenCount(summary.inputTokens)} /><Metric label="累计输出" value={formatTokenCount(summary.outputTokens)} /><Metric label="当前上下文" value={formatTokenCount(summary.contextTokens)} /><Metric label="压缩次数" value={formatTokenCount(summary.compactions)} /><Metric label="工具失败" value={formatTokenCount(summary.toolFailures)} /></dl>{sections.map((section) => <InspectorSection key={section.title} title={section.title} count={section.count} records={section.records} />)}</div></aside>;
+  return <section className="inspector" aria-label="会话检查器"><InspectorHeader onClose={onClose} /><div className="inspector-body"><dl className="inspector-summary"><Metric label="累计输入" value={formatTokenCount(summary.inputTokens)} /><Metric label="累计输出" value={formatTokenCount(summary.outputTokens)} /><Metric label="当前上下文" value={formatTokenCount(summary.contextTokens)} /><Metric label="压缩次数" value={formatTokenCount(summary.compactions)} /><Metric label="工具失败" value={formatTokenCount(summary.toolFailures)} /></dl>{sections.map((section) => <InspectorSection key={section.title} title={section.title} count={section.count} records={section.records} />)}</div></section>;
 }
 
 /** 渲染检查器标题与关闭控制。 */
