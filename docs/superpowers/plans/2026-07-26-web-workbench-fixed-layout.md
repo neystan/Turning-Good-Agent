@@ -2,16 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
-**Goal:** 将 Web 工作台改为带连续背景留白层的稳定会话布局，并以大圆角控制面完成权限菜单、工具审批、活动流和 Composer 的第三轮精修。
+**Goal:** 将 Web 工作台改为随检查器开关重新居中的稳定会话布局，并以大圆角控制面完成权限菜单、工具审批、活动流和 Composer 的第三轮精修。
 
-**Architecture:** 桌面端保留左侧会话栏和主工作区；主工作区的内部 Grid 让顶部栏跨列、让消息列与 Composer 共用内容列，并在右侧保留连续背景的视觉留白层。检查器仅在该留白层上显示，绝不修改消息列、Composer 的宽度、边距和滚动位置。React 继续使用已有 REST、WebSocket、TaskEvent、SessionInspector 与全局 auto_approve_tools API；本次不增加事件、后端接口或持久化字段。
+**Architecture:** 桌面端保留左侧会话栏和主工作区；检查器关闭时主工作区使用单列，消息列与 Composer 居中。打开时内部 Grid 增加右侧检查器列，主会话容器左边界不动、右边界收缩，消息列与 Composer 在新的可用区域内居中。React 继续使用已有 REST、WebSocket、TaskEvent、SessionInspector 与全局 auto_approve_tools API；本次不增加事件、后端接口或持久化字段。
 
 **Tech Stack:** React、TypeScript、Vite、原生 CSS、lucide-react、Radix DropdownMenu、Radix Tooltip、Playwright（本地可选）。
 
 ## Global Constraints
 
 - 只修改 Web 前端和相关文档；不得修改 Runtime、Session、Memory、Tool、MCP、REST、WebSocket 或 JSON/JSONL。
-- 桌面端右侧留白层使用相对 CSS 约束适应可用空间；关闭时仅为连续背景，打开检查器不得改变左栏、聊天列或 Composer 的几何关系。
+- 桌面端检查器关闭时不占列；打开时检查器列使用相对 CSS 约束适应可用空间，主会话容器左边界不动、右边界收缩，聊天列与 Composer 在新的区域内居中且等宽。
 - 窄屏检查器保持全屏覆盖层，左侧会话栏维持既有移动抽屉行为。
 - 权限菜单仅显示“默认权限”和“自动批准”；使用现有 onAutoApproveChange(boolean)，不展示额外安全说明，不改变二次安全检查。
 - 活动簇只渲染真实 TaskEvent，不得展示、推断、保存或伪造模型 reasoning。
@@ -23,19 +23,19 @@
 
 ## File Map
 
-- web/frontend/src/App.tsx：始终渲染桌面检查器留白层；保留现有读取与关闭语义。
+- web/frontend/src/App.tsx：根据检查器状态切换主工作区内部 Grid；保留现有读取与关闭语义。
 - web/frontend/src/components/SessionInspector.tsx：只渲染已打开的检查器内容，不自行请求数据。
 - web/frontend/src/components/Composer.tsx：用 Radix DropdownMenu.RadioGroup 替换 Switch，并保留输入、发送和 Stop 行为。
 - web/frontend/src/components/ActivityCluster.tsx：把真实事件收敛成低对比度活动流，并重做审批面板的 JSX 结构。
-- web/frontend/src/styles/tokens.css：统一相对留白、圆角和深浅主题控制面 token。
-- web/frontend/src/styles/layout.css：定义工作区内部留白层和移动端全屏检查器，不再使用打开后重写中央列宽度的规则。
+- web/frontend/src/styles/tokens.css：统一相对检查器列、圆角和深浅主题控制面 token。
+- web/frontend/src/styles/layout.css：定义检查器开关下的单列/双列工作区与移动端全屏检查器。
 - web/frontend/src/styles/components.css：实现菜单、Composer、活动簇、审批和检查器的大圆角视觉语言。
 - web/frontend/e2e/visual-system.spec.ts：本地 Playwright 几何与菜单语义断言，不提交。
 - README.md、docs/README.md、docs/PROJECT_ARCHITECTURE.md、docs/TURNING_GOOD_AGENT_SPEC.md、docs/phases/2026-06-15-phase-6-web-observability.md：同步 Web UI 边界与验证记录。
 
 ---
 
-### Task 1: 重做检查器留白层，消除桌面端遮挡与视觉割裂
+### Task 1: 检查器开关下的会话居中布局
 
 **Files:**
 - Modify: web/frontend/src/App.tsx
@@ -46,10 +46,10 @@
 
 **Interfaces:**
 - SessionInspector({ data, onClose }) 继续只接受当前观测数据与关闭回调。
-- 新增内部组件 InspectorLayer({ open, data, onClose })；关闭时只输出语义隐藏的留白层，打开时输出 SessionInspector。
+- 新增内部组件 InspectorLayer({ open, data, onClose })；关闭时不占 Grid 列，打开时输出 SessionInspector。
 - App 的 inspectorOpen 仍决定是否已经成功取得当前会话的观测数据。
 
-- [ ] **Step 1: 写失败的桌面几何用例**
+- [x] **Step 1: 写失败的桌面几何用例**
 
 在本地 visual-system.spec.ts 增加如下用例。测试使用可注入的现有会话 fixture 或启动后的真实测试会话；不得伪造 WebSocket 事件：
 
@@ -67,19 +67,19 @@
       expect(await composer.boundingBox()).toEqual(before.composer);
     });
 
-- [ ] **Step 2: 运行用例并确认旧实现失败**
+- [x] **Step 2: 运行用例并确认旧实现失败**
 
 运行：cd web/frontend && npx playwright test e2e/visual-system.spec.ts -g "检查器开关"
 
 预期：若 Chromium 已安装，旧版会因为 .inspector 固定覆盖并改变 Composer/消息可用区域而失败；若浏览器未安装，记录缺少 Chromium，不下载浏览器。
 
-- [ ] **Step 3: 实现连续背景留白层**
+- [x] **Step 3: 实现检查器开关下的单列/双列布局**
 
 在 App.tsx 中将条件渲染：
 
     {inspectorOpen && <SessionInspector data={inspector} onClose={() => setInspectorOpen(false)} />}
 
-替换为始终存在的留白层：
+替换为始终存在的检查器层：
 
     <InspectorLayer
       open={inspectorOpen}
@@ -87,30 +87,31 @@
       onClose={() => setInspectorOpen(false)}
     />
 
-InspectorLayer 在关闭时只渲染 aria-hidden 的空留白层；打开时渲染 SessionInspector。打开入口只保留现有顶部栏图标。为该内部函数添加“渲染检查器视觉留白层”的中文注释。
+InspectorLayer 在关闭时不显示且不占列；打开时渲染 SessionInspector。打开入口只保留现有顶部栏图标。为该内部函数添加“渲染检查器显示层”的中文注释。
 
-将 token 设为相对留白约束：
+将 token 设为相对检查器列约束：
 
     --inspector-reserve: clamp(16rem, 20vw, 24rem);
 
-在 layout.css 让 app-shell 只划分侧栏和工作区，并让 conversation 在内部划分内容列与留白层：
+在 layout.css 让 app-shell 只划分侧栏和工作区。关闭检查器时 conversation 使用单列；打开后增加右侧检查器列：
 
     .app-shell { grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
-    .conversation { grid-template-columns: minmax(0, 1fr) var(--inspector-reserve); }
+    .conversation { grid-template-columns: minmax(0, 1fr); }
+    .conversation.is-inspector-open { grid-template-columns: minmax(0, 1fr) var(--inspector-reserve); }
     .topbar { grid-column: 1 / -1; }
     .chat-scroll, .composer { grid-column: 1; }
-    .inspector-layer { grid-column: 2; grid-row: 1 / -1; background: var(--page); }
-    .inspector-layer.is-open { z-index: 2; border-left: 1px solid var(--border); background: var(--surface); }
+    .inspector-layer { display: none; }
+    .conversation.is-inspector-open .inspector-layer { display: block; grid-column: 2; grid-row: 1 / -1; }
 
-在 max-width: 1099px 让留白层不占内部 Grid；打开的 .inspector 以 position: fixed; inset: 0; width: 100vw 覆盖。max-width: 760px 保持一列和既有移动侧栏。
+在 max-width: 1099px 让检查器层不占内部 Grid；打开的 .inspector 以 position: fixed; inset: 0; width: 100vw 覆盖。max-width: 760px 保持一列和既有移动侧栏。
 
-- [ ] **Step 4: 运行构建与可选浏览器验证**
+- [x] **Step 4: 运行构建与可选浏览器验证**
 
 运行：cd web/frontend && npm run build
 
 预期：通过。若 Chromium 已安装，再运行 Step 2 的用例并预期通过；检查关闭、打开、关闭后中央消息和 Composer 的 bounding box 一致。
 
-- [ ] **Step 5: 提交留白层布局源码**
+- [x] **Step 5: 提交布局源码**
 
     git add web/frontend/src/App.tsx web/frontend/src/components/SessionInspector.tsx web/frontend/src/styles/tokens.css web/frontend/src/styles/layout.css
     git commit -m "feat: fix web inspector layout"
@@ -254,7 +255,7 @@ permissionLabel 的值为 autoApprove ? "自动批准" : "默认权限"，按钮
 
 不要暂存 tests/ 或 E2E 文件。
 
-### Task 4: 统一大圆角视觉 token、检查器轨道与响应式细节
+### Task 4: 统一大圆角视觉 token、检查器与响应式细节
 
 **Files:**
 - Modify: web/frontend/src/styles/tokens.css
@@ -293,7 +294,7 @@ permissionLabel 的值为 autoApprove ? "自动批准" : "默认权限"，按钮
 
 - [ ] **Step 4: 检查 session 菜单、检查器与主题细节**
 
-检查 SessionSidebar 的 Radix DropdownMenu.Portal 不受新轨道 overflow 裁切；SessionInspector 的关闭按钮保留 Tooltip 和 aria-label。在浅色主题验证正文、次级文字、琥珀审批与按钮焦点有足够对比度；在深色主题验证 Composer 不使用大面积高饱和蓝色。
+检查 SessionSidebar 的 Radix DropdownMenu.Portal 不受检查器显示层裁切；SessionInspector 的关闭按钮保留 Tooltip 和 aria-label。在浅色主题验证正文、次级文字、琥珀审批与按钮焦点有足够对比度；在深色主题验证 Composer 不使用大面积高饱和蓝色。
 
 - [ ] **Step 5: 验证并提交视觉收口源码**
 
@@ -315,11 +316,11 @@ permissionLabel 的值为 autoApprove ? "自动批准" : "默认权限"，按钮
 - Modify: docs/superpowers/specs/2026-07-26-web-workbench-fixed-layout-design.md
 - Modify: docs/superpowers/plans/2026-07-26-web-workbench-fixed-layout.md
 
-**Interfaces:** 文档只描述已存在的 UI 行为：桌面连续背景留白层、窄屏检查器覆盖层、全局工具权限菜单、真实事件活动流和已存在观测读取边界。
+**Interfaces:** 文档只描述已存在的 UI 行为：桌面检查器开关下的单列/双列居中布局、窄屏检查器覆盖层、全局工具权限菜单、真实事件活动流和已存在观测读取边界。
 
 - [ ] **Step 1: 同步实现边界**
 
-将本设计稿和本计划状态改为“已完成”，并在 Phase 6 文档、README、文档索引、架构文档和总 Spec 中明确：检查器不新增 JSONL 或 WebSocket 事件；它只读取既有观测数据；桌面右侧保留连续背景的自适应留白层；auto_approve_tools 仍是全局策略；审批和活动流只使用真实事件。
+将本设计稿和本计划状态改为“已完成”，并在 Phase 6 文档、README、文档索引、架构文档和总 Spec 中明确：检查器不新增 JSONL 或 WebSocket 事件；关闭时主工作区单列居中，打开时右侧检查器列出现并使主会话容器右侧收缩；auto_approve_tools 仍是全局策略；审批和活动流只使用真实事件。
 
 - [ ] **Step 2: 执行 UI 审查并修复真实问题**
 
@@ -351,7 +352,7 @@ permissionLabel 的值为 autoApprove ? "自动批准" : "默认权限"，按钮
 
 ## Plan Self-Review
 
-1. 连续背景留白层、移动覆盖层与“检查器开关不改变中央几何”由 Task 1 和 Task 4 覆盖。
+1. 检查器开关下的单列/双列布局、移动覆盖层与“消息列和 Composer 始终等宽且居中”由 Task 1 和 Task 4 覆盖。
 2. 两项权限菜单、全局 API 复用、无冗余说明和同槽发送/Stop 由 Task 2 覆盖。
 3. 真实 TaskEvent、低对比度活动流、无 reasoning 和琥珀审批卡由 Task 3 覆盖。
 4. 大圆角、深浅主题、菜单/检查器溢出、独立滚动区域由 Task 4 覆盖。
