@@ -12,7 +12,7 @@ type ActivityClusterProps = {
 /** 渲染只包含真实任务事件的可折叠活动簇。 */
 export function ActivityCluster({ turn, onResolveApproval }: ActivityClusterProps) {
   const running = turn.status === "queued" || turn.status === "running" || turn.status === "stopping";
-  const [open, setOpen] = useState(running);
+  const [open, setOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
   const steps = useMemo(() => buildActivitySteps(turn.events), [turn.events]);
   const latestStep = latestActivityStep(steps);
@@ -21,15 +21,9 @@ export function ActivityCluster({ turn, onResolveApproval }: ActivityClusterProp
   const atBottomRef = useRef(true);
 
   useEffect(() => {
-    /** 运行时展开，终态保留短暂反馈后自动收拢。 */
-    if (running) {
-      setOpen(true);
-      return;
-    }
-    setOpen(true);
-    const timer = window.setTimeout(() => setOpen(false), 900);
-    return () => window.clearTimeout(timer);
-  }, [running, turn.status]);
+    /** 审批出现时展开真实事件列表。 */
+    if (approval) setOpen(true);
+  }, [approval]);
 
   useEffect(() => {
     /** 运行时刷新已用时间，减少动态模式下由 CSS 接管静止状态。 */
@@ -52,7 +46,7 @@ export function ActivityCluster({ turn, onResolveApproval }: ActivityClusterProp
 
 /** 优先显示最近真实动作，空事件阶段才显示中性运行状态。 */
 function runningSummary(step: ReturnType<typeof latestActivityStep>, startedAt: string, now: number): string {
-  if (step) return `${step.label}${step.detail ? ` ${step.detail}` : ""}`;
+  if (step) return `思考中 · ${step.label}${step.detail ? ` ${step.detail}` : ""}`;
   return `思考中，已用 ${durationLabel(startedAt, now)}`;
 }
 
@@ -92,5 +86,5 @@ function pendingApproval(events: TaskEvent[]): { approvalId: string; toolName: s
 
 /** 渲染当前审批的最小操作界面。 */
 function ApprovalBar({ approval, onResolve }: { approval: { approvalId: string; toolName: string; args: string }; onResolve: (approvalId: string, approved: boolean) => void }) {
-  return <div className="activity-approval"><div><ShieldAlert size={16} aria-hidden="true" /><span>需要允许工具</span><strong>{approval.toolName}</strong></div><code title={approval.args}>{approval.args}</code><div className="activity-approval-actions"><button onClick={() => onResolve(approval.approvalId, false)}>拒绝</button><button className="primary" onClick={() => onResolve(approval.approvalId, true)}><Check size={15} aria-hidden="true" />允许一次</button></div></div>;
+  return <section className="activity-approval" aria-label={`等待允许 ${approval.toolName}`}><header><ShieldAlert size={17} aria-hidden="true" /><div><span>等待你的批准</span><strong>{approval.toolName}</strong></div></header><code title={approval.args}>{approval.args}</code><div className="activity-approval-actions"><button className="secondary" type="button" onClick={() => onResolve(approval.approvalId, false)}>拒绝</button><button className="primary" type="button" onClick={() => onResolve(approval.approvalId, true)}><Check size={15} aria-hidden="true" />允许一次</button></div></section>;
 }
