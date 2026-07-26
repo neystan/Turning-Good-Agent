@@ -334,11 +334,11 @@ Tools 当前边界：
 | `web/backend/app.py` | 创建 FastAPI lifespan、REST API、WebSocket endpoint 和本地静态资源托管；动作回包使用 `client_action_id` 关联乐观消息错误。 |
 | `web/backend/coordinator.py` | 调度单会话 turn、guidance、Stop、审批 Future、全局并发槽位和 MessageBus 消费。 |
 | `web/backend/events.py` | 保存每会话有界 WebSocket 事件窗口、订阅与快照回退。 |
-| `web/frontend/` | React、TypeScript、Vite 工作台源代码，包含稳定历史加载、有限重连、Radix 会话菜单/对话框、会话搜索、独立聊天滚动、真实事件活动簇、“默认权限 / 完全访问”菜单和结构化会话检查器。 |
+| `web/frontend/` | React、TypeScript、Vite 工作台源代码，包含稳定历史加载、有限重连、可收起会话栏、Radix 会话菜单/对话框、会话搜索、独立聊天滚动、真实事件活动簇、“默认权限 / 完全访问”菜单和连续结构化会话检查器。 |
 
 Web Host 的 `runtime.start()` / `runtime.close()` 只在 FastAPI lifespan 中调用一次。REST 只读取既有会话与观测文件，WebSocket 只传输内存事件，不新增 JSONL；草稿只存在浏览器，首条非空消息才创建 session。浏览器以 `client_action_id` 对齐乐观消息与错误、以 `after_event_id` 重订阅；运行中 guidance 成功排队后通过既有 `task.status` 在当前 turn 显示“已引导”，不新增 `guidance.consumed`。
 
-工作台使用石墨深浅主题与本地 CSS Token。常态区域以背景层级、留白和克制阴影区分；可点击控件使用统一大圆角，鼠标悬浮不显示说明文字。每个 `request_id` 的活动簇位于 user 与 assistant 消息之间，且只读取 guidance、工具/MCP/Skill、审批、压缩、Stop 和终态事件，不暴露模型内部思维链。桌面检查器打开时保持消息列左锚点，仅收紧右侧可用宽度；平板和移动端改为全屏阅读。检查器先显示累计指标，再以结构化条目展示既有观测记录，原始 JSON 只在单条记录中按需展开。
+工作台使用石墨深浅主题与本地 CSS Token。常态区域以背景层级、留白和克制阴影区分；可点击控件使用统一大圆角，鼠标悬浮不显示说明文字。左右侧栏共用同一响应式宽度，左栏可收起为稳定的品牌入口，右侧检查器以真实宽度过渡展开或收回。每个 `request_id` 的活动簇位于 user 与 assistant 消息之间，且只读取 guidance、工具/MCP/Skill、审批、压缩、Stop 和终态事件，不暴露模型内部思维链。桌面检查器打开时保持消息列左锚点，仅收紧右侧可用宽度；平板和移动端改为全屏阅读。检查器先显示连续摘要与分类条目，再按需展开单条结构化记录和原始 JSON。
 
 第一版 Hook 调用关系：
 

@@ -2,7 +2,7 @@ import { useState } from "react";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { Archive, ChevronDown, FilePlus2, MoreHorizontal, Pin, RotateCcw, Search, SquarePen, Trash2, X } from "lucide-react";
+import { Archive, ChevronDown, FilePlus2, MoreHorizontal, PanelLeft, Pin, RotateCcw, Search, SquarePen, Trash2, X } from "lucide-react";
 
 import { ScrollArea } from "./ScrollArea";
 import type { Session } from "../types";
@@ -12,6 +12,8 @@ type SessionSidebarProps = {
   archived: Session[];
   currentId: string | null;
   mobileOpen: boolean;
+  collapsed: boolean;
+  onCollapseChange: (collapsed: boolean) => void;
   onCloseMobile: () => void;
   onNew: () => void;
   onOpenSearch: () => void;
@@ -22,7 +24,7 @@ type SessionSidebarProps = {
 };
 
 /** 渲染由 Radix 管理菜单与对话框的会话侧栏。 */
-export function SessionSidebar({ active, archived, currentId, mobileOpen, onCloseMobile, onNew, onOpenSearch, onSelect, onUpdate, onDelete, onError }: SessionSidebarProps) {
+export function SessionSidebar({ active, archived, currentId, mobileOpen, collapsed, onCollapseChange, onCloseMobile, onNew, onOpenSearch, onSelect, onUpdate, onDelete, onError }: SessionSidebarProps) {
   const [activeOpen, setActiveOpen] = useState(true);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [renaming, setRenaming] = useState<Session | null>(null);
@@ -62,10 +64,10 @@ export function SessionSidebar({ active, archived, currentId, mobileOpen, onClos
 
   return <>
     <aside className={`sidebar ${mobileOpen ? "is-open" : ""}`} aria-label="会话管理"><ScrollArea className="sidebar-scroll">
-      <header className="brand"><img className="brand-mark" src="/static/tga-brand.png" width="50" height="50" alt="" /><span className="brand-wordmark-frame"><img className="brand-wordmark" src="/static/tga-wordmark.png" width="195" height="54" alt="Turning Good Agent" /></span><button className="icon-button mobile-only" aria-label="关闭会话栏" onClick={onCloseMobile}><X /></button></header>
-      <div className="sidebar-commands"><button className="new-session" onClick={onNew}><FilePlus2 size={16} />新建会话</button><button className="icon-button" aria-label="搜索会话" onClick={onOpenSearch}><Search size={16} /></button></div>
+      <header className="brand"><button className="brand-mark-button" aria-label="打开会话栏" disabled={!collapsed} onClick={() => onCollapseChange(false)}><img className="brand-mark" src="/static/tga-brand.png" width="50" height="50" alt="" /></button><span className="brand-wordmark-frame"><img className="brand-wordmark" src="/static/tga-wordmark.png" width="195" height="54" alt="Turning Good Agent" /></span><button className="icon-button sidebar-collapse-control" aria-label="隐藏会话栏" onClick={() => onCollapseChange(true)}><PanelLeft /></button><button className="icon-button mobile-only" aria-label="关闭会话栏" onClick={onCloseMobile}><X /></button></header>
+      <div className="sidebar-body"><div className="sidebar-commands"><button className="new-session" onClick={onNew}><FilePlus2 size={16} />新建会话</button><button className="icon-button" aria-label="搜索会话" onClick={onOpenSearch}><Search size={16} /></button></div>
       <section className="session-section"><button className="section-title" aria-expanded={activeOpen} onClick={() => setActiveOpen(!activeOpen)}><ChevronDown size={14} className={activeOpen ? "" : "rotated"} />会话<span>{active.length}</span></button>{activeOpen && <SessionList items={orderedActive} currentId={currentId} onSelect={onSelect} onRename={openRename} onDelete={setDeleting} onAction={runAction} onUpdate={onUpdate} />}</section>
-      {archived.length > 0 && <section className="session-section archived-section"><button className="section-title" aria-expanded={archivedOpen} onClick={() => setArchivedOpen(!archivedOpen)}><ChevronDown size={14} className={archivedOpen ? "" : "rotated"} />已归档<span>{archived.length}</span></button>{archivedOpen && <SessionList items={archived} currentId={currentId} onSelect={onSelect} onRename={openRename} onDelete={setDeleting} onAction={runAction} onUpdate={onUpdate} />}</section>}
+      {archived.length > 0 && <section className="session-section archived-section"><button className="section-title" aria-expanded={archivedOpen} onClick={() => setArchivedOpen(!archivedOpen)}><ChevronDown size={14} className={archivedOpen ? "" : "rotated"} />已归档<span>{archived.length}</span></button>{archivedOpen && <SessionList items={archived} currentId={currentId} onSelect={onSelect} onRename={openRename} onDelete={setDeleting} onAction={runAction} onUpdate={onUpdate} />}</section>}</div>
     </ScrollArea></aside>
     <RenameDialog session={renaming} title={title} onTitleChange={setTitle} onSubmit={submitRename} onOpenChange={(open) => !open && setRenaming(null)} />
     <DeleteDialog session={deleting} onConfirm={() => void deleteConfirmed()} onOpenChange={(open) => !open && setDeleting(null)} />

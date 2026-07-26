@@ -30,10 +30,12 @@ export function App() {
   const [sessionState, dispatch] = useReducer(applySessionAction, undefined, createSessionState);
   const [draft, setDraft] = useState("");
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [inspectorClosing, setInspectorClosing] = useState(false);
   const [inspector, setInspector] = useState<Observability | null>(null);
   const [autoApprove, setAutoApprove] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">(() => localStorage.getItem("tga-theme") === "light" ? "light" : "dark");
   const [mobileMenu, setMobileMenu] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [notices, setNotices] = useState<{ id: string; message: string }[]>([]);
@@ -43,6 +45,7 @@ export function App() {
   const preserveNextSession = useRef(false);
   const eventHandler = useRef<(event: SocketMessage) => void>(() => undefined);
   const composerRef = useRef<HTMLElement>(null);
+  const inspectorCloseTimer = useRef<number | null>(null);
 
   /** 重新读取侧栏会话分组。 */
   const refreshSessions = useCallback(async () => {
@@ -187,12 +190,29 @@ export function App() {
   const openInspector = async () => {
     if (!sessionId) return;
     try {
+      if (inspectorCloseTimer.current) window.clearTimeout(inspectorCloseTimer.current);
+      setInspectorClosing(false);
       setInspector(await api.observability(sessionId));
       setInspectorOpen(true);
     } catch (error) {
       addNotice(error instanceof Error ? error.message : "读取会话检查器失败");
     }
   };
+
+  /** 立即收起检查器布局列，并保留短暂的退出帧。 */
+  const closeInspector = () => {
+    if (inspectorCloseTimer.current) window.clearTimeout(inspectorCloseTimer.current);
+    setInspectorOpen(false);
+    setInspectorClosing(true);
+    inspectorCloseTimer.current = window.setTimeout(() => {
+      setInspectorClosing(false);
+      inspectorCloseTimer.current = null;
+    }, 260);
+  };
+
+  useEffect(() => () => {
+    if (inspectorCloseTimer.current) window.clearTimeout(inspectorCloseTimer.current);
+  }, []);
 
   /** 更新会话标题、置顶或归档状态。 */
   const updateSession = async (id: string, payload: Partial<Pick<Session, "title" | "pinned" | "archived">>) => {
@@ -219,11 +239,11 @@ export function App() {
   const current = useMemo(() => [...sessions, ...archived].find((item) => item.id === sessionId), [archived, sessionId, sessions]);
   const currentTurnCount = Object.values(sessionState.turns).reduce((count, turn) => count + turn.events.length, 0);
 
-  return <div className="app-shell">
+  return <div className={`app-shell ${sidebarCollapsed ? "is-sidebar-collapsed" : ""}`}>
     <a className="skip-link" href="#main-content">跳到对话</a>
-    <SessionSidebar active={sessions} archived={archived} currentId={sessionId} mobileOpen={mobileMenu} onCloseMobile={() => setMobileMenu(false)} onNew={() => navigate(null)} onOpenSearch={() => setSearchOpen(true)} onSelect={navigate} onUpdate={updateSession} onDelete={deleteSession} onError={addNotice} />
+    <SessionSidebar active={sessions} archived={archived} currentId={sessionId} mobileOpen={mobileMenu} collapsed={sidebarCollapsed} onCollapseChange={setSidebarCollapsed} onCloseMobile={() => setMobileMenu(false)} onNew={() => navigate(null)} onOpenSearch={() => setSearchOpen(true)} onSelect={navigate} onUpdate={updateSession} onDelete={deleteSession} onError={addNotice} />
     {mobileMenu && <button className="scrim" aria-label="关闭会话栏" onClick={() => setMobileMenu(false)} />}
-    <main id="main-content" className={`conversation ${inspectorOpen ? "is-inspector-open" : ""}`}>
+    <main id="main-content" className={`conversation ${inspectorOpen ? "is-inspector-open" : ""} ${inspectorClosing ? "is-inspector-closing" : ""}`}>
       <header className="topbar">
         <button className="icon-button mobile-only" aria-label="打开会话栏" onClick={() => setMobileMenu(true)}><Menu /></button>
         <div className="title-block"><span className={`connection-dot ${sessionState.running ? "is-running" : ""}`} aria-hidden="true" /><h1>{current?.title || "新建会话"}</h1><span className="connection-label">{connectionLabel(connection)}</span>{current?.archived && <span className="readonly">已归档</span>}</div>
@@ -233,7 +253,7 @@ export function App() {
         {!sessionId && sessionState.messages.length === 0 && <div className="empty-state"><h2>开始一个工作会话</h2><p>首条消息发送后才会创建本地会话记录。</p></div>}
       </ChatTimeline>
       <Composer rootRef={composerRef} session={current} running={sessionState.running} draft={draft || sessionState.pendingDraft} autoApprove={autoApprove} onDraftChange={changeDraft} onSend={() => send()} onStop={stop} onRestore={() => current && void updateSession(current.id, { archived: false })} onAutoApproveChange={(enabled) => void setApproval(enabled)} />
-      <InspectorLayer open={inspectorOpen} data={inspector} onClose={() => setInspectorOpen(false)} />
+      <InspectorLayer open={inspectorOpen} closing={inspectorClosing} data={inspector} onClose={closeInspector} />
     </main>
     <SessionSearchDialog open={searchOpen} sessions={[...sessions, ...archived]} currentId={sessionId} onClose={() => setSearchOpen(false)} onSelect={navigate} />
     <NoticeRegion notices={notices} onDismiss={dismissNotice} />
@@ -241,8 +261,9 @@ export function App() {
 }
 
 /** 渲染检查器视觉留白层，避免开关改变内容列。 */
-function InspectorLayer({ open, data, onClose }: { open: boolean; data: Observability | null; onClose: () => void }) {
-  return <aside className={`inspector-layer ${open ? "is-open" : ""}`} aria-hidden={!open}>{open && <SessionInspector data={data} onClose={onClose} />}</aside>;
+function InspectorLayer({ open, closing, data, onClose }: { open: boolean; closing: boolean; data: Observability | null; onClose: () => void }) {
+  const visible = open || closing;
+  return <aside className={`inspector-layer ${open ? "is-open" : ""} ${closing ? "is-closing" : ""}`} aria-hidden={!visible}>{visible && <SessionInspector data={data} onClose={onClose} />}</aside>;
 }
 
 /** 将连接状态转换为紧凑的用户可见文本。 */

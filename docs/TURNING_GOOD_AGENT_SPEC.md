@@ -68,9 +68,9 @@ Turning-Good-Agent 的目标是做一个轻量化通用 Agent。它不是只面�
 - Phase 4 MCP Client：stdio、Streamable HTTP、后台 Worker、Catalog、显式 Tool 注册、当前轮附件与连接级重试
 - `ToolCallRunner`、通用 `ContextAttachment`、统一 token 预算和短期压缩计划
 - Phase 5 Skills：单目录 Catalog、根提示词元数据、当前轮完整加载与审批草稿发布
+- Phase 6 本机 Web：FastAPI + WebSocket 工作台、会话管理、运行控制、全局审批与既有 JSON/JSONL 会话检查器
 
 当前未完成：
-- Web channel 与 Web observability
 - 微信、飞书 channel
 - 长期记忆 RAG
 - dream、breakbeat、cron
