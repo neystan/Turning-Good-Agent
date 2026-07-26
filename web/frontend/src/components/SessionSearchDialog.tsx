@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import { Search } from "lucide-react";
 
 import { filterSessions } from "../state/session_search";
 import type { Session } from "../types";
-import { OverlayPortal } from "./OverlayPortal";
 
 type SessionSearchDialogProps = {
   open: boolean;
@@ -13,19 +13,17 @@ type SessionSearchDialogProps = {
   onSelect: (id: string) => void;
 };
 
-/** 提供键盘可用的会话标题搜索对话框。 */
+/** 提供 Radix 焦点管理的会话标题搜索对话框。 */
 export function SessionSearchDialog({ open, sessions, currentId, onClose, onSelect }: SessionSearchDialogProps) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
   const results = useMemo(() => filterSessions(sessions, query), [query, sessions]);
 
   useEffect(() => {
-    /** 每次打开时重置条件并将焦点放入搜索框。 */
+    /** 每次打开时清空条件并回到首个结果。 */
     if (!open) return;
     setQuery("");
     setActiveIndex(0);
-    window.setTimeout(() => inputRef.current?.focus(), 0);
   }, [open]);
 
   useEffect(() => {
@@ -55,6 +53,5 @@ export function SessionSearchDialog({ open, sessions, currentId, onClose, onSele
     }
   };
 
-  if (!open) return null;
-  return <OverlayPortal className="overlay-search-layer" onDismiss={onClose}><section className="session-search-dialog" role="dialog" aria-modal="true" aria-labelledby="session-search-title"><h2 id="session-search-title" className="sr-only">搜索会话</h2><label className="session-search-input"><Search size={18} aria-hidden="true" /><span className="sr-only">搜索会话</span><input ref={inputRef} name="session-search" autoComplete="off" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={onKeyDown} placeholder="搜索会话…" /></label><div className="session-search-results" role="listbox" aria-label="会话结果">{results.length ? results.map((session, index) => <button key={session.id} role="option" aria-selected={index === activeIndex} className={index === activeIndex ? "is-active" : ""} onMouseEnter={() => setActiveIndex(index)} onClick={() => select(session.id)}><span>{session.title}</span>{session.id === currentId && <small>当前会话</small>}{session.archived && <small>已归档</small>}</button>) : <p>没有匹配的会话。</p>}</div></section></OverlayPortal>;
+  return <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}><Dialog.Portal><Dialog.Overlay className="dialog-overlay" /><Dialog.Content className="session-search-dialog"><Dialog.Title className="sr-only">搜索会话</Dialog.Title><Dialog.Description className="sr-only">按会话标题筛选本地会话。</Dialog.Description><label className="session-search-input"><Search size={18} aria-hidden="true" /><span className="sr-only">搜索会话</span><input name="session-search" autoComplete="off" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={onKeyDown} placeholder="搜索会话…" /></label><div className="session-search-results" role="listbox" aria-label="会话结果">{results.length ? results.map((session, index) => <button key={session.id} role="option" aria-selected={index === activeIndex} className={index === activeIndex ? "is-active" : ""} onMouseEnter={() => setActiveIndex(index)} onClick={() => select(session.id)}><span>{session.title}</span>{session.id === currentId && <small>当前会话</small>}{session.archived && <small>已归档</small>}</button>) : <p>没有匹配的会话。</p>}</div></Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
