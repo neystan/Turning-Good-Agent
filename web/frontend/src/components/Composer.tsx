@@ -2,13 +2,16 @@ import { useEffect, useLayoutEffect, useRef, useState, type Ref } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { ArchiveRestore, ArrowUp, Check, ChevronDown, Hand, Square, TriangleAlert } from "lucide-react";
 
-import type { Session } from "../types";
+import { ContextWindowIndicator } from "./ContextWindowIndicator";
+import type { ContextWindow, Session } from "../types";
 
 type ComposerProps = {
   session: Session | undefined;
   running: boolean;
+  actionsEnabled: boolean;
   draft: string;
   autoApprove: boolean;
+  contextWindow: ContextWindow | null;
   onDraftChange: (value: string) => void;
   onSend: () => void;
   onStop: () => void;
@@ -19,7 +22,7 @@ type ComposerProps = {
 };
 
 /** 渲染输入在上、权限与执行操作在下的对话 Composer。 */
-export function Composer({ session, running, draft, autoApprove, restoreFocusVersion, onDraftChange, onSend, onStop, onRestore, onAutoApproveChange, rootRef }: ComposerProps) {
+export function Composer({ session, running, actionsEnabled, draft, autoApprove, contextWindow, restoreFocusVersion, onDraftChange, onSend, onStop, onRestore, onAutoApproveChange, rootRef }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [scrollThumb, setScrollThumb] = useState<{ top: number; height: number } | null>(null);
 
@@ -55,14 +58,15 @@ export function Composer({ session, running, draft, autoApprove, restoreFocusVer
 
   /** 使用 Enter 发送，Shift+Enter 保留换行。 */
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey) {
+    if (event.key === "Enter" && !event.shiftKey && actionsEnabled) {
       event.preventDefault();
       onSend();
     }
   };
 
   if (session?.archived) return <footer ref={rootRef} className="composer archived-composer"><strong>此会话已归档</strong><button className="restore-session" type="button" onClick={() => void onRestore()}><ArchiveRestore size={16} aria-hidden="true" />恢复会话</button></footer>;
-  return <footer ref={rootRef} className="composer"><div className="composer-input"><textarea ref={textareaRef} aria-label="消息内容" name="message" autoComplete="off" value={draft} onChange={(event) => onDraftChange(event.target.value)} onScroll={updateScrollThumb} onKeyDown={onKeyDown} placeholder={running ? "补充当前任务方向…" : "发送消息…"} rows={1} />{scrollThumb && <span className="composer-scroll-thumb" style={{ height: scrollThumb.height, transform: `translateY(${scrollThumb.top}px)` }} />}</div><div className="composer-toolbar"><PermissionMenu autoApprove={autoApprove} onChange={onAutoApproveChange} /><span className="composer-spacer" />{running ? <button className="composer-action is-stop" type="button" aria-label="停止任务" onClick={onStop}><Square size={9} fill="currentColor" strokeWidth={0} aria-hidden="true" /></button> : <button className="composer-action is-send" type="button" aria-label="发送消息" onClick={onSend}><ArrowUp size={13} strokeWidth={2.5} aria-hidden="true" /></button>}</div></footer>;
+  const connectionHint = actionsEnabled ? undefined : "正在重连，恢复后可操作";
+  return <footer ref={rootRef} className="composer"><div className="composer-input"><textarea ref={textareaRef} aria-label="消息内容" name="message" autoComplete="off" value={draft} onChange={(event) => onDraftChange(event.target.value)} onScroll={updateScrollThumb} onKeyDown={onKeyDown} placeholder={running ? "补充当前任务方向…" : "发送消息…"} rows={1} />{scrollThumb && <span className="composer-scroll-thumb" style={{ height: scrollThumb.height, transform: `translateY(${scrollThumb.top}px)` }} />}</div><div className="composer-toolbar"><PermissionMenu autoApprove={autoApprove} onChange={onAutoApproveChange} /><span className="composer-spacer" /><ContextWindowIndicator context={contextWindow} />{running ? <button className="composer-action is-stop" type="button" aria-label="停止任务" title={connectionHint} disabled={!actionsEnabled} onClick={onStop}><Square size={9} fill="currentColor" strokeWidth={0} aria-hidden="true" /></button> : <button className="composer-action is-send" type="button" aria-label="发送消息" title={connectionHint} disabled={!actionsEnabled} onClick={onSend}><ArrowUp size={13} strokeWidth={2.5} aria-hidden="true" /></button>}</div></footer>;
 }
 
 /** 渲染全局工具权限选择菜单。 */

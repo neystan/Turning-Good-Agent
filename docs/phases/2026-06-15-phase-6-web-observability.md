@@ -2,7 +2,7 @@
 
 状态：已实现。本文是 Phase 6 的唯一权威设计、实施边界、完成记录与人工验收标准，替代旧版只读 Dashboard 方案。
 
-2026-07-27 工作台视觉系统收口：WebSocket 动作使用 `client_action_id` 关联乐观消息与错误，前端以历史加载版本闸门、有限退避重连和 `after_event_id` 回放保持会话稳定；会话栏仅按置顶优先排序，三点操作、搜索、重命名和删除确认由 Radix Primitive 处理定位、键盘、外部关闭与焦点回归。工作台采用石墨深浅主题，聊天区与侧栏独立滚动，短 user 消息按内容宽度显示。常态区域以背景层级、留白和克制阴影区分，可点击控件使用统一圆角 token，鼠标悬浮不显示说明文字。桌面检查器打开时，中央会话区通过 Grid 为右侧检查器预留宽度，消息列与 Composer 在剩余区域重新布局；平板和移动端改为全屏覆盖阅读。真实事件按 `request_id` 显示在同轮 user 与 assistant 消息之间的可折叠“思考中”活动簇，运行中 guidance 立即显示为 user 消息并由既有 `task.status` 标记“已引导”。输入区显示“默认权限 / 完全访问”菜单，底层仍使用全局 `tool_permissions.auto_approve_tools`；检查器先展示累计 token、当前上下文、压缩次数与工具失败，再以结构化条目按需展开原始记录。此收口不新增 JSONL，也不新增 `guidance.consumed`，且“思考中”不表示或暴露模型内部思维链。浏览器视觉体验以本机人工操作验收为准，不将 Playwright 或 Chromium 作为 Phase 6 的验收前置条件。
+2026-07-27 工作台视觉系统收口：WebSocket 动作使用 `client_action_id` 关联乐观消息、错误与有限受理回执，前端以历史加载版本闸门、有限退避重连和 `after_event_id` 回放保持会话稳定；会话栏仅按置顶优先排序，三点操作、搜索、重命名和删除确认由 Radix Primitive 处理定位、键盘、外部关闭与焦点回归。工作台采用石墨深浅主题，聊天区与侧栏独立滚动，短 user 消息按内容宽度显示。常态区域以背景层级、留白和克制阴影区分，可点击控件使用统一圆角 token。桌面检查器打开时，中央会话区通过 Grid 为右侧检查器预留宽度，消息列与 Composer 在剩余区域重新布局；平板和移动端改为全屏覆盖阅读。真实事件按 `request_id` 显示在同轮 user 与 assistant 消息之间的可折叠“思考中”活动簇，运行中 guidance 立即显示为 user 消息并由既有 `task.status` 标记“已引导”。输入区显示“默认权限 / 完全访问”菜单，以及只读上下文占用环；后者从最近一次 `SAVE.metadata.current_context_tokens` 与 `runtime.max_context_tokens` 读取，并在悬浮或键盘聚焦时显示读数。底层仍使用全局 `tool_permissions.auto_approve_tools`；检查器先展示累计 token、当前上下文、压缩次数与工具失败，再以结构化条目按需展开原始记录。此收口不新增 JSONL，也不新增 `guidance.consumed`，且“思考中”不表示或暴露模型内部思维链。浏览器视觉体验以本机人工操作验收为准，不将 Playwright 或 Chromium 作为 Phase 6 的验收前置条件。
 
 ## 1. 目标与定位
 
@@ -21,7 +21,9 @@ Web 是 Turning-Good-Agent 的一个 Channel Host，不是第二个 Runtime，�
 - 当前会话聊天历史、安全 Markdown、流式文本、工具/压缩状态、Stop 和工具审批。
 - 同会话串行执行、运行中 guidance queue、跨会话最多 6 个并行任务和全局等待队列。
 - 断线重连、每会话有界内存事件缓冲和运行中任务快照。
+- 断线中的本轮消息可在浏览器内显示“网络连接失败”并原动作重试；即时消息、活动簇和 Web 端隐藏记录只保留在当前浏览器标签页。
 - 会话检查器：trace、工具调用、token、上下文和压缩统计。
+- Composer 只读上下文占用环与悬浮读数，复用最近一次保存后的真实上下文统计。
 - 全局工具自动批准按钮，持久化到 `settings.local.json`。
 - 默认深色与可持久化浅色主题。
 
@@ -188,6 +190,7 @@ GET    /api/sessions?archived=false
 GET    /api/sessions/{session_id}
 GET    /api/sessions/{session_id}/messages
 GET    /api/sessions/{session_id}/observability
+GET    /api/sessions/{session_id}/context-window
 PATCH  /api/sessions/{session_id}             # title / pinned / archived
 DELETE /api/sessions/{session_id}
 GET    /api/settings/ui                       # 仅主题与自动批准状态
@@ -195,6 +198,7 @@ PATCH  /api/settings/ui                       # 仅主题与自动批准状态
 ```
 
 - `observability` 聚合既有 `session.json`、`turn_traces.jsonl`、`true_token_usage.jsonl` 和 `tool_calls.jsonl`，不创建新文件。
+- `context-window` 只读取最近一次 `SAVE.metadata.current_context_tokens`，并返回当前 `runtime.max_context_tokens`；没有已保存轮次时返回中性零值。
 - `DELETE` 仅接受终态会话；活动会话返回明确冲突错误。
 - `PATCH archived=true` 仅接受终态会话；直接打开归档 URL 可只读，发送前要求恢复。
 - `settings/ui` 绝不返回私密 LLM/MCP 字段。
@@ -233,6 +237,7 @@ session.updated
 - 浏览器重连带 `after_event_id`；EventHub 补发窗口内事件后继续订阅。
 - 若事件已过期，服务端发送 `session.snapshot`，前端通过 REST 重新拉取已落盘历史和观测。
 - 在途任务只存在内存中；服务重启后不会恢复，前端从持久化终态历史继续。
+- Coordinator 对最近有限数量的 `client_action_id` 保留受理回执。浏览器因重连、刷新或切换会话重发同一动作时，复用原 `session_id` 与 `request_id`，不重复启动任务或重复加入 guidance。
 
 ## 7. React 工作台
 
@@ -326,8 +331,9 @@ web/
 
 - user 短消息按内容紧凑包裹；assistant 使用无气泡 Markdown 正文，优先保证阅读和长文本换行。完整 Tool result 不进入主聊天流。
 - `ActivityCluster` 只展示已有事件可证明的排队、运行、引导、工具/MCP/Skill、审批、压缩、Stop、完成、失败或取消。不得展示、保存、推断或伪造模型 reasoning、思维链或计划文本。
-- 任务过程默认折叠。运行时使用“思考中”和真实最新动作表达状态；审批不会自动展开步骤。审批卡仅保留工具名、规范化参数预览、拒绝与允许一次，完整参数和结果进入检查器。
-- Composer 与消息列共用横向规则，可稳定容纳多行输入。Enter 发送，Shift+Enter 换行；运行中输入作为 guidance，Stop 与发送在同一圆形操作槽切换，始终完整可见。
+- 任务过程默认折叠。运行时使用“思考中”和真实最新动作表达状态；工具完成后回到“思考中”，不单独显示“工具调用完成”。终态只保留一个结论摘要，历史步骤仅在展开后显示。审批不会自动展开步骤；审批卡仅保留工具名、规范化参数预览、拒绝与允许一次，完整参数和结果进入检查器。
+- Composer 与消息列共用横向规则，可稳定容纳多行输入。Enter 发送，Shift+Enter 换行；运行中输入作为 guidance，Stop 与发送在同一圆形操作槽切换，始终完整可见。发送/Stop 左侧的上下文圆环仅供阅读，不打开检查器；悬浮或键盘聚焦显示“当前 token / 最大 token、已用、剩余”，最大值始终来自集中 Runtime 配置。
+- WebSocket 断开时，正在运行的 Web turn 在浏览器内变为可重试的“网络连接失败”消息；不伪造 Runtime 终态，也不写入 JSONL。点击重试会用原 `client_action_id` 重连并重新发送；成功后仅在 Web 聊天流隐藏被替代的旧 user/assistant 与活动簇，Runtime 上下文和会话文件仍保留原轮，用户也可继续基于原上下文输入“继续”。
 - 输入区左下角使用“默认权限 / 完全访问”菜单控制已有全局 `auto_approve_tools`。完全访问使用橙红警示语义，不展示冗余说明；自动批准绝不绕过现有安全预检和 ToolExecutor 二次检查。
 
 #### 检查器与观测阅读
@@ -339,6 +345,7 @@ web/
 #### 验收与实施记录
 
 - 交互收口已完成：Portal 会话浮层、搜索与确认对话框、稳定聊天滚动、真实事件活动簇、权限/审批控制、双主题、独立滚动、可收起侧栏和 Grid 检查器均已实现。
+- 标签页缓存只保存未落盘消息、活动簇和 Web 端重试隐藏标记；它用于刷新或切换会话时恢复即时界面，关闭标签页后自然失效，不替代 `SAVE`。
 - 视觉验收使用本机真实交互与截图，而非静态 CSS、单一屏幕像素位置或 Playwright。人工验收应覆盖深浅主题、长文本、空态、运行/错误/审批/停止状态、菜单和抽屉遮挡、滚动、焦点及不同窗口宽度。
 - 自动化验证继续覆盖 Python 测试、前端构建、Python 编译、CLI 与 Web REST 冒烟、`git diff --check`；浏览器视觉体验由本机用户人工确认。
 
@@ -355,6 +362,8 @@ web/
 - `tool_calls.jsonl`：精简工具调用记录。
 
 Web 只读取或通过既有 Store 写入这些事实，不新建 `web_events.jsonl`、`monitor.jsonl` 或流式 delta 日志。
+
+断线失败、重试中的旧消息隐藏、活动簇和 pending draft 都是浏览器标签页状态，不属于 Session 持久化事实。SAVE 的唯一可靠持久化边界不因 Web 重试而改变。
 
 ### 8.2 Hook 边界
 
@@ -416,6 +425,7 @@ Web 只读取或通过既有 Store 写入这些事实，不新建 `web_events.js
 - [x] 实现会话栏、草稿/路由恢复、聊天、任务过程、审批、Stop、guidance 草稿和自动批准按钮。
 - [x] 实现会话检查器、token/trace/工具/压缩视图、主题和响应式布局。
 - [x] 实现安全 Markdown、键盘操作、错误和空状态；代码块可直接选择和复制。
+- [x] 实现断线轮次的浏览器内重试、动作幂等回执、标签页即时状态恢复和 Composer 上下文占用环。
 
 ### Task 5：验证、审查与文档
 
@@ -431,9 +441,11 @@ Web 只读取或通过既有 Store 写入这些事实，不新建 `web_events.js
 - 用户可创建草稿、发送首条消息生成 session、切换/恢复历史、重命名/置顶/归档/恢复/删除会话。
 - assistant 文本、工具状态、压缩、审批、Stop 与终态通过 WebSocket 实时显示。
 - 断线后能通过 replay 或 snapshot 恢复当前会话；完成后的历史与 JSON 文件一致。
+- 断线期间的未完成 Web turn 可显示失败并重试；重试不会创建重复 Runtime turn，成功后 Web 只隐藏被替代的旧展示记录，Session JSON/JSONL 与上下文仍保持完整。
 - 运行中 guidance 在安全检查点生效；同一 session 无并发 turn；不同 session 最多 6 个运行。
 - Stop 不启动新的 LLM/Tool，等待审批会被拒绝；已输出文本以取消消息保存，未注入 guidance 不丢失也不自动运行。
 - 审批卡只显示工具名与标准化参数；全局自动批准策略跨会话生效，安全预检仍不可绕过。
 - 会话检查器准确展示既有持久化 trace、tool calls、真实 token、上下文与压缩数据，不新增重复 JSONL。
+- Composer 上下文圆环准确读取最近一次 SAVE 后的 `current_context_tokens` 与集中 `max_context_tokens`，没有已保存数据时保持中性状态。
 - 桌面与移动端的人工验收应确认无溢出、遮挡、不可操作控件或缺失焦点；主题、键盘、Markdown 与代码复制可用。
 - 所有新增类/函数有精简中文注释；`pytest -q`、前端构建、Python 编译、`git diff --check` 和 CLI/Web 冒烟通过。浏览器视觉体验不以 Playwright 作为验收标准。

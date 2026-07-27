@@ -31,20 +31,44 @@ export class SessionSocketClient {
     socket.onopen = () => this.handleOpen(socket);
     socket.onmessage = (event) => this.handleMessage(event);
     socket.onclose = () => this.handleClose(socket);
-    socket.onerror = () => socket.close();
+    socket.onerror = () => this.handleSocketError(socket);
   }
 
-  /** 切换当前订阅会话，连接可用时立即重放缺失事件。 */
+  /** 切换当前订阅会话，并保留已经消费的事件游标。 */
   setActiveSession(sessionId: string | null): void {
     this.activeSessionId = sessionId;
+    if (!this.socket) {
+      this.connect();
+      return;
+    }
+    if (this.socket.readyState !== WebSocket.OPEN) {
+      this.reconnect();
+      return;
+    }
     this.subscribeActiveSession();
+  }
+
+  /** 网络恢复时替换可能未触发关闭事件的旧连接。 */
+  reconnect(): void {
+    if (this.closed) return;
+    if (this.retryTimer !== null) window.clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    const socket = this.socket;
+    this.socket = null;
+    this.retryIndex = 1;
+    socket?.close();
+    this.connect();
   }
 
   /** 发送前端动作，调用方据返回值决定是否标记失败。 */
   send(action: SocketAction): boolean {
     if (this.socket?.readyState !== WebSocket.OPEN) return false;
-    this.socket.send(JSON.stringify(action));
-    return true;
+    try {
+      this.socket.send(JSON.stringify(action));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** 显式关闭连接并取消尚未触发的重连。 */
@@ -65,10 +89,10 @@ export class SessionSocketClient {
     this.subscribeActiveSession();
   }
 
-  /** 更新事件游标后把实时事件交给页面状态。 */
+  /** 仅确认当前订阅会话的事件，避免切换时丢失迟到事件。 */
   private handleMessage(message: MessageEvent<string>): void {
     const event = JSON.parse(message.data) as TaskEvent & { type: string };
-    if (event.event_id && event.session_id) this.lastEventIds[event.session_id] = event.event_id;
+    if (event.event_id && event.session_id === this.activeSessionId) this.lastEventIds[event.session_id] = event.event_id;
     this.options.onEvent(event);
   }
 
@@ -76,6 +100,20 @@ export class SessionSocketClient {
   private handleClose(socket: WebSocket): void {
     if (this.socket !== socket || this.closed) return;
     this.socket = null;
+    this.scheduleReconnect();
+  }
+
+  /** 在错误回调未触发 close 时仍启动下一次连接尝试。 */
+  private handleSocketError(socket: WebSocket): void {
+    if (this.socket !== socket || this.closed) return;
+    this.socket = null;
+    socket.close();
+    this.scheduleReconnect();
+  }
+
+  /** 以有限退避调度唯一的下一次连接尝试。 */
+  private scheduleReconnect(): void {
+    if (this.closed || this.retryTimer !== null) return;
     this.options.onConnectionChange("reconnecting");
     const delay = RETRY_DELAYS[Math.min(this.retryIndex, RETRY_DELAYS.length - 1)];
     this.retryIndex += 1;

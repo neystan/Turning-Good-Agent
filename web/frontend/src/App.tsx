@@ -12,7 +12,8 @@ import { ActivityCluster } from "./components/ActivityCluster";
 import { SessionHistoryLoader } from "./state/history_loader";
 import { applySessionAction, createSessionState } from "./state/session_state";
 import { SessionSocketClient } from "./state/socket_client";
-import type { ChatMessage, ConnectionState, Observability, Session, TaskEvent } from "./types";
+import { readSessionCache, writeSessionCache } from "./state/session_cache";
+import type { ChatMessage, ConnectionState, ContextWindow, Observability, Session, TaskEvent } from "./types";
 
 type SocketMessage = Partial<TaskEvent> & { type: string; client_action_id?: string; message?: string; session_id?: string; request_id?: string };
 
@@ -32,6 +33,7 @@ export function App() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [inspectorClosing, setInspectorClosing] = useState(false);
   const [inspector, setInspector] = useState<Observability | null>(null);
+  const [contextWindow, setContextWindow] = useState<ContextWindow | null>(null);
   const [autoApprove, setAutoApprove] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">(() => localStorage.getItem("tga-theme") === "light" ? "light" : "dark");
   const [mobileMenu, setMobileMenu] = useState(false);
@@ -48,6 +50,9 @@ export function App() {
   const composerRef = useRef<HTMLElement>(null);
   const inspectorCloseTimer = useRef<number | null>(null);
   const messageActionIds = useRef(new Set<string>());
+  const stateSessionId = useRef<string | null>(sessionId);
+  const retryRequest = useRef<{ actionId: string; content: string } | null>(null);
+  const contextRequestVersion = useRef(0);
 
   /** 重新读取侧栏会话分组。 */
   const refreshSessions = useCallback(async () => {
@@ -56,10 +61,24 @@ export function App() {
     setArchived(archivedItems);
   }, []);
 
+  /** 读取当前会话最近一次 SAVE 后的上下文窗口摘要。 */
+  const refreshContextWindow = useCallback((id: string | null) => {
+    const requestVersion = ++contextRequestVersion.current;
+    if (!id) {
+      setContextWindow(null);
+      return;
+    }
+    void api.contextWindow(id).then((context) => {
+      if (requestVersion === contextRequestVersion.current && sessionIdRef.current === id) setContextWindow(context);
+    }).catch(() => {
+      if (requestVersion === contextRequestVersion.current && sessionIdRef.current === id) setContextWindow(null);
+    });
+  }, []);
+
   /** 添加短暂可关闭的操作错误提示。 */
   const addNotice = useCallback((message: string) => {
     const notice = `${Date.now()}-${message}`;
-    setNotices((items) => [...items, { id: notice, message }]);
+    setNotices((items) => items.some((item) => item.message === message) ? items : [...items, { id: notice, message }]);
   }, []);
 
   /** 删除指定提示。 */
@@ -97,6 +116,7 @@ export function App() {
     dispatch({ type: "event.received", event: event as TaskEvent });
     if (["task.completed", "task.failed", "task.cancelled"].includes(event.type)) {
       void refreshSessions().catch((error: unknown) => addNotice(error instanceof Error ? error.message : "刷新会话失败"));
+      refreshContextWindow(event.session_id);
     }
   };
 
@@ -112,18 +132,47 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
+    const previousSessionId = stateSessionId.current;
+    if (previousSessionId && previousSessionId !== sessionId) {
+      writeSessionCache(previousSessionId, {
+        messages: sessionState.messages,
+        turns: sessionState.turns,
+        hiddenMessageIds: sessionState.hiddenMessageIds,
+      });
+    }
+    stateSessionId.current = sessionId;
     sessionIdRef.current = sessionId;
-    socketRef.current?.setActiveSession(sessionId);
     const preserve = preserveNextSession.current;
     preserveNextSession.current = false;
-    if (!preserve) dispatch({ type: "session.reset" });
+    if (!preserve) {
+      const cached = sessionId ? readSessionCache(sessionId) : { messages: [], turns: {}, hiddenMessageIds: [] };
+      dispatch({
+        type: "session.reset",
+        messages: cached.messages,
+        turns: cached.turns,
+        hiddenMessageIds: cached.hiddenMessageIds,
+      });
+    }
+    socketRef.current?.setActiveSession(sessionId);
     setInspector(null);
+    refreshContextWindow(sessionId);
     if (!sessionId) return undefined;
     void historyLoader.current.load(sessionId, (signal) => api.messages(sessionId, signal)).then((messages) => {
       if (messages) dispatch({ type: "history.loaded", messages });
     }).catch((error: unknown) => addNotice(error instanceof Error ? error.message : "读取会话历史失败"));
     return () => historyLoader.current.cancel();
-  }, [addNotice, sessionId]);
+  }, [addNotice, refreshContextWindow, sessionId]);
+
+  useEffect(() => {
+    /** 将尚未落盘的消息和任务过程保留到浏览器标签页缓存。 */
+    if (stateSessionId.current) {
+      writeSessionCache(stateSessionId.current, {
+        messages: sessionState.messages,
+        turns: sessionState.turns,
+        hiddenMessageIds: sessionState.hiddenMessageIds,
+      });
+    }
+  }, [sessionState.hiddenMessageIds, sessionState.messages, sessionState.turns]);
 
   useEffect(() => {
     /** 恢复浏览器前进后退对应的会话路由。 */
@@ -135,30 +184,48 @@ export function App() {
   useEffect(() => {
     const socket = new SessionSocketClient({
       onEvent: (event) => eventHandler.current(event),
-      onConnectionChange: setConnection,
+      onConnectionChange: (state) => {
+        setConnection(state);
+        if (state === "reconnecting") dispatch({ type: "connection.lost" });
+      },
     });
     socketRef.current = socket;
     socket.setActiveSession(sessionIdRef.current);
     socket.connect();
-    return () => socket.close();
+    /** 在浏览器网络恢复时主动淘汰半失效连接。 */
+    const reconnect = () => socket.reconnect();
+    /** 断网时立即禁用依赖 WebSocket 的操作。 */
+    const markOffline = () => setConnection("reconnecting");
+    window.addEventListener("online", reconnect);
+    window.addEventListener("offline", markOffline);
+    return () => {
+      window.removeEventListener("online", reconnect);
+      window.removeEventListener("offline", markOffline);
+      socket.close();
+    };
   }, []);
 
-  /** 发送普通消息或运行中 guidance，并保留未送达内容。 */
-  const send = useCallback((contentOverride?: string) => {
+  /** 仅在 WebSocket 已连接时发送普通消息或运行中 guidance。 */
+  const send = useCallback((contentOverride?: string, retryActionId?: string) => {
     const content = (contentOverride || draft || sessionState.pendingDraft).trim();
-    if (!content || !socketRef.current) return;
-    const actionId = crypto.randomUUID();
+    if (!content || !socketRef.current || connection !== "connected") return;
+    const actionId = retryActionId || crypto.randomUUID();
+    if (messageActionIds.current.has(actionId)) return;
     messageActionIds.current.add(actionId);
-    dispatch({
-      type: "message.optimistic",
-      action: {
-        id: actionId,
-        kind: sessionState.running && sessionId ? "guidance" : "message",
-        content,
-        sessionId,
-        createdAt: new Date().toISOString(),
-      },
-    });
+    if (retryActionId) {
+      dispatch({ type: "action.retry", actionId });
+    } else {
+      dispatch({
+        type: "message.optimistic",
+        action: {
+          id: actionId,
+          kind: sessionState.running && sessionId ? "guidance" : "message",
+          content,
+          sessionId,
+          createdAt: new Date().toISOString(),
+        },
+      });
+    }
     const sent = socketRef.current.send({ type: "message.send", session_id: sessionId, content, client_action_id: actionId });
     if (!sent) {
       messageActionIds.current.delete(actionId);
@@ -169,19 +236,29 @@ export function App() {
     }
     setDraft("");
     dispatch({ type: "draft.pending", content: "" });
-  }, [addNotice, draft, sessionId, sessionState.pendingDraft, sessionState.running]);
+  }, [connection, draft, sessionId, sessionState.pendingDraft, sessionState.running]);
+
+  useEffect(() => {
+    /** 显式重试只在连接重新建立后自动发送一次。 */
+    if (connection !== "connected" || !retryRequest.current) return;
+    const request = retryRequest.current;
+    retryRequest.current = null;
+    send(request.content, request.actionId);
+  }, [connection, send]);
 
   /** 请求当前任务在下一个安全检查点停止。 */
   const stop = useCallback(() => {
+    if (connection !== "connected") return;
     if (!sessionId || !socketRef.current?.send({ type: "task.stop", session_id: sessionId, client_action_id: crypto.randomUUID() })) addNotice("当前没有可停止的任务");
-  }, [addNotice, sessionId]);
+  }, [addNotice, connection, sessionId]);
 
   /** 提交指定工具审批的允许或拒绝决定。 */
   const resolveApproval = useCallback((approvalId: string, approved: boolean) => {
+    if (connection !== "connected") return;
     if (!sessionId || !socketRef.current?.send({ type: "approval.resolve", session_id: sessionId, approval_id: approvalId, approved, client_action_id: crypto.randomUUID() })) {
       addNotice("审批已失效");
     }
-  }, [addNotice, sessionId]);
+  }, [addNotice, connection, sessionId]);
 
   /** 更新全局自动审批策略。 */
   const setApproval = async (enabled: boolean) => {
@@ -234,8 +311,25 @@ export function App() {
     await refreshSessions();
   };
 
-  /** 重发聊天流中未送达的用户消息。 */
-  const retryMessage = (message: ChatMessage) => send(message.content);
+  /** 强制建立新连接后重发失败轮次，并保留原始动作标识。 */
+  const retryMessage = (message: ChatMessage) => {
+    const actionId = String(message.metadata.retry_action_id || message.client_action_id || "");
+    const content = String(message.metadata.retry_content || message.content || "").trim();
+    if (!actionId || !content || retryRequest.current?.actionId === actionId) return;
+    dispatch({
+      type: "action.retry",
+      actionId,
+      retry: { id: actionId, kind: "message", content, sessionId, createdAt: message.created_at, requestId: message.request_id },
+    });
+    retryRequest.current = { actionId, content };
+    if (connection === "connected") {
+      const request = retryRequest.current;
+      retryRequest.current = null;
+      send(request.content, request.actionId);
+      return;
+    }
+    socketRef.current?.reconnect();
+  };
 
   /** 同步输入文本并清空停止后保留的 guidance 草稿。 */
   const changeDraft = (value: string) => {
@@ -263,10 +357,10 @@ export function App() {
         <div className="title-block"><span className={`connection-dot ${sessionState.running ? "is-running" : ""}`} aria-hidden="true" /><h1>{current?.title || "新建会话"}</h1><span className="connection-label">{connectionLabel(connection)}</span>{current?.archived && <span className="readonly">已归档</span>}</div>
         <div className="top-actions"><button className="icon-button" aria-label="切换主题" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun /> : <Moon />}</button><button className="icon-button" aria-label="打开会话检查器" disabled={!sessionId} onClick={() => void openInspector()}><PanelRight /></button></div>
       </header>
-      <ChatTimeline sessionId={sessionId} messages={sessionState.messages} turns={sessionState.turns} contentVersion={currentTurnCount} composerRef={composerRef} onRetry={retryMessage} renderTurn={(turn) => <ActivityCluster key={turn.requestId} turn={turn} onResolveApproval={resolveApproval} />}>
+      <ChatTimeline sessionId={sessionId} messages={sessionState.messages} turns={sessionState.turns} contentVersion={currentTurnCount} composerRef={composerRef} retryEnabled={connection === "connected"} onRetry={retryMessage} renderTurn={(turn) => <ActivityCluster key={turn.requestId} turn={turn} actionsEnabled={connection === "connected"} onResolveApproval={resolveApproval} />}>
         {!sessionId && sessionState.messages.length === 0 && <div className="empty-state"><h2>开始一个工作会话</h2><p>首条消息发送后才会创建本地会话记录。</p></div>}
       </ChatTimeline>
-      <Composer rootRef={composerRef} session={current} running={sessionState.running} draft={draft || sessionState.pendingDraft} autoApprove={autoApprove} restoreFocusVersion={restoreFocusVersion} onDraftChange={changeDraft} onSend={() => send()} onStop={stop} onRestore={restoreSession} onAutoApproveChange={(enabled) => void setApproval(enabled)} />
+      <Composer rootRef={composerRef} session={current} running={sessionState.running} actionsEnabled={connection === "connected"} draft={draft || sessionState.pendingDraft} autoApprove={autoApprove} contextWindow={contextWindow} restoreFocusVersion={restoreFocusVersion} onDraftChange={changeDraft} onSend={() => send()} onStop={stop} onRestore={restoreSession} onAutoApproveChange={(enabled) => void setApproval(enabled)} />
       <InspectorLayer open={inspectorOpen} closing={inspectorClosing} data={inspector} onClose={closeInspector} />
     </main>
     <SessionSearchDialog open={searchOpen} sessions={[...sessions, ...archived]} currentId={sessionId} onClose={() => setSearchOpen(false)} onSelect={navigate} />

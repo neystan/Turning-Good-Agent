@@ -35,6 +35,11 @@ export type Observability = {
   tool_calls: Record<string, unknown>[];
 };
 
+export type ContextWindow = {
+  current_context_tokens: number;
+  max_context_tokens: number;
+};
+
 export type ConnectionState = "connecting" | "connected" | "reconnecting" | "disconnected";
 
 export type PendingActionKind = "message" | "guidance" | "stop" | "approval";
@@ -52,7 +57,7 @@ export type PendingAction = {
 
 export type PendingActionInput = Omit<PendingAction, "status">;
 
-export type TurnStatus = "queued" | "running" | "stopping" | "completed" | "failed" | "cancelled";
+export type TurnStatus = "queued" | "running" | "stopping" | "completed" | "failed" | "cancelled" | "interrupted";
 
 export type TurnState = {
   requestId: string;

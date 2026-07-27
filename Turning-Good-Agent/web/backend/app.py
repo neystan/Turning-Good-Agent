@@ -74,6 +74,14 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
             "tool_calls": [_tool_call_dict(item) for item in await runtime.sessions.store.all_tool_calls(session_id)],
         }
 
+    @app.get("/api/sessions/{session_id}/context-window")
+    async def get_context_window(session_id: str) -> dict[str, int]:
+        """返回 Composer 所需的轻量上下文窗口读数。"""
+        if await runtime.sessions.store.load_session(session_id) is None:
+            raise HTTPException(404, "会话不存在")
+        traces = await runtime.sessions.store.all_turn_traces(session_id)
+        return _context_window_dict(traces, settings.runtime.max_context_tokens)
+
     @app.patch("/api/sessions/{session_id}")
     async def patch_session(session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         """更新标题、置顶或归档状态。"""
@@ -171,7 +179,12 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
                             session = await runtime.sessions.store.load_session(session_id)
                             if session is not None and session.archived:
                                 raise ValueError("请先恢复已归档会话")
-                        request_id = await coordinator.send(session_id, str(action.get("content", "")), settings.user_id)
+                        session_id, request_id = await coordinator.send(
+                            session_id,
+                            str(action.get("content", "")),
+                            settings.user_id,
+                            action_id,
+                        )
                     except (ValueError, RuntimeError) as exc:
                         await send_action_error(str(exc), action_id)
                     else:
@@ -270,4 +283,21 @@ def _tool_call_dict(record: ToolCallRecord) -> dict[str, Any]:
         "error": record.error,
         "duration_ms": record.duration_ms,
         "created_at": record.created_at,
+    }
+
+
+def _context_window_dict(traces: list[dict[str, Any]], max_context_tokens: int) -> dict[str, int]:
+    """从最近一次 SAVE trace 提取已保存的上下文 token。"""
+    current_context_tokens = 0
+    for trace in reversed(traces):
+        if trace.get("state") != "SAVE":
+            continue
+        metadata = trace.get("metadata")
+        value = metadata.get("current_context_tokens") if isinstance(metadata, dict) else None
+        if isinstance(value, int) and not isinstance(value, bool):
+            current_context_tokens = max(0, value)
+        break
+    return {
+        "current_context_tokens": current_context_tokens,
+        "max_context_tokens": max(0, max_context_tokens),
     }

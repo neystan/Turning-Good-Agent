@@ -23,9 +23,15 @@ export function buildDetailActivitySteps(
   return buildActivitySteps(events.filter((event) => !isTerminalEvent(event.type) && !(hasPendingApproval && event.type === "approval.requested")));
 }
 
-/** 返回最近一个可展示的真实任务动作。 */
-export function latestActivityStep(steps: ActivityStep[]): ActivityStep | null {
-  return steps.at(-1) || null;
+/** 返回仍在进行的最近动作；工具完成后回到中性思考状态。 */
+export function latestActivityStep(events: Pick<TaskEvent, "event_id" | "type" | "payload">[]): ActivityStep | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.type === "tool.finished") return null;
+    const step = toActivityStep(event, index);
+    if (step) return step;
+  }
+  return null;
 }
 
 /** 映射单个白名单事件，未知事件一律不展示。 */
@@ -34,7 +40,7 @@ function toActivityStep(event: Pick<TaskEvent, "event_id" | "type" | "payload">,
   if (event.type === "task.status" && event.payload.content === "已加入运行中引导") return { key, label: "已引导", tone: "done" };
   if (event.type === "task.status" && String(event.payload.content || "").includes("压缩")) return { key, label: "正在整理上下文", tone: "running" };
   if (event.type === "tool.started") return toolStartedStep(key, String(event.payload.tool_name || "工具"));
-  if (event.type === "tool.finished") return { key, label: event.payload.failed ? "工具调用失败" : "工具调用完成", tone: event.payload.failed ? "failed" : "done" };
+  if (event.type === "tool.finished") return null;
   if (event.type === "approval.requested") return { key, label: "等待你的批准", detail: String(event.payload.tool_name || "工具"), tone: "waiting" };
   if (event.type === "approval.resolved") return { key, label: event.payload.approved ? "已允许本次工具调用" : "已拒绝本次工具调用", tone: "done" };
   if (event.type === "task.stopping") return { key, label: "已请求停止", tone: "stopped" };

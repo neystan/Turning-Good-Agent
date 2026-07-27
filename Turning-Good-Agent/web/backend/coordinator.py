@@ -14,6 +14,9 @@ if TYPE_CHECKING:
     from ...runtime.runtime import AgentRuntime
 
 
+_ACTION_RECEIPT_LIMIT = 2_048
+
+
 @dataclass(slots=True)
 class WebTurnControl:
     """保存单轮 guidance、Stop 和审批等待状态。"""
@@ -100,6 +103,8 @@ class WebSessionCoordinator:
         self._dispatcher: asyncio.Task[None] | None = None
         self._outbound: asyncio.Task[None] | None = None
         self._closed = False
+        self._accepted_actions: dict[str, tuple[str, str]] = {}
+        self._action_lock = asyncio.Lock()
 
     async def start(self) -> None:
         """注册 Web Adapter 工厂并启动 MessageBus 消费者。"""
@@ -121,22 +126,36 @@ class WebSessionCoordinator:
                 task.cancel()
         await asyncio.gather(*(item for item in (self._dispatcher, self._outbound) if item is not None), return_exceptions=True)
 
-    async def send(self, session_id: str, content: str, user_id: str) -> str:
-        """启动新任务，或将内容放入运行中会话的 guidance 队列。"""
+    async def send(
+        self,
+        session_id: str,
+        content: str,
+        user_id: str,
+        client_action_id: str | None = None,
+    ) -> tuple[str, str]:
+        """启动任务或加入引导，并为重复浏览器动作复用受理回执。"""
         text = content.strip()
         if not text:
             raise ValueError("消息不能为空")
-        active = self.controls.get(session_id)
-        if active is not None:
-            active.guidance.append(text)
-            await self.hub.publish(session_id, active.request_id, "task.status", {"content": "已加入运行中引导"})
-            return active.request_id
-        request_id = str(uuid4())
-        control = WebTurnControl(session_id, request_id)
-        self.controls[session_id] = control
-        await self.hub.publish(session_id, request_id, "task.queued")
-        await self.bus.publish_inbound(InboundMessage(request_id, session_id, user_id, "web", text))
-        return request_id
+        async with self._action_lock:
+            receipt = self._accepted_actions.get(client_action_id) if client_action_id else None
+            if receipt is not None:
+                return receipt
+            active = self.controls.get(session_id)
+            if active is not None:
+                active.guidance.append(text)
+                await self.hub.publish(session_id, active.request_id, "task.status", {"content": "已加入运行中引导"})
+                receipt = (session_id, active.request_id)
+            else:
+                request_id = str(uuid4())
+                control = WebTurnControl(session_id, request_id)
+                self.controls[session_id] = control
+                await self.hub.publish(session_id, request_id, "task.queued")
+                await self.bus.publish_inbound(InboundMessage(request_id, session_id, user_id, "web", text))
+                receipt = (session_id, request_id)
+            if client_action_id:
+                self._remember_action_receipt(client_action_id, receipt)
+            return receipt
 
     async def send_guidance(self, session_id: str, content: str) -> None:
         """将补充方向加入正在运行的指定会话。"""
@@ -222,3 +241,9 @@ class WebSessionCoordinator:
         if pending:
             await self.hub.publish(outbound.session_id, request_id, "guidance.pending", {"items": pending})
         self.controls.pop(outbound.session_id, None)
+
+    def _remember_action_receipt(self, client_action_id: str, receipt: tuple[str, str]) -> None:
+        """保留有限的受理回执，避免重试重复入队。"""
+        self._accepted_actions[client_action_id] = receipt
+        while len(self._accepted_actions) > _ACTION_RECEIPT_LIMIT:
+            self._accepted_actions.pop(next(iter(self._accepted_actions)))

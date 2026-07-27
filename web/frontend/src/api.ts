@@ -1,4 +1,4 @@
-import type { ChatMessage, Observability, Session } from "./types";
+import type { ChatMessage, ContextWindow, Observability, Session } from "./types";
 
 /** 保存 REST 调用失败时的状态码与后端错误内容。 */
 export class ApiError extends Error {
@@ -21,6 +21,7 @@ export const api = {
   messages: (id: string, signal?: AbortSignal) =>
     request<ChatMessage[]>(`/api/sessions/${encodeURIComponent(id)}/messages`, { signal }),
   observability: (id: string) => request<Observability>(`/api/sessions/${encodeURIComponent(id)}/observability`),
+  contextWindow: (id: string) => request<ContextWindow>(`/api/sessions/${encodeURIComponent(id)}/context-window`),
   patchSession: (id: string, payload: Partial<Pick<Session, "title" | "pinned" | "archived">>) =>
     request<Session>(`/api/sessions/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteSession: (id: string) => request<void>(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }),
