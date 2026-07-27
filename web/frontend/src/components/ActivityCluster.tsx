@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, CircleAlert, CircleStop, LoaderCircle, ShieldAlert } from "lucide-react";
 
-import { buildActivitySteps, latestActivityStep } from "../state/activity_steps";
+import { buildActivitySteps, buildDetailActivitySteps, latestActivityStep } from "../state/activity_steps";
 import type { TaskEvent, TurnState } from "../types";
 
 type ActivityClusterProps = {
@@ -15,8 +15,9 @@ export function ActivityCluster({ turn, onResolveApproval }: ActivityClusterProp
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
   const steps = useMemo(() => buildActivitySteps(turn.events), [turn.events]);
-  const latestStep = latestActivityStep(steps);
   const approval = useMemo(() => pendingApproval(turn.events), [turn.events]);
+  const detailSteps = useMemo(() => buildDetailActivitySteps(turn.events, Boolean(approval)), [approval, turn.events]);
+  const latestStep = latestActivityStep(steps);
   const stepListRef = useRef<HTMLOListElement>(null);
   const atBottomRef = useRef(true);
 
@@ -35,14 +36,21 @@ export function ActivityCluster({ turn, onResolveApproval }: ActivityClusterProp
 
   if (!steps.length && !approval && !running) return null;
   const toolCount = turn.events.filter((event) => event.type === "tool.started").length;
-  const summary = running ? runningSummary(latestStep, turn.startedAt, now) : completedSummary(turn.status, toolCount, turn.startedAt, turn.finishedAt);
-  return <section className={`activity-cluster is-${turn.status}`} aria-label="任务执行过程"><button className="activity-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>{running ? <LoaderCircle className="activity-spinner" size={13} aria-hidden="true" /> : <StatusIcon status={turn.status} />}<span>{summary}</span><ChevronDown size={12} className={open ? "" : "rotated"} aria-hidden="true" /></button>{open && <ol ref={stepListRef} className="activity-steps" onScroll={() => { const list = stepListRef.current; if (list) atBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 20; }}>{steps.map((step) => <li className={`is-${step.tone}`} key={step.key}><span className="activity-marker" /><div><strong>{step.label}</strong>{step.detail && <small>{step.detail}</small>}</div></li>)}</ol>}{approval && <ApprovalBar approval={approval} onResolve={onResolveApproval} />}</section>;
+  const summary = approval ? waitingApprovalSummary(approval.toolName) : running ? runningSummary(turn.status, latestStep, turn.startedAt, now) : completedSummary(turn.status, toolCount, turn.startedAt, turn.finishedAt);
+  const expandable = detailSteps.length > 0;
+  return <section className={`activity-cluster is-${turn.status}`} aria-label="任务执行过程"><button className="activity-toggle" type="button" disabled={!expandable} onClick={() => setOpen((value) => !value)} aria-expanded={expandable && open}>{running ? <LoaderCircle className="activity-spinner" size={13} aria-hidden="true" /> : <StatusIcon status={turn.status} />}<span>{summary}</span>{expandable && <ChevronDown size={12} className={open ? "" : "rotated"} aria-hidden="true" />}</button>{open && <ol ref={stepListRef} className="activity-steps" onScroll={() => { const list = stepListRef.current; if (list) atBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 20; }}>{detailSteps.map((step) => <li className={`is-${step.tone}`} key={step.key}><span className="activity-marker" /><div><strong>{step.label}</strong>{step.detail && <small>{step.detail}</small>}</div></li>)}</ol>}{approval && <ApprovalBar approval={approval} onResolve={onResolveApproval} />}</section>;
 }
 
 /** 优先显示最近真实动作，空事件阶段才显示中性运行状态。 */
-function runningSummary(step: ReturnType<typeof latestActivityStep>, startedAt: string, now: number): string {
+function runningSummary(status: TurnState["status"], step: ReturnType<typeof latestActivityStep>, startedAt: string, now: number): string {
+  if (status === "stopping") return `正在停止，已用 ${durationLabel(startedAt, now)}`;
   if (step) return `思考中 · ${step.label}${step.detail ? ` ${step.detail}` : ""}`;
   return `思考中，已用 ${durationLabel(startedAt, now)}`;
+}
+
+/** 生成等待审批时优先展示的当前动作。 */
+function waitingApprovalSummary(toolName: string): string {
+  return `等待你的批准 · ${toolName}`;
 }
 
 /** 使用紧凑中文摘要表达已结束的真实任务。 */

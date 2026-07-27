@@ -15,6 +15,14 @@ export function buildActivitySteps(events: Pick<TaskEvent, "event_id" | "type" |
   });
 }
 
+/** 构建展开区域需要的过程步骤，隐藏摘要和审批卡已表达的事件。 */
+export function buildDetailActivitySteps(
+  events: Pick<TaskEvent, "event_id" | "type" | "payload">[],
+  hasPendingApproval: boolean,
+): ActivityStep[] {
+  return buildActivitySteps(events.filter((event) => !isTerminalEvent(event.type) && !(hasPendingApproval && event.type === "approval.requested")));
+}
+
 /** 返回最近一个可展示的真实任务动作。 */
 export function latestActivityStep(steps: ActivityStep[]): ActivityStep | null {
   return steps.at(-1) || null;
@@ -29,11 +37,16 @@ function toActivityStep(event: Pick<TaskEvent, "event_id" | "type" | "payload">,
   if (event.type === "tool.finished") return { key, label: event.payload.failed ? "工具调用失败" : "工具调用完成", tone: event.payload.failed ? "failed" : "done" };
   if (event.type === "approval.requested") return { key, label: "等待你的批准", detail: String(event.payload.tool_name || "工具"), tone: "waiting" };
   if (event.type === "approval.resolved") return { key, label: event.payload.approved ? "已允许本次工具调用" : "已拒绝本次工具调用", tone: "done" };
-  if (event.type === "task.stopping") return { key, label: "正在停止任务", tone: "stopped" };
+  if (event.type === "task.stopping") return { key, label: "已请求停止", tone: "stopped" };
   if (event.type === "task.completed") return { key, label: "任务已完成", tone: "done" };
   if (event.type === "task.failed") return { key, label: "任务失败", tone: "failed" };
   if (event.type === "task.cancelled") return { key, label: "任务已停止", tone: "stopped" };
   return null;
+}
+
+/** 判断事件是否已由任务摘要表达终态。 */
+function isTerminalEvent(type: string): boolean {
+  return type === "task.completed" || type === "task.failed" || type === "task.cancelled";
 }
 
 /** 根据工具名称生成本地工具、MCP 或 Skill 的紧凑描述。 */
