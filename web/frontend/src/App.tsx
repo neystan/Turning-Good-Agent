@@ -12,7 +12,7 @@ import { ActivityCluster } from "./components/ActivityCluster";
 import { SessionHistoryLoader } from "./state/history_loader";
 import { applySessionAction, createSessionState } from "./state/session_state";
 import { SessionSocketClient } from "./state/socket_client";
-import type { ChatMessage, ConnectionState, Observability, Session, TaskEvent } from "./types";
+import type { ConnectionState, Observability, Session, TaskEvent } from "./types";
 
 type SocketMessage = Partial<TaskEvent> & { type: string; client_action_id?: string; message?: string; session_id?: string; request_id?: string };
 
@@ -39,6 +39,7 @@ export function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [notices, setNotices] = useState<{ id: string; message: string }[]>([]);
+  const [restoreFocusVersion, setRestoreFocusVersion] = useState(0);
   const socketRef = useRef<SessionSocketClient | null>(null);
   const sessionIdRef = useRef<string | null>(sessionId);
   const historyLoader = useRef(new SessionHistoryLoader());
@@ -46,6 +47,7 @@ export function App() {
   const eventHandler = useRef<(event: SocketMessage) => void>(() => undefined);
   const composerRef = useRef<HTMLElement>(null);
   const inspectorCloseTimer = useRef<number | null>(null);
+  const messageActionIds = useRef(new Set<string>());
 
   /** 重新读取侧栏会话分组。 */
   const refreshSessions = useCallback(async () => {
@@ -76,11 +78,13 @@ export function App() {
   /** 处理 WebSocket 事件与动作确认。 */
   eventHandler.current = (event) => {
     if (event.type === "error") {
-      if (event.client_action_id) dispatch({ type: "action.failed", actionId: event.client_action_id, message: event.message || "请求失败" });
-      addNotice(event.message || "请求失败");
+      const isMessageFailure = Boolean(event.client_action_id && messageActionIds.current.delete(event.client_action_id));
+      if (event.client_action_id) dispatch({ type: "action.failed", actionId: event.client_action_id });
+      addNotice(isMessageFailure ? "消息未发送，内容已保留" : event.message || "请求失败");
       return;
     }
     if (event.type === "message.accepted" && event.client_action_id && event.session_id && event.request_id) {
+      messageActionIds.current.delete(event.client_action_id);
       dispatch({ type: "action.accepted", actionId: event.client_action_id, sessionId: event.session_id, requestId: event.request_id });
       if (!sessionIdRef.current) navigate(event.session_id, true);
       void refreshSessions().catch((error: unknown) => addNotice(error instanceof Error ? error.message : "刷新会话失败"));
@@ -139,11 +143,12 @@ export function App() {
     return () => socket.close();
   }, []);
 
-  /** 发送普通消息或运行中 guidance，并保留可重试的乐观消息。 */
+  /** 发送普通消息或运行中 guidance，并保留未送达内容。 */
   const send = useCallback((contentOverride?: string) => {
     const content = (contentOverride || draft || sessionState.pendingDraft).trim();
     if (!content || !socketRef.current) return;
     const actionId = crypto.randomUUID();
+    messageActionIds.current.add(actionId);
     dispatch({
       type: "message.optimistic",
       action: {
@@ -156,8 +161,9 @@ export function App() {
     });
     const sent = socketRef.current.send({ type: "message.send", session_id: sessionId, content, client_action_id: actionId });
     if (!sent) {
-      dispatch({ type: "action.failed", actionId, message: "连接尚未建立" });
-      addNotice("连接尚未建立，消息未发送");
+      messageActionIds.current.delete(actionId);
+      dispatch({ type: "action.failed", actionId });
+      addNotice("消息未发送，内容已保留");
       return;
     }
     setDraft("");
@@ -227,9 +233,6 @@ export function App() {
     await refreshSessions();
   };
 
-  /** 重发失败的用户消息。 */
-  const retryMessage = (message: ChatMessage) => send(message.content);
-
   /** 同步输入文本并清空停止后保留的 guidance 草稿。 */
   const changeDraft = (value: string) => {
     setDraft(value);
@@ -238,6 +241,13 @@ export function App() {
 
   const current = useMemo(() => [...sessions, ...archived].find((item) => item.id === sessionId), [archived, sessionId, sessions]);
   const currentTurnCount = Object.values(sessionState.turns).reduce((count, turn) => count + turn.events.length, 0);
+
+  /** 恢复归档会话后请求 Composer 聚焦输入框。 */
+  const restoreSession = async () => {
+    if (!current) return;
+    await updateSession(current.id, { archived: false });
+    setRestoreFocusVersion((version) => version + 1);
+  };
 
   return <div className={`app-shell ${sidebarCollapsed ? "is-sidebar-collapsed" : ""}`}>
     <a className="skip-link" href="#main-content">跳到对话</a>
@@ -249,10 +259,10 @@ export function App() {
         <div className="title-block"><span className={`connection-dot ${sessionState.running ? "is-running" : ""}`} aria-hidden="true" /><h1>{current?.title || "新建会话"}</h1><span className="connection-label">{connectionLabel(connection)}</span>{current?.archived && <span className="readonly">已归档</span>}</div>
         <div className="top-actions"><button className="icon-button" aria-label="切换主题" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun /> : <Moon />}</button><button className="icon-button" aria-label="打开会话检查器" disabled={!sessionId} onClick={() => void openInspector()}><PanelRight /></button></div>
       </header>
-      <ChatTimeline sessionId={sessionId} messages={sessionState.messages} turns={sessionState.turns} contentVersion={currentTurnCount} composerRef={composerRef} onRetry={retryMessage} renderTurn={(turn) => <ActivityCluster key={turn.requestId} turn={turn} onResolveApproval={resolveApproval} />}>
+      <ChatTimeline sessionId={sessionId} messages={sessionState.messages} turns={sessionState.turns} contentVersion={currentTurnCount} composerRef={composerRef} renderTurn={(turn) => <ActivityCluster key={turn.requestId} turn={turn} onResolveApproval={resolveApproval} />}>
         {!sessionId && sessionState.messages.length === 0 && <div className="empty-state"><h2>开始一个工作会话</h2><p>首条消息发送后才会创建本地会话记录。</p></div>}
       </ChatTimeline>
-      <Composer rootRef={composerRef} session={current} running={sessionState.running} draft={draft || sessionState.pendingDraft} autoApprove={autoApprove} onDraftChange={changeDraft} onSend={() => send()} onStop={stop} onRestore={() => current && void updateSession(current.id, { archived: false })} onAutoApproveChange={(enabled) => void setApproval(enabled)} />
+      <Composer rootRef={composerRef} session={current} running={sessionState.running} draft={draft || sessionState.pendingDraft} autoApprove={autoApprove} restoreFocusVersion={restoreFocusVersion} onDraftChange={changeDraft} onSend={() => send()} onStop={stop} onRestore={restoreSession} onAutoApproveChange={(enabled) => void setApproval(enabled)} />
       <InspectorLayer open={inspectorOpen} closing={inspectorClosing} data={inspector} onClose={closeInspector} />
     </main>
     <SessionSearchDialog open={searchOpen} sessions={[...sessions, ...archived]} currentId={sessionId} onClose={() => setSearchOpen(false)} onSelect={navigate} />

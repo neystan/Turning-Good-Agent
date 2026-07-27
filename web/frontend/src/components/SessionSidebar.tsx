@@ -5,6 +5,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Archive, ChevronDown, FilePlus2, MoreHorizontal, PanelLeft, Pin, RotateCcw, Search, SquarePen, Trash2, X } from "lucide-react";
 
 import { ScrollArea } from "./ScrollArea";
+import { sessionMenuSide } from "../state/menu_direction";
 import type { Session } from "../types";
 
 type SessionSidebarProps = {
@@ -94,10 +95,17 @@ type SessionActionMenuProps = Pick<SessionListProps, "onRename" | "onDelete" | "
 
 /** 渲染由 Radix 负责定位和关闭的会话操作菜单。 */
 function SessionActionMenu({ session, onRename, onDelete, onAction, onUpdate }: SessionActionMenuProps) {
+  const [side, setSide] = useState<"right" | "top">("right");
+
+  /** 在菜单打开前依据视口底部余量调整方向。 */
+  const prepareMenuDirection = (event: React.PointerEvent<HTMLButtonElement>) => {
+    setSide(sessionMenuSide(event.currentTarget.getBoundingClientRect().bottom, window.innerHeight));
+  };
+
   return <DropdownMenu.Root>
-    <div className="session-actions"><DropdownMenu.Trigger asChild><button className="icon-button" aria-label={`${session.title} 会话操作`}><MoreHorizontal size={15} /></button></DropdownMenu.Trigger></div>
+    <div className="session-actions"><DropdownMenu.Trigger asChild><button className="icon-button" aria-label={`${session.title} 会话操作`} onPointerDown={prepareMenuDirection}><MoreHorizontal size={15} /></button></DropdownMenu.Trigger></div>
     <DropdownMenu.Portal>
-      <DropdownMenu.Content className="session-menu" align="end" side="right" sideOffset={6} collisionPadding={8}>
+      <DropdownMenu.Content className="session-menu" align="end" side={side} sideOffset={6} collisionPadding={8}>
         <DropdownMenu.Item onSelect={() => void onAction(() => onUpdate(session.id, { pinned: !session.pinned }))}><Pin size={14} />{session.pinned ? "取消置顶" : "置顶"}</DropdownMenu.Item>
         <DropdownMenu.Item onSelect={() => onRename(session)}><SquarePen size={14} />重命名</DropdownMenu.Item>
         <DropdownMenu.Item onSelect={() => void onAction(() => onUpdate(session.id, { archived: !session.archived }))}>{session.archived ? <RotateCcw size={14} /> : <Archive size={14} />}{session.archived ? "恢复" : "归档"}</DropdownMenu.Item>
