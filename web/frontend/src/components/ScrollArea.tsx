@@ -1,11 +1,13 @@
-import { useCallback, useLayoutEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, type HTMLAttributes, type MutableRefObject, type ReactNode, type UIEventHandler } from "react";
 
 type ScrollAreaProps = HTMLAttributes<HTMLDivElement> & {
   children: ReactNode;
+  viewportRef?: MutableRefObject<HTMLDivElement | null>;
+  onViewportScroll?: UIEventHandler<HTMLDivElement>;
 };
 
 /** 渲染隐藏原生滚动条并带圆角滑块的通用滚动区域。 */
-export function ScrollArea({ children, className, ...props }: ScrollAreaProps) {
+export function ScrollArea({ children, className, viewportRef: externalViewportRef, onViewportScroll, ...props }: ScrollAreaProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [thumb, setThumb] = useState<{ top: number; height: number } | null>(null);
 
@@ -38,5 +40,17 @@ export function ScrollArea({ children, className, ...props }: ScrollAreaProps) {
     };
   }, [children, updateThumb]);
 
-  return <div {...props} className={`scroll-area ${className || ""}`}><div ref={viewportRef} className="scroll-area-viewport" onScroll={updateThumb}>{children}</div>{thumb && <span className="scroll-area-thumb" style={{ height: thumb.height, transform: `translateY(${thumb.top}px)` }} />}</div>;
+  /** 同步内部与调用方的视口引用。 */
+  const bindViewport = (node: HTMLDivElement | null) => {
+    viewportRef.current = node;
+    if (externalViewportRef) externalViewportRef.current = node;
+  };
+
+  /** 更新滑块并转发视口滚动事件。 */
+  const handleScroll: UIEventHandler<HTMLDivElement> = (event) => {
+    updateThumb();
+    onViewportScroll?.(event);
+  };
+
+  return <div {...props} className={`scroll-area ${className || ""}`}><div ref={bindViewport} className="scroll-area-viewport" onScroll={handleScroll}>{children}</div>{thumb && <span className="scroll-area-thumb" style={{ height: thumb.height, transform: `translateY(${thumb.top}px)` }} />}</div>;
 }

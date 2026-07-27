@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 
 import type { ChatMessage, TurnState } from "../types";
 import { shouldFollowLatest } from "../state/chat_scroll";
+import { isCompactCodeBlock } from "../state/code_presentation";
 import { buildTimelineEntries } from "../state/timeline_entries";
 
 type ChatTimelineProps = {
@@ -101,7 +102,7 @@ function CodeBlock({ className, children, ...props }: { className?: string; chil
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1_200);
   };
-  if (!className) return <code {...props}>{children}</code>;
+  if (!className) return <code className={`code-block-content ${isCompactCodeBlock(content) ? "is-compact" : ""}`} {...props}>{children}</code>;
   const language = className.replace("language-", "") || "text";
   const label = copied ? "已复制代码" : "复制代码";
   return <span className="code-block"><span className="code-language">{language}</span><button className="icon-button" aria-label={label} onClick={() => void copy()}>{copied ? <Check size={14} /> : <Copy size={14} />}</button><code className={className} {...props}>{children}</code></span>;
