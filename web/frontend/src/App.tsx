@@ -12,7 +12,7 @@ import { ActivityCluster } from "./components/ActivityCluster";
 import { SessionHistoryLoader } from "./state/history_loader";
 import { applySessionAction, createSessionState } from "./state/session_state";
 import { SessionSocketClient } from "./state/socket_client";
-import type { ConnectionState, Observability, Session, TaskEvent } from "./types";
+import type { ChatMessage, ConnectionState, Observability, Session, TaskEvent } from "./types";
 
 type SocketMessage = Partial<TaskEvent> & { type: string; client_action_id?: string; message?: string; session_id?: string; request_id?: string };
 
@@ -79,8 +79,8 @@ export function App() {
   eventHandler.current = (event) => {
     if (event.type === "error") {
       const isMessageFailure = Boolean(event.client_action_id && messageActionIds.current.delete(event.client_action_id));
-      if (event.client_action_id) dispatch({ type: "action.failed", actionId: event.client_action_id });
-      addNotice(isMessageFailure ? "消息未发送，内容已保留" : event.message || "请求失败");
+      if (event.client_action_id) dispatch({ type: "action.failed", actionId: event.client_action_id, message: event.message || "请求失败" });
+      if (!isMessageFailure) addNotice(event.message || "请求失败");
       return;
     }
     if (event.type === "message.accepted" && event.client_action_id && event.session_id && event.request_id) {
@@ -162,8 +162,9 @@ export function App() {
     const sent = socketRef.current.send({ type: "message.send", session_id: sessionId, content, client_action_id: actionId });
     if (!sent) {
       messageActionIds.current.delete(actionId);
-      dispatch({ type: "action.failed", actionId });
-      addNotice("消息未发送，内容已保留");
+      dispatch({ type: "action.failed", actionId, message: "连接尚未建立" });
+      setDraft("");
+      dispatch({ type: "draft.pending", content: "" });
       return;
     }
     setDraft("");
@@ -233,6 +234,9 @@ export function App() {
     await refreshSessions();
   };
 
+  /** 重发聊天流中未送达的用户消息。 */
+  const retryMessage = (message: ChatMessage) => send(message.content);
+
   /** 同步输入文本并清空停止后保留的 guidance 草稿。 */
   const changeDraft = (value: string) => {
     setDraft(value);
@@ -259,7 +263,7 @@ export function App() {
         <div className="title-block"><span className={`connection-dot ${sessionState.running ? "is-running" : ""}`} aria-hidden="true" /><h1>{current?.title || "新建会话"}</h1><span className="connection-label">{connectionLabel(connection)}</span>{current?.archived && <span className="readonly">已归档</span>}</div>
         <div className="top-actions"><button className="icon-button" aria-label="切换主题" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun /> : <Moon />}</button><button className="icon-button" aria-label="打开会话检查器" disabled={!sessionId} onClick={() => void openInspector()}><PanelRight /></button></div>
       </header>
-      <ChatTimeline sessionId={sessionId} messages={sessionState.messages} turns={sessionState.turns} contentVersion={currentTurnCount} composerRef={composerRef} renderTurn={(turn) => <ActivityCluster key={turn.requestId} turn={turn} onResolveApproval={resolveApproval} />}>
+      <ChatTimeline sessionId={sessionId} messages={sessionState.messages} turns={sessionState.turns} contentVersion={currentTurnCount} composerRef={composerRef} onRetry={retryMessage} renderTurn={(turn) => <ActivityCluster key={turn.requestId} turn={turn} onResolveApproval={resolveApproval} />}>
         {!sessionId && sessionState.messages.length === 0 && <div className="empty-state"><h2>开始一个工作会话</h2><p>首条消息发送后才会创建本地会话记录。</p></div>}
       </ChatTimeline>
       <Composer rootRef={composerRef} session={current} running={sessionState.running} draft={draft || sessionState.pendingDraft} autoApprove={autoApprove} restoreFocusVersion={restoreFocusVersion} onDraftChange={changeDraft} onSend={() => send()} onStop={stop} onRestore={restoreSession} onAutoApproveChange={(enabled) => void setApproval(enabled)} />

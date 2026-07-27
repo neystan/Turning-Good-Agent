@@ -12,6 +12,7 @@ type ChatTimelineProps = {
   turns?: Record<string, TurnState>;
   contentVersion?: number;
   children?: React.ReactNode;
+  onRetry?: (message: ChatMessage) => void;
   renderTurn?: (turn: TurnState) => React.ReactNode;
   composerRef?: RefObject<HTMLElement | null>;
 };
@@ -19,7 +20,7 @@ type ChatTimelineProps = {
 const savedScrollTop: Record<string, number> = {};
 
 /** 渲染稳定滚动的聊天消息列表。 */
-export function ChatTimeline({ sessionId, messages, turns = {}, contentVersion = 0, children, renderTurn, composerRef }: ChatTimelineProps) {
+export function ChatTimeline({ sessionId, messages, turns = {}, contentVersion = 0, children, onRetry, renderTurn, composerRef }: ChatTimelineProps) {
   const scrollRef = useRef<HTMLElement>(null);
   const previousSessionId = useRef<string | null>(null);
   const nearBottom = useRef(true);
@@ -77,16 +78,17 @@ export function ChatTimeline({ sessionId, messages, turns = {}, contentVersion =
 
   const entries = buildTimelineEntries(messages, turns);
   return <section ref={scrollRef} className="chat-scroll" aria-live="polite" onScroll={onScroll}>
-    {entries.map((entry) => entry.kind === "message" ? <MessageView key={entry.id} message={entry.message} /> : <div key={entry.id}>{renderTurn?.(entry.turn)}</div>)}
+    {entries.map((entry) => entry.kind === "message" ? <MessageView key={entry.id} message={entry.message} onRetry={onRetry} /> : <div key={entry.id}>{renderTurn?.(entry.turn)}</div>)}
     {children}
     {hasUnread && <button className="new-message-button" onClick={scrollToLatest}>有新消息</button>}
   </section>;
 }
 
 /** 渲染一条安全 Markdown 对话消息。 */
-function MessageView({ message }: { message: ChatMessage }) {
+function MessageView({ message, onRetry }: { message: ChatMessage; onRetry?: (message: ChatMessage) => void }) {
   const stopped = message.role === "assistant" && Boolean(message.metadata.incomplete);
-  return <article className={`message ${message.role}`}><div className="message-meta">{message.role === "user" ? "你" : "TGA"}{stopped && <span className="stopped-badge">已停止</span>}{message.delivery === "sending" && <span>发送中</span>}</div><div className="markdown"><ReactMarkdown components={{ code: CodeBlock }}>{message.content}</ReactMarkdown></div></article>;
+  const failed = message.delivery === "failed";
+  return <article className={`message ${message.role}`}><div className="message-meta">{message.role === "user" ? "你" : "TGA"}{stopped && <span className="stopped-badge">已停止</span>}{message.delivery === "sending" && <span>发送中</span>}{failed && <><span className="message-error">发送失败</span>{onRetry && <button className="message-retry" type="button" onClick={() => onRetry(message)}>重试</button>}</>}</div><div className="markdown"><ReactMarkdown components={{ code: CodeBlock }}>{message.content}</ReactMarkdown></div></article>;
 }
 
 /** 渲染带语言标记和复制按钮的代码块。 */

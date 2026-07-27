@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
@@ -95,15 +95,20 @@ type SessionActionMenuProps = Pick<SessionListProps, "onRename" | "onDelete" | "
 
 /** 渲染由 Radix 负责定位和关闭的会话操作菜单。 */
 function SessionActionMenu({ session, onRename, onDelete, onAction, onUpdate }: SessionActionMenuProps) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
   const [side, setSide] = useState<"right" | "top">("right");
 
-  /** 在菜单打开前依据视口底部余量调整方向。 */
-  const prepareMenuDirection = (event: React.PointerEvent<HTMLButtonElement>) => {
-    setSide(sessionMenuSide(event.currentTarget.getBoundingClientRect().bottom, window.innerHeight));
+  /** 在打开菜单前依据触发按钮位置选择展开方向。 */
+  const changeOpen = (nextOpen: boolean) => {
+    if (nextOpen && triggerRef.current) {
+      setSide(sessionMenuSide(triggerRef.current.getBoundingClientRect().bottom, window.innerHeight));
+    }
+    setOpen(nextOpen);
   };
 
-  return <DropdownMenu.Root>
-    <div className="session-actions"><DropdownMenu.Trigger asChild><button className="icon-button" aria-label={`${session.title} 会话操作`} onPointerDown={prepareMenuDirection}><MoreHorizontal size={15} /></button></DropdownMenu.Trigger></div>
+  return <DropdownMenu.Root open={open} onOpenChange={changeOpen}>
+    <div className="session-actions"><DropdownMenu.Trigger asChild><button ref={triggerRef} className="icon-button" aria-label={`${session.title} 会话操作`}><MoreHorizontal size={15} /></button></DropdownMenu.Trigger></div>
     <DropdownMenu.Portal>
       <DropdownMenu.Content className="session-menu" align="end" side={side} sideOffset={6} collisionPadding={8}>
         <DropdownMenu.Item onSelect={() => void onAction(() => onUpdate(session.id, { pinned: !session.pinned }))}><Pin size={14} />{session.pinned ? "取消置顶" : "置顶"}</DropdownMenu.Item>

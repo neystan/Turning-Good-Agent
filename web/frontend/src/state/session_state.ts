@@ -15,7 +15,7 @@ export type SessionAction =
   | { type: "history.loaded"; messages: ChatMessage[] }
   | { type: "message.optimistic"; action: PendingActionInput }
   | { type: "action.accepted"; actionId: string; sessionId: string; requestId: string }
-  | { type: "action.failed"; actionId: string }
+  | { type: "action.failed"; actionId: string; message: string }
   | { type: "draft.pending"; content: string }
   | { type: "event.received"; event: TaskEvent };
 
@@ -31,7 +31,7 @@ export function applySessionAction(state: SessionState, action: SessionAction): 
   if (action.type === "draft.pending") return { ...state, pendingDraft: action.content };
   if (action.type === "message.optimistic") return addOptimisticMessage(state, action.action);
   if (action.type === "action.accepted") return acceptAction(state, action);
-  if (action.type === "action.failed") return failAction(state, action.actionId);
+  if (action.type === "action.failed") return failAction(state, action.actionId, action.message);
   return applyTaskEvent(state, action.event);
 }
 
@@ -85,16 +85,16 @@ function acceptAction(
   };
 }
 
-/** 移除未送达消息并将其内容恢复为输入草稿。 */
-function failAction(state: SessionState, actionId: string): SessionState {
+/** 标记未送达消息，供用户在聊天流中重试。 */
+function failAction(state: SessionState, actionId: string, message: string): SessionState {
   const pending = state.pendingActions[actionId];
   if (!pending || pending.status !== "sending") return state;
-  const { [actionId]: _failedAction, ...pendingActions } = state.pendingActions;
   return {
     ...state,
-    messages: state.messages.filter((item) => item.client_action_id !== actionId),
-    pendingActions,
-    pendingDraft: pending.content,
+    messages: state.messages.map((item) => item.client_action_id === actionId
+      ? { ...item, delivery: "failed", metadata: { ...item.metadata, error: message } }
+      : item),
+    pendingActions: { ...state.pendingActions, [actionId]: { ...pending, status: "failed", error: message } },
   };
 }
 
