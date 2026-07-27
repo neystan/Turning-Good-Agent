@@ -97,7 +97,7 @@ type SessionActionMenuProps = Pick<SessionListProps, "onRename" | "onDelete" | "
 function SessionActionMenu({ session, onRename, onDelete, onAction, onUpdate }: SessionActionMenuProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState<{ top: number; right: number } | null>(null);
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
   const menuId = `session-menu-${session.id}`;
 
   /** 打开菜单并使用触发按钮的真实坐标固定定位。 */

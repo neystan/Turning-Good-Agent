@@ -6,10 +6,11 @@ export function sessionMenuPosition(
   anchor: MenuAnchor,
   viewport: MenuViewport,
   menuHeight = 136,
+  menuWidth = 98,
   padding = 8,
   gap = 6,
-): { top: number; right: number } {
-  const right = Math.max(padding, viewport.width - anchor.right);
-  if (anchor.top >= menuHeight + padding) return { top: anchor.top - menuHeight - gap, right };
-  return { top: Math.min(anchor.bottom + gap, viewport.height - menuHeight - padding), right };
+): { top: number; left: number } {
+  const left = Math.min(anchor.right + gap, viewport.width - menuWidth - padding);
+  if (anchor.top >= menuHeight + padding) return { top: anchor.top - menuHeight - gap, left };
+  return { top: Math.min(anchor.bottom + gap, viewport.height - menuHeight - padding), left };
 }
