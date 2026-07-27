@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Archive, ChevronDown, FilePlus2, MoreHorizontal, PanelLeft, Pin, RotateCcw, Search, SquarePen, Trash2, X } from "lucide-react";
 
 import { ScrollArea } from "./ScrollArea";
+import { sessionMenuPosition } from "../state/session_menu_position";
 import type { Session } from "../types";
 
 type SessionSidebarProps = {
@@ -92,20 +93,55 @@ function SessionList({ items, currentId, onSelect, onRename, onDelete, onAction,
 
 type SessionActionMenuProps = Pick<SessionListProps, "onRename" | "onDelete" | "onAction" | "onUpdate"> & { session: Session };
 
-/** 渲染由 Radix 负责定位和关闭的会话操作菜单。 */
+/** 渲染固定定位的会话操作菜单，避免侧栏滚动裁切。 */
 function SessionActionMenu({ session, onRename, onDelete, onAction, onUpdate }: SessionActionMenuProps) {
-  return <DropdownMenu.Root>
-    <div className="session-actions"><DropdownMenu.Trigger asChild><button className="icon-button" aria-label={`${session.title} 会话操作`}><MoreHorizontal size={15} /></button></DropdownMenu.Trigger></div>
-    <DropdownMenu.Portal>
-      <DropdownMenu.Content className="session-menu" align="end" side="top" sideOffset={6} collisionPadding={8}>
-        <DropdownMenu.Item onSelect={() => void onAction(() => onUpdate(session.id, { pinned: !session.pinned }))}><Pin size={14} />{session.pinned ? "取消置顶" : "置顶"}</DropdownMenu.Item>
-        <DropdownMenu.Item onSelect={() => onRename(session)}><SquarePen size={14} />重命名</DropdownMenu.Item>
-        <DropdownMenu.Item onSelect={() => void onAction(() => onUpdate(session.id, { archived: !session.archived }))}>{session.archived ? <RotateCcw size={14} /> : <Archive size={14} />}{session.archived ? "恢复" : "归档"}</DropdownMenu.Item>
-        <DropdownMenu.Separator className="session-menu-separator" />
-        <DropdownMenu.Item className="danger" onSelect={() => onDelete(session)}><Trash2 size={14} />删除</DropdownMenu.Item>
-      </DropdownMenu.Content>
-    </DropdownMenu.Portal>
-  </DropdownMenu.Root>;
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{ top: number; right: number } | null>(null);
+  const menuId = `session-menu-${session.id}`;
+
+  /** 打开菜单并使用触发按钮的真实坐标固定定位。 */
+  const openMenu = () => {
+    if (position) {
+      setPosition(null);
+      return;
+    }
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    setPosition(sessionMenuPosition(trigger.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight }));
+  };
+
+  /** 关闭菜单后再执行对应的会话操作。 */
+  const runMenuAction = (action: () => void) => {
+    setPosition(null);
+    action();
+  };
+
+  useEffect(() => {
+    if (!position) return;
+    /** 点击外部、滚动或按 Escape 时关闭固定菜单。 */
+    const closeMenu = (event?: Event) => {
+      const target = event?.target as Node | null;
+      if (target && (menuRef.current?.contains(target) || triggerRef.current?.contains(target))) return;
+      setPosition(null);
+    };
+    /** 使用 Escape 快捷关闭当前固定菜单。 */
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMenu();
+    };
+    document.addEventListener("pointerdown", closeMenu, true);
+    document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeMenu, true);
+      document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+    };
+  }, [position]);
+
+  return <div className="session-actions"><button ref={triggerRef} className="icon-button" aria-label={`${session.title} 会话操作`} aria-controls={position ? menuId : undefined} aria-expanded={Boolean(position)} onClick={openMenu}><MoreHorizontal size={15} /></button>{position && createPortal(<div ref={menuRef} id={menuId} className="session-menu session-menu-fixed" role="menu" style={position}><button type="button" role="menuitem" onClick={() => runMenuAction(() => void onAction(() => onUpdate(session.id, { pinned: !session.pinned })))}><Pin size={14} />{session.pinned ? "取消置顶" : "置顶"}</button><button type="button" role="menuitem" onClick={() => runMenuAction(() => onRename(session))}><SquarePen size={14} />重命名</button><button type="button" role="menuitem" onClick={() => runMenuAction(() => void onAction(() => onUpdate(session.id, { archived: !session.archived })))}>{session.archived ? <RotateCcw size={14} /> : <Archive size={14} />}{session.archived ? "恢复" : "归档"}</button><button type="button" role="menuitem" className="danger" onClick={() => runMenuAction(() => onDelete(session))}><Trash2 size={14} />删除</button></div>, document.body)}</div>;
 }
 
 /** 渲染带标题校验的会话重命名对话框。 */
