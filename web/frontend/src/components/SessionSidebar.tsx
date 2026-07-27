@@ -1,12 +1,10 @@
-import { useRef, useState } from "react";
-import { flushSync } from "react-dom";
+import { useState } from "react";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Archive, ChevronDown, FilePlus2, MoreHorizontal, PanelLeft, Pin, RotateCcw, Search, SquarePen, Trash2, X } from "lucide-react";
 
 import { ScrollArea } from "./ScrollArea";
-import { sessionMenuSide } from "../state/menu_direction";
 import type { Session } from "../types";
 
 type SessionSidebarProps = {
@@ -96,28 +94,10 @@ type SessionActionMenuProps = Pick<SessionListProps, "onRename" | "onDelete" | "
 
 /** 渲染由 Radix 负责定位和关闭的会话操作菜单。 */
 function SessionActionMenu({ session, onRename, onDelete, onAction, onUpdate }: SessionActionMenuProps) {
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const [open, setOpen] = useState(false);
-  const [side, setSide] = useState<"right" | "top">("right");
-
-  /** 在定位器创建前依据实际可视区域确定菜单方向。 */
-  const prepareMenuSide = () => {
-    const trigger = triggerRef.current;
-    if (!trigger) return;
-    const viewportHeight = window.visualViewport?.height || document.documentElement.clientHeight;
-    flushSync(() => setSide(sessionMenuSide(trigger.getBoundingClientRect().bottom, viewportHeight)));
-  };
-
-  /** 同步受控打开状态，并覆盖键盘打开路径。 */
-  const changeOpen = (nextOpen: boolean) => {
-    if (nextOpen) prepareMenuSide();
-    setOpen(nextOpen);
-  };
-
-  return <DropdownMenu.Root open={open} onOpenChange={changeOpen}>
-    <div className="session-actions"><DropdownMenu.Trigger asChild><button ref={triggerRef} className="icon-button" aria-label={`${session.title} 会话操作`} onPointerDown={prepareMenuSide}><MoreHorizontal size={15} /></button></DropdownMenu.Trigger></div>
+  return <DropdownMenu.Root>
+    <div className="session-actions"><DropdownMenu.Trigger asChild><button className="icon-button" aria-label={`${session.title} 会话操作`}><MoreHorizontal size={15} /></button></DropdownMenu.Trigger></div>
     <DropdownMenu.Portal>
-      <DropdownMenu.Content key={side} className="session-menu" align="end" side={side} sideOffset={6} avoidCollisions={false}>
+      <DropdownMenu.Content className="session-menu" align="end" side="top" sideOffset={6} collisionPadding={8}>
         <DropdownMenu.Item onSelect={() => void onAction(() => onUpdate(session.id, { pinned: !session.pinned }))}><Pin size={14} />{session.pinned ? "取消置顶" : "置顶"}</DropdownMenu.Item>
         <DropdownMenu.Item onSelect={() => onRename(session)}><SquarePen size={14} />重命名</DropdownMenu.Item>
         <DropdownMenu.Item onSelect={() => void onAction(() => onUpdate(session.id, { archived: !session.archived }))}>{session.archived ? <RotateCcw size={14} /> : <Archive size={14} />}{session.archived ? "恢复" : "归档"}</DropdownMenu.Item>
