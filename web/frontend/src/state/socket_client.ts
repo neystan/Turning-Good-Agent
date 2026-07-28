@@ -48,6 +48,16 @@ export class SessionSocketClient {
     this.subscribeActiveSession();
   }
 
+  /** 载入刷新前已消费的事件游标，避免订阅时重复回放。 */
+  setLastEventId(sessionId: string, eventId: number): void {
+    if (eventId > (this.lastEventIds[sessionId] || 0)) this.lastEventIds[sessionId] = eventId;
+  }
+
+  /** 返回指定会话当前已消费的最大事件编号。 */
+  lastEventId(sessionId: string): number {
+    return this.lastEventIds[sessionId] || 0;
+  }
+
   /** 网络恢复时替换可能未触发关闭事件的旧连接。 */
   reconnect(): void {
     if (this.closed) return;

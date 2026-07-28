@@ -24,6 +24,8 @@ type SessionSidebarProps = {
   onError: (message: string) => void;
 };
 
+const brandAssetPath = import.meta.env.DEV ? "" : "/static";
+
 /** 渲染由 Radix 管理菜单与对话框的会话侧栏。 */
 export function SessionSidebar({ active, archived, currentId, mobileOpen, collapsed, onCollapseChange, onCloseMobile, onNew, onOpenSearch, onSelect, onUpdate, onDelete, onError }: SessionSidebarProps) {
   const [activeOpen, setActiveOpen] = useState(true);
@@ -65,7 +67,7 @@ export function SessionSidebar({ active, archived, currentId, mobileOpen, collap
 
   return <>
     <aside className={`sidebar ${mobileOpen ? "is-open" : ""}`} aria-label="会话管理"><ScrollArea className="sidebar-scroll">
-      <header className="brand"><button className="brand-mark-button" aria-label="打开会话栏" disabled={!collapsed} onClick={() => onCollapseChange(false)}><img className="brand-mark" src="/static/tga-brand.png" width="50" height="50" alt="" /></button><span className="brand-wordmark-frame"><img className="brand-wordmark" src="/static/tga-wordmark.png" width="195" height="54" alt="Turning Good Agent" /></span><button className="icon-button sidebar-collapse-control" aria-label="隐藏会话栏" onClick={() => onCollapseChange(true)}><PanelLeft /></button><button className="icon-button mobile-only" aria-label="关闭会话栏" onClick={onCloseMobile}><X /></button></header>
+      <header className="brand"><button className="brand-mark-button" aria-label="打开会话栏" disabled={!collapsed} onClick={() => onCollapseChange(false)}><img className="brand-mark" src={`${brandAssetPath}/tga-brand.png`} width="50" height="50" alt="" /></button><span className="brand-wordmark-frame"><img className="brand-wordmark" src={`${brandAssetPath}/tga-wordmark.png`} width="195" height="54" alt="Turning Good Agent" /></span><button className="icon-button sidebar-collapse-control" aria-label="隐藏会话栏" onClick={() => onCollapseChange(true)}><PanelLeft /></button><button className="icon-button mobile-only" aria-label="关闭会话栏" onClick={onCloseMobile}><X /></button></header>
       <div className="sidebar-body"><div className="sidebar-commands"><button className="new-session" onClick={onNew}><FilePlus2 size={16} />新建会话</button><button className="icon-button" aria-label="搜索会话" onClick={onOpenSearch}><Search size={16} /></button></div>
       <section className="session-section"><button className="section-title" aria-expanded={activeOpen} onClick={() => setActiveOpen(!activeOpen)}><ChevronDown size={14} className={activeOpen ? "" : "rotated"} />会话<span>{active.length}</span></button>{activeOpen && <SessionList items={orderedActive} currentId={currentId} onSelect={onSelect} onRename={openRename} onDelete={setDeleting} onAction={runAction} onUpdate={onUpdate} />}</section>
       {archived.length > 0 && <section className="session-section archived-section"><button className="section-title" aria-expanded={archivedOpen} onClick={() => setArchivedOpen(!archivedOpen)}><ChevronDown size={14} className={archivedOpen ? "" : "rotated"} />已归档<span>{archived.length}</span></button>{archivedOpen && <SessionList items={archived} currentId={currentId} onSelect={onSelect} onRename={openRename} onDelete={setDeleting} onAction={runAction} onUpdate={onUpdate} />}</section>}</div>

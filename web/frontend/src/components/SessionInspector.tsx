@@ -1,7 +1,7 @@
 import { ChevronDown, X } from "lucide-react";
 
 import { ScrollArea } from "./ScrollArea";
-import { buildInspectorSections, buildInspectorSummary, formatTokenCount, type InspectorRecordView } from "../state/observability_view";
+import { buildInspectorSections, buildInspectorSummary, formatTokenCount, type InspectorRecordGroup, type InspectorRecordView } from "../state/observability_view";
 import type { Observability } from "../types";
 
 /** 渲染先摘要、后结构化明细的会话观测抽屉。 */
@@ -9,7 +9,7 @@ export function SessionInspector({ data, onClose }: { data: Observability | null
   if (!data) return <section className="inspector" aria-label="会话检查器"><InspectorHeader onClose={onClose} /><p>正在读取观测数据…</p></section>;
   const summary = buildInspectorSummary(data);
   const sections = buildInspectorSections(data);
-  return <section className="inspector" aria-label="会话检查器"><InspectorHeader onClose={onClose} /><ScrollArea className="inspector-body"><dl className="inspector-summary"><Metric label="累计输入" value={formatTokenCount(summary.inputTokens)} /><Metric label="累计输出" value={formatTokenCount(summary.outputTokens)} /><Metric label="当前上下文" value={formatTokenCount(summary.contextTokens)} /><Metric label="压缩次数" value={formatTokenCount(summary.compactions)} /><Metric label="工具失败" value={formatTokenCount(summary.toolFailures)} /></dl><div className="inspector-sections">{sections.map((section) => <InspectorSection key={section.title} title={section.title} count={section.count} records={section.records} />)}</div></ScrollArea></section>;
+  return <section className="inspector" aria-label="会话检查器"><InspectorHeader onClose={onClose} /><ScrollArea className="inspector-body"><dl className="inspector-summary"><Metric label="累计输入" value={formatTokenCount(summary.inputTokens)} /><Metric label="累计输出" value={formatTokenCount(summary.outputTokens)} /><Metric label="当前上下文" value={formatTokenCount(summary.contextTokens)} /><Metric label="压缩次数" value={formatTokenCount(summary.compactions)} /><Metric label="工具失败" value={formatTokenCount(summary.toolFailures)} /></dl><div className="inspector-sections">{sections.map((section) => <InspectorSection key={section.title} title={section.title} count={section.count} records={section.records} groups={section.groups} />)}</div></ScrollArea></section>;
 }
 
 /** 渲染检查器标题与关闭控制。 */
@@ -23,6 +23,14 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 /** 渲染可逐条展开的观测记录分组。 */
-function InspectorSection({ title, count, records }: { title: string; count: number; records: InspectorRecordView[] }) {
-  return <details className="inspector-section"><summary><span>{title}</span><span>{count}</span><ChevronDown size={15} /></summary><div className="inspector-records">{records.length ? records.map((record) => <details className="inspector-record" key={record.id}><summary>{record.title}</summary><dl>{record.fields.filter((field) => field.label !== "turn_id" || field.value !== record.title).map((field) => <div key={field.label}><dt>{field.label}</dt><dd>{field.value}</dd></div>)}</dl><details className="inspector-raw"><summary>查看原始记录</summary><pre>{JSON.stringify(record.raw, null, 2)}</pre></details></details>) : <p>暂无记录</p>}</div></details>;
+function InspectorSection({ title, count, records, groups }: { title: string; count: number; records: InspectorRecordView[]; groups?: InspectorRecordGroup[] }) {
+  return <details className="inspector-section"><summary><span>{title}</span><span>{count}</span><ChevronDown size={15} /></summary><div className="inspector-records">{groups?.length ? groups.map((group) => <InspectorRecordGroup key={group.id} group={group} />) : <InspectorRecords records={records} />}</div></details>;
+}
+
+function InspectorRecordGroup({ group }: { group: InspectorRecordGroup }) {
+  return <details className="inspector-record-group"><summary><span>{group.title}</span><span>{group.count}</span><ChevronDown size={14} /></summary><div className="inspector-records"><InspectorRecords records={group.records} /></div></details>;
+}
+
+function InspectorRecords({ records }: { records: InspectorRecordView[] }) {
+  return records.length ? records.map((record) => <details className="inspector-record" key={record.id}><summary>{record.title}</summary><dl>{record.fields.filter((field) => field.label !== "turn_id" || field.value !== record.title).map((field) => <div key={field.label}><dt>{field.label}</dt><dd>{field.value}</dd></div>)}</dl><details className="inspector-raw"><summary>查看原始记录</summary><pre>{JSON.stringify(record.raw, null, 2)}</pre></details></details>) : <p>暂无记录</p>;
 }

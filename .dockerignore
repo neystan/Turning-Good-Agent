@@ -1,0 +1,10 @@
+.git
+.sessions
+settings.local.json
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+web/frontend/node_modules
+web/frontend/*.tsbuildinfo
+web/static

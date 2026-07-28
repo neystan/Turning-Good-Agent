@@ -1,0 +1,14 @@
+services:
+  turning-good-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - sessions:/app/.sessions
+      - ./settings.local.json:/app/settings.local.json
+    restart: unless-stopped
+
+volumes:
+  sessions:

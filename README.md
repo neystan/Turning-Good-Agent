@@ -11,6 +11,59 @@ python -m Turning-Good-Agent chat
 python -m Turning-Good-Agent web
 ```
 
+## Docker 本机部署
+
+需要 Windows 上启用了 WSL 2 后端的 Docker Desktop。容器只发布到本机回环地址，因此仅能通过 `http://localhost:8000` 访问，局域网设备无法连接。
+
+首次运行时，先创建本地配置并填写真实的 `llm.api_key` 与 `llm.model`：
+
+```powershell
+Copy-Item settings.example.json settings.local.json
+```
+
+然后构建并启动服务：
+
+```powershell
+docker compose up --build -d
+Start-Process http://localhost:8000
+```
+
+查看运行日志：
+
+```powershell
+docker compose logs -f
+```
+
+停止并移除容器：
+
+```powershell
+docker compose down
+```
+
+会话数据保存在 Docker 命名卷中，执行 `docker compose down` 后仍会保留。执行下面命令会永久删除会话数据：
+
+```powershell
+docker compose down -v
+```
+
+`settings.local.json` 不会写入镜像，也不会提交到 Git；Web 工作台的自动批准设置会写回此文件，因此容器以可写方式挂载它。
+
+### Docker 开发模式与热更新
+
+日常修改代码时，使用独立的开发配置：
+
+```powershell
+docker compose -f compose.dev.yaml up --build
+```
+
+打开 `http://localhost:8000`。修改 React、TypeScript 或 CSS 后，Vite 会自动更新页面；修改 Python 后，Uvicorn 会自动重启后端，刷新网页即可连接到新版本。按 `Ctrl+C` 停止前台开发服务，或另开 PowerShell 执行：
+
+```powershell
+docker compose -f compose.dev.yaml down
+```
+
+普通源码改动不需要重建镜像。修改 `package.json`、`package-lock.json`、Python 依赖或 `Dockerfile` 后，重新执行带 `--build` 的启动命令。开发模式同样只允许本机访问，且会话数据会保存在 Docker 命名卷中。
+
 Web 默认使用石墨深色主题，可在右上角切换并记住浅色主题。工作台采用对话优先布局：会话栏独立滚动且可收起为品牌入口，左右侧栏共用响应式宽度；Radix 菜单与确认框处理会话操作，紧凑的图标操作菜单仅在命中项时提供阴影反馈。真实的工具、MCP、Skill、审批、压缩、Stop 与终态事件按 `request_id` 归入 user 与 assistant 消息之间的可折叠“思考中”活动簇；工具完成后回到“思考中”，不展示伪造的内部推理。输入区通过“默认权限 / 完全访问”菜单控制全局工具审批，发送按钮左侧的只读上下文圆环从最近一次 `SAVE` 的真实上下文统计和集中 `max_context_tokens` 计算，悬浮或键盘聚焦可查看读数。断线中的 Web turn 可在浏览器内重试，重试使用原动作标识避免重复入队；该即时状态和被替代旧消息的隐藏标记只存于浏览器标签页，不改变 Session JSON/JSONL 或 Runtime 上下文。会话检查器只汇总既有 token、trace 与工具记录，使用连续信息面展示摘要与分类，原始 JSON 只在单条记录中按需展开，不新增 JSONL。
 
 ## 交互命令

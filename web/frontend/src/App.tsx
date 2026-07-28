@@ -12,10 +12,16 @@ import { ActivityCluster } from "./components/ActivityCluster";
 import { SessionHistoryLoader } from "./state/history_loader";
 import { applySessionAction, createSessionState } from "./state/session_state";
 import { SessionSocketClient } from "./state/socket_client";
-import { readSessionCache, writeSessionCache } from "./state/session_cache";
+import { readSessionCache, shouldWriteSessionCache, writeSessionCache } from "./state/session_cache";
 import type { ChatMessage, ConnectionState, ContextWindow, Observability, Session, TaskEvent } from "./types";
 
 type SocketMessage = Partial<TaskEvent> & { type: string; client_action_id?: string; message?: string; session_id?: string; request_id?: string };
+
+const emptyStateStarters = [
+  "整理需求，生成可执行的任务清单",
+  "分析一份文件，提取关键结论",
+  "对现有方案进行风险检查",
+];
 
 /** 从浏览器路由读取当前已持久化会话。 */
 function activeSessionId(): string | null {
@@ -28,6 +34,7 @@ export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [archived, setArchived] = useState<Session[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(activeSessionId);
+  const [hydratedSessionId, setHydratedSessionId] = useState<string | null>(null);
   const [sessionState, dispatch] = useReducer(applySessionAction, undefined, createSessionState);
   const [draft, setDraft] = useState("");
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -53,6 +60,7 @@ export function App() {
   const stateSessionId = useRef<string | null>(sessionId);
   const retryRequest = useRef<{ actionId: string; content: string } | null>(null);
   const contextRequestVersion = useRef(0);
+  const eventCursors = useRef<Record<string, number>>({});
 
   /** 重新读取侧栏会话分组。 */
   const refreshSessions = useCallback(async () => {
@@ -96,6 +104,9 @@ export function App() {
 
   /** 处理 WebSocket 事件与动作确认。 */
   eventHandler.current = (event) => {
+    if (event.session_id && typeof event.event_id === "number") {
+      eventCursors.current[event.session_id] = Math.max(eventCursors.current[event.session_id] || 0, event.event_id);
+    }
     if (event.type === "error") {
       const isMessageFailure = Boolean(event.client_action_id && messageActionIds.current.delete(event.client_action_id));
       if (event.client_action_id) dispatch({ type: "action.failed", actionId: event.client_action_id, message: event.message || "请求失败" });
@@ -138,14 +149,20 @@ export function App() {
         messages: sessionState.messages,
         turns: sessionState.turns,
         hiddenMessageIds: sessionState.hiddenMessageIds,
+        lastEventId: eventCursors.current[previousSessionId] || socketRef.current?.lastEventId(previousSessionId) || 0,
       });
     }
     stateSessionId.current = sessionId;
     sessionIdRef.current = sessionId;
+    setHydratedSessionId(null);
     const preserve = preserveNextSession.current;
     preserveNextSession.current = false;
     if (!preserve) {
-      const cached = sessionId ? readSessionCache(sessionId) : { messages: [], turns: {}, hiddenMessageIds: [] };
+      const cached = sessionId ? readSessionCache(sessionId) : { messages: [], turns: {}, hiddenMessageIds: [], lastEventId: 0 };
+      if (sessionId) {
+        eventCursors.current[sessionId] = Math.max(eventCursors.current[sessionId] || 0, cached.lastEventId);
+        socketRef.current?.setLastEventId(sessionId, eventCursors.current[sessionId]);
+      }
       dispatch({
         type: "session.reset",
         messages: cached.messages,
@@ -153,6 +170,7 @@ export function App() {
         hiddenMessageIds: cached.hiddenMessageIds,
       });
     }
+    setHydratedSessionId(sessionId);
     socketRef.current?.setActiveSession(sessionId);
     setInspector(null);
     refreshContextWindow(sessionId);
@@ -164,15 +182,17 @@ export function App() {
   }, [addNotice, refreshContextWindow, sessionId]);
 
   useEffect(() => {
-    /** 将尚未落盘的消息和任务过程保留到浏览器标签页缓存。 */
-    if (stateSessionId.current) {
-      writeSessionCache(stateSessionId.current, {
+    /** 将消息关联、任务过程和已消费事件游标保留到浏览器标签页缓存。 */
+    const currentSessionId = stateSessionId.current;
+    if (currentSessionId && shouldWriteSessionCache(currentSessionId, hydratedSessionId)) {
+      writeSessionCache(currentSessionId, {
         messages: sessionState.messages,
         turns: sessionState.turns,
         hiddenMessageIds: sessionState.hiddenMessageIds,
+        lastEventId: eventCursors.current[currentSessionId] || socketRef.current?.lastEventId(currentSessionId) || 0,
       });
     }
-  }, [sessionState.hiddenMessageIds, sessionState.messages, sessionState.turns]);
+  }, [hydratedSessionId, sessionState.hiddenMessageIds, sessionState.messages, sessionState.turns]);
 
   useEffect(() => {
     /** 恢复浏览器前进后退对应的会话路由。 */
@@ -190,6 +210,7 @@ export function App() {
       },
     });
     socketRef.current = socket;
+    for (const [id, eventId] of Object.entries(eventCursors.current)) socket.setLastEventId(id, eventId);
     socket.setActiveSession(sessionIdRef.current);
     socket.connect();
     /** 在浏览器网络恢复时主动淘汰半失效连接。 */
@@ -337,6 +358,12 @@ export function App() {
     dispatch({ type: "draft.pending", content: "" });
   };
 
+  /** 将空状态建议填入输入区，保留用户继续编辑的空间。 */
+  const useEmptyStateStarter = (starter: string) => {
+    changeDraft(starter);
+    setRestoreFocusVersion((version) => version + 1);
+  };
+
   const current = useMemo(() => [...sessions, ...archived].find((item) => item.id === sessionId), [archived, sessionId, sessions]);
   const currentTurnCount = Object.values(sessionState.turns).reduce((count, turn) => count + turn.events.length, 0);
 
@@ -358,7 +385,7 @@ export function App() {
         <div className="top-actions"><button className="icon-button" aria-label="切换主题" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun /> : <Moon />}</button><button className="icon-button" aria-label="打开会话检查器" disabled={!sessionId} onClick={() => void openInspector()}><PanelRight /></button></div>
       </header>
       <ChatTimeline sessionId={sessionId} messages={sessionState.messages} turns={sessionState.turns} contentVersion={currentTurnCount} composerRef={composerRef} retryEnabled={connection === "connected"} onRetry={retryMessage} renderTurn={(turn) => <ActivityCluster key={turn.requestId} turn={turn} actionsEnabled={connection === "connected"} onResolveApproval={resolveApproval} />}>
-        {!sessionId && sessionState.messages.length === 0 && <div className="empty-state"><h2>开始一个工作会话</h2><p>首条消息发送后才会创建本地会话记录。</p></div>}
+        {!sessionId && sessionState.messages.length === 0 && <div className="empty-state"><span className="empty-kicker">准备就绪</span><h2>开始一个工作会话</h2><p>描述目标、提供上下文，或直接粘贴内容。首条消息发送后会创建本地会话记录。</p><div className="empty-examples" aria-label="任务起步示例"><span>选择一个起点</span><ul>{emptyStateStarters.map((starter) => <li key={starter}><button type="button" onClick={() => useEmptyStateStarter(starter)}>{starter}</button></li>)}</ul></div></div>}
       </ChatTimeline>
       <Composer rootRef={composerRef} session={current} running={sessionState.running} actionsEnabled={connection === "connected"} draft={draft || sessionState.pendingDraft} autoApprove={autoApprove} contextWindow={contextWindow} restoreFocusVersion={restoreFocusVersion} onDraftChange={changeDraft} onSend={() => send()} onStop={stop} onRestore={restoreSession} onAutoApproveChange={(enabled) => void setApproval(enabled)} />
       <InspectorLayer open={inspectorOpen} closing={inspectorClosing} data={inspector} onClose={closeInspector} />
