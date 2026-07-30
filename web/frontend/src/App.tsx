@@ -8,12 +8,14 @@ import { NoticeRegion } from "./components/NoticeRegion";
 import { SessionInspector } from "./components/SessionInspector";
 import { SessionSearchDialog } from "./components/SessionSearchDialog";
 import { SessionSidebar } from "./components/SessionSidebar";
+import { SettingsWorkspace } from "./components/SettingsWorkspace";
 import { ActivityCluster } from "./components/ActivityCluster";
 import { SessionHistoryLoader } from "./state/history_loader";
 import { applySessionAction, createSessionState } from "./state/session_state";
 import { SessionSocketClient } from "./state/socket_client";
 import { readSessionCache, shouldWriteSessionCache, writeSessionCache } from "./state/session_cache";
-import type { ChatMessage, ConnectionState, ContextWindow, Observability, Session, TaskEvent } from "./types";
+import { createTextSegment, serializeComposerContent } from "./state/composer_segments";
+import type { ChatMessage, CommandEntry, ComposerSegment, ConnectionState, ContextWindow, Observability, Session, SessionContextReadModel, TaskEvent, ToolCallPage } from "./types";
 
 type SocketMessage = Partial<TaskEvent> & { type: string; client_action_id?: string; message?: string; session_id?: string; request_id?: string };
 
@@ -36,12 +38,14 @@ export function App() {
   const [sessionId, setSessionId] = useState<string | null>(activeSessionId);
   const [hydratedSessionId, setHydratedSessionId] = useState<string | null>(null);
   const [sessionState, dispatch] = useReducer(applySessionAction, undefined, createSessionState);
-  const [draft, setDraft] = useState("");
+  const [composerSegments, setComposerSegments] = useState<ComposerSegment[]>(() => [createTextSegment()]);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [inspectorClosing, setInspectorClosing] = useState(false);
   const [inspector, setInspector] = useState<Observability | null>(null);
+  const [controlInspection, setControlInspection] = useState<{ section: "context" | "tools"; context?: SessionContextReadModel; toolCalls?: ToolCallPage; error?: string } | null>(null);
   const [contextWindow, setContextWindow] = useState<ContextWindow | null>(null);
   const [autoApprove, setAutoApprove] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(() => window.location.hash === "#settings");
   const [theme, setTheme] = useState<"dark" | "light">(() => localStorage.getItem("tga-theme") === "light" ? "light" : "dark");
   const [mobileMenu, setMobileMenu] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -60,7 +64,14 @@ export function App() {
   const stateSessionId = useRef<string | null>(sessionId);
   const retryRequest = useRef<{ actionId: string; content: string } | null>(null);
   const contextRequestVersion = useRef(0);
+  const controlInspectionRequestVersion = useRef(0);
   const eventCursors = useRef<Record<string, number>>({});
+
+  /** 清除仅供本次查看的 Slash 读取结果，并使未完成请求失效。 */
+  const clearControlInspection = useCallback(() => {
+    controlInspectionRequestVersion.current += 1;
+    setControlInspection(null);
+  }, []);
 
   /** 重新读取侧栏会话分组。 */
   const refreshSessions = useCallback(async () => {
@@ -172,14 +183,19 @@ export function App() {
     }
     setHydratedSessionId(sessionId);
     socketRef.current?.setActiveSession(sessionId);
+    if (inspectorCloseTimer.current) window.clearTimeout(inspectorCloseTimer.current);
+    setInspectorOpen(false);
+    setInspectorClosing(false);
     setInspector(null);
+    clearControlInspection();
+    setComposerSegments([createTextSegment()]);
     refreshContextWindow(sessionId);
     if (!sessionId) return undefined;
     void historyLoader.current.load(sessionId, (signal) => api.messages(sessionId, signal)).then((messages) => {
       if (messages) dispatch({ type: "history.loaded", messages });
     }).catch((error: unknown) => addNotice(error instanceof Error ? error.message : "读取会话历史失败"));
     return () => historyLoader.current.cancel();
-  }, [addNotice, refreshContextWindow, sessionId]);
+  }, [addNotice, clearControlInspection, refreshContextWindow, sessionId]);
 
   useEffect(() => {
     /** 将消息关联、任务过程和已消费事件游标保留到浏览器标签页缓存。 */
@@ -199,6 +215,12 @@ export function App() {
     const restoreRoute = () => setSessionId(activeSessionId());
     window.addEventListener("popstate", restoreRoute);
     return () => window.removeEventListener("popstate", restoreRoute);
+  }, []);
+
+  useEffect(() => {
+    const syncSettingsView = () => setSettingsOpen(window.location.hash === "#settings");
+    window.addEventListener("hashchange", syncSettingsView);
+    return () => window.removeEventListener("hashchange", syncSettingsView);
   }, []);
 
   useEffect(() => {
@@ -228,7 +250,9 @@ export function App() {
 
   /** 仅在 WebSocket 已连接时发送普通消息或运行中 guidance。 */
   const send = useCallback((contentOverride?: string, retryActionId?: string) => {
-    const content = (contentOverride || draft || sessionState.pendingDraft).trim();
+    const hasComposerContent = composerSegments.some((segment) => segment.type === "guidance" || Boolean(segment.text));
+    const activeSegments = hasComposerContent ? composerSegments : [createTextSegment(sessionState.pendingDraft)];
+    const content = (contentOverride || serializeComposerContent(activeSegments)).trim();
     if (!content || !socketRef.current || connection !== "connected") return;
     const actionId = retryActionId || crypto.randomUUID();
     if (messageActionIds.current.has(actionId)) return;
@@ -251,13 +275,13 @@ export function App() {
     if (!sent) {
       messageActionIds.current.delete(actionId);
       dispatch({ type: "action.failed", actionId, message: "连接尚未建立" });
-      setDraft("");
+      setComposerSegments([createTextSegment()]);
       dispatch({ type: "draft.pending", content: "" });
       return;
     }
-    setDraft("");
+    setComposerSegments([createTextSegment()]);
     dispatch({ type: "draft.pending", content: "" });
-  }, [connection, draft, sessionId, sessionState.pendingDraft, sessionState.running]);
+  }, [composerSegments, connection, sessionId, sessionState.pendingDraft, sessionState.running]);
 
   useEffect(() => {
     /** 显式重试只在连接重新建立后自动发送一次。 */
@@ -273,15 +297,7 @@ export function App() {
     if (!sessionId || !socketRef.current?.send({ type: "task.stop", session_id: sessionId, client_action_id: crypto.randomUUID() })) addNotice("当前没有可停止的任务");
   }, [addNotice, connection, sessionId]);
 
-  /** 提交指定工具审批的允许或拒绝决定。 */
-  const resolveApproval = useCallback((approvalId: string, approved: boolean) => {
-    if (connection !== "connected") return;
-    if (!sessionId || !socketRef.current?.send({ type: "approval.resolve", session_id: sessionId, approval_id: approvalId, approved, client_action_id: crypto.randomUUID() })) {
-      addNotice("审批已失效");
-    }
-  }, [addNotice, connection, sessionId]);
-
-  /** 更新全局自动审批策略。 */
+  /** 更新立即生效的全局自动审批策略。 */
   const setApproval = async (enabled: boolean) => {
     try {
       const updated = await api.patchUiSettings(enabled);
@@ -291,15 +307,26 @@ export function App() {
     }
   };
 
+  /** 提交指定工具审批的允许或拒绝决定。 */
+  const resolveApproval = useCallback((approvalId: string, approved: boolean) => {
+    if (connection !== "connected") return;
+    if (!sessionId || !socketRef.current?.send({ type: "approval.resolve", session_id: sessionId, approval_id: approvalId, approved, client_action_id: crypto.randomUUID() })) {
+      addNotice("审批已失效");
+    }
+  }, [addNotice, connection, sessionId]);
+
   /** 打开并读取当前会话检查器。 */
   const openInspector = async () => {
     if (!sessionId) return;
+    if (inspectorCloseTimer.current) window.clearTimeout(inspectorCloseTimer.current);
+    setInspectorClosing(false);
+    clearControlInspection();
+    setInspector(null);
+    setInspectorOpen(true);
     try {
-      if (inspectorCloseTimer.current) window.clearTimeout(inspectorCloseTimer.current);
-      setInspectorClosing(false);
       setInspector(await api.observability(sessionId));
-      setInspectorOpen(true);
     } catch (error) {
+      setInspectorOpen(false);
       addNotice(error instanceof Error ? error.message : "读取会话检查器失败");
     }
   };
@@ -307,6 +334,7 @@ export function App() {
   /** 立即收起检查器布局列，并保留短暂的退出帧。 */
   const closeInspector = () => {
     if (inspectorCloseTimer.current) window.clearTimeout(inspectorCloseTimer.current);
+    clearControlInspection();
     setInspectorOpen(false);
     setInspectorClosing(true);
     inspectorCloseTimer.current = window.setTimeout(() => {
@@ -353,15 +381,37 @@ export function App() {
   };
 
   /** 同步输入文本并清空停止后保留的 guidance 草稿。 */
-  const changeDraft = (value: string) => {
-    setDraft(value);
+  const changeSegments = (segments: ComposerSegment[]) => {
+    setComposerSegments(segments);
     dispatch({ type: "draft.pending", content: "" });
   };
 
   /** 将空状态建议填入输入区，保留用户继续编辑的空间。 */
   const useEmptyStateStarter = (starter: string) => {
-    changeDraft(starter);
+    changeSegments([createTextSegment(starter)]);
     setRestoreFocusVersion((version) => version + 1);
+  };
+
+  const openSlashRead = (entry: CommandEntry) => {
+    if (!sessionId) return;
+    const requestVersion = ++controlInspectionRequestVersion.current;
+    const inspectedSessionId = sessionId;
+    setInspectorOpen(true);
+    if (entry.action === "open_context") {
+      setControlInspection({ section: "context" });
+      void api.sessionContext(inspectedSessionId).then((context) => {
+        if (requestVersion === controlInspectionRequestVersion.current && sessionIdRef.current === inspectedSessionId) setControlInspection({ section: "context", context });
+      }).catch((error: unknown) => {
+        if (requestVersion === controlInspectionRequestVersion.current && sessionIdRef.current === inspectedSessionId) setControlInspection({ section: "context", error: error instanceof Error ? error.message : "上下文读取失败" });
+      });
+      return;
+    }
+    setControlInspection({ section: "tools" });
+    void api.toolCalls(inspectedSessionId).then((toolCalls) => {
+      if (requestVersion === controlInspectionRequestVersion.current && sessionIdRef.current === inspectedSessionId) setControlInspection({ section: "tools", toolCalls });
+    }).catch((error: unknown) => {
+      if (requestVersion === controlInspectionRequestVersion.current && sessionIdRef.current === inspectedSessionId) setControlInspection({ section: "tools", error: error instanceof Error ? error.message : "工具记录读取失败" });
+    });
   };
 
   const current = useMemo(() => [...sessions, ...archived].find((item) => item.id === sessionId), [archived, sessionId, sessions]);
@@ -374,9 +424,11 @@ export function App() {
     setRestoreFocusVersion((version) => version + 1);
   };
 
+  if (settingsOpen) return <SettingsWorkspace onReturnToChat={() => { window.history.replaceState({}, "", window.location.pathname); setSettingsOpen(false); }} />;
+
   return <div className={`app-shell ${sidebarCollapsed ? "is-sidebar-collapsed" : ""}`}>
     <a className="skip-link" href="#main-content">跳到对话</a>
-    <SessionSidebar active={sessions} archived={archived} currentId={sessionId} mobileOpen={mobileMenu} collapsed={sidebarCollapsed} onCollapseChange={setSidebarCollapsed} onCloseMobile={() => setMobileMenu(false)} onNew={() => navigate(null)} onOpenSearch={() => setSearchOpen(true)} onSelect={navigate} onUpdate={updateSession} onDelete={deleteSession} onError={addNotice} />
+    <SessionSidebar active={sessions} archived={archived} currentId={sessionId} mobileOpen={mobileMenu} collapsed={sidebarCollapsed} onCollapseChange={setSidebarCollapsed} onCloseMobile={() => setMobileMenu(false)} onNew={() => navigate(null)} onOpenSearch={() => setSearchOpen(true)} onOpenSettings={() => { window.location.hash = "settings"; }} onSelect={navigate} onUpdate={updateSession} onDelete={deleteSession} onError={addNotice} />
     {mobileMenu && <button className="scrim" aria-label="关闭会话栏" onClick={() => setMobileMenu(false)} />}
     <main id="main-content" className={`conversation ${inspectorOpen ? "is-inspector-open" : ""} ${inspectorClosing ? "is-inspector-closing" : ""}`}>
       <header className="topbar">
@@ -387,8 +439,8 @@ export function App() {
       <ChatTimeline sessionId={sessionId} messages={sessionState.messages} turns={sessionState.turns} contentVersion={currentTurnCount} composerRef={composerRef} retryEnabled={connection === "connected"} onRetry={retryMessage} renderTurn={(turn) => <ActivityCluster key={turn.requestId} turn={turn} actionsEnabled={connection === "connected"} onResolveApproval={resolveApproval} />}>
         {!sessionId && sessionState.messages.length === 0 && <div className="empty-state"><span className="empty-kicker">准备就绪</span><h2>开始一个工作会话</h2><p>描述目标、提供上下文，或直接粘贴内容。首条消息发送后会创建本地会话记录。</p><div className="empty-examples" aria-label="任务起步示例"><span>选择一个起点</span><ul>{emptyStateStarters.map((starter) => <li key={starter}><button type="button" onClick={() => useEmptyStateStarter(starter)}>{starter}</button></li>)}</ul></div></div>}
       </ChatTimeline>
-      <Composer rootRef={composerRef} session={current} running={sessionState.running} actionsEnabled={connection === "connected"} draft={draft || sessionState.pendingDraft} autoApprove={autoApprove} contextWindow={contextWindow} restoreFocusVersion={restoreFocusVersion} onDraftChange={changeDraft} onSend={() => send()} onStop={stop} onRestore={restoreSession} onAutoApproveChange={(enabled) => void setApproval(enabled)} />
-      <InspectorLayer open={inspectorOpen} closing={inspectorClosing} data={inspector} onClose={closeInspector} />
+      <Composer rootRef={composerRef} session={current} running={sessionState.running} actionsEnabled={connection === "connected"} segments={composerSegments.some((segment) => segment.type === "guidance" || Boolean(segment.text)) || !sessionState.pendingDraft ? composerSegments : [createTextSegment(sessionState.pendingDraft)]} autoApprove={autoApprove} contextWindow={contextWindow} restoreFocusVersion={restoreFocusVersion} onSegmentsChange={changeSegments} onSend={() => send()} onStop={stop} onRestore={restoreSession} onAutoApproveChange={(enabled) => void setApproval(enabled)} onSlashRead={openSlashRead} />
+      <InspectorLayer open={inspectorOpen} closing={inspectorClosing} data={inspector} control={controlInspection} onClose={closeInspector} />
     </main>
     <SessionSearchDialog open={searchOpen} sessions={[...sessions, ...archived]} currentId={sessionId} onClose={() => setSearchOpen(false)} onSelect={navigate} />
     <NoticeRegion notices={notices} onDismiss={dismissNotice} />
@@ -396,9 +448,9 @@ export function App() {
 }
 
 /** 渲染检查器视觉留白层，避免开关改变内容列。 */
-function InspectorLayer({ open, closing, data, onClose }: { open: boolean; closing: boolean; data: Observability | null; onClose: () => void }) {
+function InspectorLayer({ open, closing, data, control, onClose }: { open: boolean; closing: boolean; data: Observability | null; control: { section: "context" | "tools"; context?: SessionContextReadModel; toolCalls?: ToolCallPage; error?: string } | null; onClose: () => void }) {
   const visible = open || closing;
-  return <aside className={`inspector-layer ${open ? "is-open" : ""} ${closing ? "is-closing" : ""}`} aria-hidden={!visible}>{visible && <SessionInspector data={data} onClose={onClose} />}</aside>;
+  return <aside className={`inspector-layer ${open ? "is-open" : ""} ${closing ? "is-closing" : ""}`} aria-hidden={!visible}>{visible && <SessionInspector data={data} control={control} onClose={onClose} />}</aside>;
 }
 
 /** 将连接状态转换为紧凑的用户可见文本。 */

@@ -1,3 +1,11 @@
 @import "./styles/tokens.css";
 @import "./styles/layout.css";
 @import "./styles/components.css";
+@import "./styles/components/sidebar.css";
+@import "./styles/components/timeline.css";
+@import "./styles/components/composer.css";
+@import "./styles/components/slash.css";
+@import "./styles/components/icons.css";
+@import "./styles/components/inspector.css";
+@import "./styles/components/settings.css";
+@import "./styles/components/overlays.css";

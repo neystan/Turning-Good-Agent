@@ -189,6 +189,9 @@ class Settings:
             settings.data_dir = data_dir
         if default_session_id is not None:
             settings.default_session_id = default_session_id
+        from .validate import validate_settings
+
+        validate_settings(settings)
         return settings
 
     def update_auto_approve_tools(self, enabled: bool) -> None:

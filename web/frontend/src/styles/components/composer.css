@@ -1,0 +1,283 @@
+/* Migrated component foundation. */
+.composer { border: 1px solid var(--border); border-radius: 9px; background: var(--surface); box-shadow: 0 8px 24px var(--shadow); }
+
+.composer textarea { width: 100%; min-height: 66px; max-height: 170px; resize: vertical; border: 0; border-bottom: 1px solid var(--border); border-radius: 9px 9px 0 0; padding: 14px; background: transparent; color: var(--text); }
+
+.composer-toolbar { min-height: 46px; gap: 8px; padding: 7px 9px; }
+
+.permission-select { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+
+.permission-select select { border: 0; background-color: var(--surface); color: var(--text); cursor: pointer; }
+
+.permission-limit { color: var(--warning); font-size: 12px; }
+
+.composer-spacer { flex: 1; }
+
+.composer-action { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 6px; padding: 8px 11px; cursor: pointer; }
+
+.composer-action.is-send { background: var(--accent); color: var(--accent-ink); }
+
+.composer-action.is-stop { background: transparent; color: var(--danger); }
+
+.archived-composer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; }
+
+.archived-composer span { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+
+.archived-composer .restore-session { width: auto; flex: 0 0 auto; }
+
+.composer { width: min(780px, calc(100% - 28px)); }
+
+.composer textarea { resize: none; }
+
+/* 权限策略保持低干扰，危险模式只通过文字和状态色提示边界。 */
+.composer-action { min-width: 86px; justify-content: center; }
+
+.composer-action.is-stop { border: 1px solid color-mix(in srgb, var(--danger) 48%, transparent); }
+
+.composer-action.is-stop:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+
+/* Composer 将权限选择与发送操作收敛为两组清晰的控制面。 */
+.composer { border-radius: 18px; background: color-mix(in srgb, var(--surface) 94%, var(--page)); box-shadow: 0 12px 32px var(--shadow); }
+
+.composer:focus-within { border-color: var(--border-strong); box-shadow: 0 12px 32px var(--shadow); }
+
+.composer textarea:focus-visible { outline: 0; }
+
+.composer textarea { min-height: calc(3.1em + .75rem); border-bottom: 0; padding: .75rem 17px 0; border-radius: 18px 18px 0 0; line-height: 1.55; }
+
+.composer-toolbar { min-height: 52px; padding: 8px 10px 10px; }
+
+.permission-trigger { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; border: 1px solid var(--border); border-radius: 999px; padding: 0 11px; background: transparent; color: var(--muted); cursor: pointer; }
+
+.permission-trigger:hover, .permission-trigger[data-state="open"] { border-color: var(--border-strong); background: var(--surface-hover); color: var(--text); }
+
+.permission-trigger.is-danger { border-color: color-mix(in srgb, var(--permission-danger) 56%, var(--border)); color: var(--permission-danger); }
+
+.permission-menu { z-index: 120; width: max-content; padding: 6px; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface); box-shadow: 0 14px 32px var(--shadow); }
+
+.permission-menu [role="menuitemradio"] { display: grid; grid-template-columns: 16px auto 16px; align-items: center; column-gap: 8px; min-height: 38px; border-radius: 10px; padding: 0 10px; outline: 0; color: var(--text); cursor: pointer; white-space: nowrap; }
+
+.permission-indicator { display: inline-grid; width: 16px; place-items: center; }
+
+.permission-menu [role="menuitemradio"][data-highlighted] { background: var(--surface-hover); }
+
+.permission-menu [role="menuitemradio"].is-danger { color: var(--permission-danger); }
+
+.composer-action { width: 40px; min-width: 40px; min-height: 40px; height: 40px; display: inline-grid; place-items: center; border: 1px solid var(--text); border-radius: 50%; padding: 0; background: var(--text); color: var(--page); cursor: pointer; }
+
+.composer-action.is-send, .composer-action.is-stop, .composer-action.is-send:hover, .composer-action.is-stop:hover { width: 40px; border-color: var(--text); padding: 0; background: var(--text); color: var(--page); filter: none; }
+
+.composer-action.is-send:hover, .composer-action.is-stop:hover { box-shadow: none; }
+
+.composer-input { position: relative; }
+
+.composer textarea { scrollbar-width: none; }
+
+.composer textarea::-webkit-scrollbar { width: 0; height: 0; }
+
+.composer-scroll-thumb { position: absolute; top: .75rem; right: .55rem; width: .28rem; min-height: 1.125rem; border-radius: 999px; background: color-mix(in srgb, var(--muted) 48%, transparent); pointer-events: none; }
+
+.permission-trigger { min-height: 23px; gap: 4px; padding: 0 8px; font-size: .75rem; }
+
+.composer-action, .composer-action.is-send, .composer-action.is-stop, .composer-action.is-send:hover, .composer-action.is-stop:hover { width: 27px; min-width: 27px; min-height: 27px; height: 27px; }
+
+.composer-scroll-thumb { right: .15rem; }
+
+.permission-trigger { min-height: 30px; gap: 5px; margin-top: 2px; padding: 0 9px; font-size: .8125rem; }
+
+.permission-menu [role="menuitemradio"] { min-height: 40px; font-size: .8125rem; }
+
+.composer-action, .composer-action.is-send, .composer-action.is-stop, .composer-action.is-send:hover, .composer-action.is-stop:hover { width: 30px; min-width: 30px; min-height: 30px; height: 30px; margin-top: 2px; }
+
+.composer textarea { border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
+
+.permission-menu [role="menuitemradio"] { border-radius: var(--radius-control); }
+
+.composer { border-color: color-mix(in srgb, var(--border-strong) 58%, transparent); }
+
+.permission-trigger { border-color: transparent; background: var(--surface-raised); }
+
+.permission-trigger:hover, .permission-trigger[data-state="open"] { border-color: transparent; }
+
+.composer-action { border-color: transparent; }
+
+.permission-trigger.is-danger { border-color: transparent; background: color-mix(in srgb, var(--permission-danger) 10%, var(--surface-raised)); }
+
+.composer .permission-trigger { min-height: 36px; padding: 0 11px; font-size: .875rem; }
+
+.permission-menu [role="menuitemradio"] { min-height: 44px; padding: 0 12px; font-size: .875rem; }
+
+.composer .composer-action, .composer .composer-action.is-send, .composer .composer-action.is-stop, .composer .composer-action.is-send:hover, .composer .composer-action.is-stop:hover { width: 36px; min-width: 36px; min-height: 36px; height: 36px; }
+
+.archived-composer { min-height: 64px; padding: 10px 14px; }
+
+.archived-composer strong { font-size: .9375rem; }
+
+.archived-composer .restore-session { display: inline-flex; min-height: 34px; align-items: center; gap: 7px; border: 0; border-radius: var(--radius-control); padding: 0 12px; background: var(--surface-raised); color: var(--text); cursor: pointer; }
+
+.archived-composer .restore-session:hover { border-color: transparent; background: var(--surface-hover); }
+
+/* Composer 内的上下文窗口仅在悬浮或键盘聚焦时展示读数。 */
+.context-window-indicator { position: relative; width: 30px; min-width: 30px; height: 36px; display: inline-grid; place-items: center; outline: 0; transform: translateY(4px); }
+
+.context-window-ring { width: 16px; height: 16px; display: grid; place-items: center; border-radius: 50%; background: conic-gradient(var(--accent) var(--context-window-progress), color-mix(in srgb, var(--muted) 22%, transparent) 0); }
+
+.context-window-ring::after { content: ""; display: block; width: 10px; height: 10px; border-radius: 50%; background: var(--surface); }
+
+.context-window-indicator.is-warning .context-window-ring { background: conic-gradient(var(--warning) var(--context-window-progress), color-mix(in srgb, var(--muted) 22%, transparent) 0); }
+
+.context-window-indicator.is-danger .context-window-ring { background: conic-gradient(var(--danger) var(--context-window-progress), color-mix(in srgb, var(--muted) 22%, transparent) 0); }
+
+.context-window-indicator.is-empty .context-window-ring { background: color-mix(in srgb, var(--muted) 28%, transparent); }
+
+.context-window-indicator:focus-visible .context-window-ring { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent); }
+
+.context-window-tooltip { position: absolute; z-index: 75; right: 50%; bottom: calc(100% + 8px); display: grid; width: max-content; max-width: calc(100vw - 32px); justify-items: center; gap: 3px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--border-strong) 48%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--surface-raised) 92%, transparent); box-shadow: 0 12px 28px color-mix(in srgb, var(--shadow) 76%, transparent); color: var(--text); opacity: 0; pointer-events: none; text-align: center; transform: translate(50%, 4px); transition: opacity 140ms ease, transform 140ms ease; backdrop-filter: blur(16px) saturate(125%); -webkit-backdrop-filter: blur(16px) saturate(125%); white-space: nowrap; }
+
+.context-window-indicator:hover .context-window-tooltip, .context-window-indicator:focus-visible .context-window-tooltip { opacity: 1; transform: translate(50%, 0); }
+
+.context-window-tooltip > span { color: var(--muted); font-size: 12px; line-height: 1.25; }
+
+.context-window-tooltip strong { font-size: 13px; font-weight: 600; line-height: 1.35; }
+
+.context-window-tooltip small { color: var(--muted); font-size: 12px; line-height: 1.3; }
+
+.composer { border-color: transparent; background: var(--surface-raised); }
+
+.composer { position: relative; }
+
+.context-window-ring::after { background: var(--surface-raised); }
+
+.context-window-tooltip { border-color: transparent; background: var(--surface-raised); }
+
+/* Composer 工具栏的只读状态与其他操作保持同一基线。 */
+.context-window-indicator { transform: none; }
+
+/* 输入面以连续背景承载，长文本仅在 textarea 内滚动，运行切换不改变工具栏几何。 */
+.composer { border: 0; background: var(--surface-raised); box-shadow: 0 12px 32px color-mix(in srgb, var(--shadow) 68%, transparent); }
+
+.composer:focus-within { border: 0; box-shadow: 0 12px 32px color-mix(in srgb, var(--shadow) 68%, transparent); }
+
+.composer-toolbar { display: grid; grid-template-columns: max-content minmax(0, 1fr) 36px 36px; align-items: center; min-height: 52px; height: 52px; padding: 8px 10px; }
+
+.composer-spacer { min-width: 0; }
+
+.composer .context-window-indicator, .composer .composer-action { align-self: center; margin: 0; transform: none; }
+
+.composer textarea { min-height: 64px; max-height: 220px; border: 0; outline: 0; }
+
+.composer textarea:focus-visible { outline: 0; box-shadow: none; }
+
+.composer .permission-trigger, .composer .permission-trigger:hover, .composer .permission-trigger:focus-visible, .composer .permission-trigger[data-state="open"] { border: 0; box-shadow: none; }
+
+.composer .permission-trigger:focus-visible, .composer .composer-action:focus-visible { background: var(--surface-hover); }
+
+/* Tooltip 与 Composer 保持同一色系，但用更深一阶表面明确悬浮关系。 */
+.context-window-tooltip { border-radius: var(--radius-control); background: var(--surface); }
+
+.composer-editor { position: relative; min-height: 50px; max-height: 220px; padding: .75rem 1rem 0; overflow-wrap: anywhere; color: var(--text); font: inherit; line-height: 1.55; white-space: pre-wrap; caret-color: var(--text); outline: 0; scrollbar-width: none; }
+
+.composer-editor::-webkit-scrollbar { width: 0; height: 0; }
+
+.composer-placeholder { position: absolute; top: .75rem; left: 1rem; color: var(--muted); font: inherit; line-height: 1.55; pointer-events: none; }
+
+.composer-text-segment { white-space: pre-wrap; }
+
+.composer-command-tag { margin: 0 2px; color: var(--muted); font: inherit; font-weight: 600; line-height: inherit; vertical-align: baseline; white-space: nowrap; user-select: all; }
+
+.composer-command-tag i { width: .9em; height: .9em; display: inline-block; margin-right: .28em; background: currentColor; vertical-align: -.08em; -webkit-mask-position: center; mask-position: center; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-size: contain; mask-size: contain; }
+
+.composer-command-tag span { white-space: nowrap; }
+
+.composer-command-tag.is-skill { color: #78a7d7; }
+
+.composer-command-tag.is-mcp { color: #7db69e; }
+
+.composer-editor:focus-visible { outline: 0; box-shadow: none; }
+
+/* Final domain rules. */
+.composer {
+  position: relative;
+  border: 0;
+  background: var(--surface-raised);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--shadow) 68%, transparent);
+}
+
+.composer:focus-within {
+  border: 0;
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--shadow) 68%, transparent);
+}
+
+.composer-toolbar {
+  height: 52px;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) 36px 36px;
+  align-items: center;
+  padding: 8px 10px;
+}
+
+.composer .permission-trigger,
+.composer .composer-action,
+.composer-editor {
+  border: 0;
+  outline: 0;
+  box-shadow: none;
+}
+
+.composer-editor {
+  position: relative;
+  min-height: 50px;
+  max-height: 220px;
+  padding: .75rem 1rem 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font: inherit;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  caret-color: var(--text);
+  scrollbar-width: none;
+}
+
+.composer-editor::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.composer-placeholder {
+  position: absolute;
+  top: .75rem;
+  left: 1rem;
+  color: var(--muted);
+  font: inherit;
+  line-height: 1.55;
+  pointer-events: none;
+}
+
+.composer-command-tag {
+  margin: 0 2px;
+  font: inherit;
+  font-weight: 600;
+  line-height: inherit;
+  vertical-align: baseline;
+  white-space: nowrap;
+  user-select: all;
+}
+
+.composer-command-tag i {
+  width: .9em;
+  height: .9em;
+  display: inline-block;
+  margin-right: .28em;
+  background: currentColor;
+  vertical-align: -.08em;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+.composer-command-tag.is-skill { color: #78a7d7; }
+.composer-command-tag.is-mcp { color: #7db69e; }

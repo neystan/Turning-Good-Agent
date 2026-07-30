@@ -62,7 +62,15 @@ docker compose -f compose.dev.yaml up --build
 docker compose -f compose.dev.yaml down
 ```
 
-普通源码改动不需要重建镜像。修改 `package.json`、`package-lock.json`、Python 依赖或 `Dockerfile` 后，重新执行带 `--build` 的启动命令。开发模式同样只允许本机访问，且会话数据会保存在 Docker 命名卷中。
+普通源码改动不需要重建镜像。修改 Python 依赖或 `Dockerfile` 后，重新执行带 `--build` 的启动命令。修改 `package.json` 或 `package-lock.json` 后，先停止开发服务并删除前端依赖卷，再重新启动；这不会删除会话数据：
+
+```powershell
+docker compose -f compose.dev.yaml down
+docker volume rm turning-good-agent_frontend_node_modules
+docker compose -f compose.dev.yaml up --build
+```
+
+开发模式同样只允许本机访问，且会话数据会保存在 Docker 命名卷中。
 
 Web 默认使用石墨深色主题，可在右上角切换并记住浅色主题。工作台采用对话优先布局：会话栏独立滚动且可收起为品牌入口，左右侧栏共用响应式宽度；Radix 菜单与确认框处理会话操作，紧凑的图标操作菜单仅在命中项时提供阴影反馈。真实的工具、MCP、Skill、审批、压缩、Stop 与终态事件按 `request_id` 归入 user 与 assistant 消息之间的可折叠“思考中”活动簇；工具完成后回到“思考中”，不展示伪造的内部推理。输入区通过“默认权限 / 完全访问”菜单控制全局工具审批，发送按钮左侧的只读上下文圆环从最近一次 `SAVE` 的真实上下文统计和集中 `max_context_tokens` 计算，悬浮或键盘聚焦可查看读数。断线中的 Web turn 可在浏览器内重试，重试使用原动作标识避免重复入队；该即时状态和被替代旧消息的隐藏标记只存于浏览器标签页，不改变 Session JSON/JSONL 或 Runtime 上下文。会话检查器只汇总既有 token、trace 与工具记录，使用连续信息面展示摘要与分类，原始 JSON 只在单条记录中按需展开，不新增 JSONL。
 

@@ -1,0 +1,257 @@
+/* Migrated component foundation. */
+.brand { gap: 9px; padding: 4px 6px 14px; font-weight: 700; }
+
+.brand-mark { display: grid; width: 27px; height: 27px; place-items: center; border: 1px solid var(--border-strong); border-radius: 6px; color: var(--accent); font-size: 11px; }
+
+.brand .mobile-only { margin-left: auto; }
+
+.new-session, .restore-session { width: 100%; display: flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--border); border-radius: 6px; padding: 9px; background: var(--surface-raised); cursor: pointer; }
+
+.new-session:hover, .restore-session:hover { background: var(--surface-hover); }
+
+.session-section { margin-top: 18px; }
+
+.section-title { width: 100%; display: flex; align-items: center; gap: 7px; padding: 4px 6px 7px; border: 0; background: transparent; color: var(--muted); font-size: 12px; text-align: left; }
+
+.section-title span { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+.session-row { position: relative; gap: 2px; min-width: 0; padding: 2px; border-radius: 5px; content-visibility: auto; }
+
+.session-row:hover, .session-row.selected { background: var(--surface-hover); }
+
+.session-select { flex: 1; min-width: 0; gap: 8px; padding: 7px; border: 0; background: transparent; cursor: pointer; text-align: left; }
+
+.session-select > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.pin-slot { width: 28px; display: inline-grid; flex: 0 0 28px; place-items: center; color: var(--accent); }
+
+.session-actions { position: relative; }
+
+.session-menu { top: 34px; width: 150px; padding: 5px; }
+
+.session-menu button { display: flex; width: 100%; align-items: center; gap: 8px; border: 0; border-radius: 4px; padding: 8px; background: transparent; cursor: pointer; text-align: left; }
+
+.session-menu button:hover { background: var(--surface-hover); }
+
+.session-menu .danger { color: var(--danger); }
+
+/* 菜单需要脱离会话行的绘制隔离；短 user 消息保持内容宽度。 */
+.session-row { content-visibility: visible; }
+
+.session-actions { z-index: 30; }
+
+.session-menu { z-index: 35; }
+
+/* 搜索对话框保持会话选择的键盘焦点和长列表滚动边界。 */
+.sidebar-commands { display: flex; gap: 6px; }
+
+.sidebar-commands .new-session { flex: 1; }
+
+/* Radix 统一托管浮层位置、外部关闭与焦点回归。 */
+.session-menu { z-index: 100; top: auto; right: auto; min-width: 164px; padding: 5px; }
+
+.session-menu [role="menuitem"] { display: flex; width: 100%; align-items: center; gap: 8px; border-radius: 5px; padding: 8px; outline: 0; cursor: pointer; }
+
+.session-menu [role="menuitem"][data-highlighted] { background: var(--surface-hover); }
+
+.session-menu-separator { height: 1px; margin: 5px 3px; background: var(--border); }
+
+/* 会话栏采用固定的右侧操作槽，避免标题与置顶状态互相挤压。 */
+.new-session { min-height: 44px; border-radius: 14px; }
+
+.session-section { margin-top: 16px; }
+
+.section-title { min-height: 32px; border-radius: 10px; padding: 6px 8px; }
+
+.section-title:hover { background: var(--surface-hover); color: var(--text); }
+
+.session-row { gap: 4px; border-radius: 12px; padding: 2px 4px; }
+
+.session-select { gap: 6px; padding: 8px 6px; }
+
+.session-select > span:first-child { flex: 1; min-width: 0; }
+
+.pin-slot { width: 22px; flex-basis: 22px; margin-left: auto; }
+
+.session-actions { flex: 0 0 32px; }
+
+.session-menu { min-width: 180px; padding: 8px; border-radius: 18px; }
+
+.session-menu [role="menuitem"] { min-height: 40px; border-radius: 12px; padding: 0 10px; }
+
+.session-menu-separator { margin: 7px 4px; }
+
+.session-row:hover { box-shadow: none; }
+
+/* 品牌图保留原始黑底，并在深浅主题中使用相同的可识别尺寸。 */
+.brand { display: grid; grid-template-columns: calc(clamp(3.5rem, 5vw, 4.5rem) - 20px) minmax(0, 1fr) 32px; column-gap: 6px; min-height: 68px; width: 100%; padding: 4px 0 10px; align-items: center; box-sizing: border-box; transition: grid-template-columns 260ms cubic-bezier(.22, 1, .36, 1), column-gap 260ms cubic-bezier(.22, 1, .36, 1); }
+
+.brand-mark-button { width: 50px; height: 50px; display: grid; grid-column: 1; justify-self: center; place-items: center; border: 0; padding: 0; background: transparent; box-shadow: none; }
+
+.brand-mark-button:not(:disabled) { cursor: pointer; }
+
+.brand-mark-button:hover, .brand-mark-button:focus-visible, .brand-mark-button:disabled { opacity: 1; background: transparent !important; box-shadow: none !important; }
+
+.brand-mark { width: 50px; height: 50px; padding: 0; border: 0; border-radius: 0; object-fit: cover; object-position: center; background: transparent; filter: none; }
+
+.brand-wordmark-frame { position: relative; min-width: 0; height: 54px; overflow: hidden; opacity: 1; transform: translateX(0); transition: opacity 160ms ease, transform 260ms cubic-bezier(.22, 1, .36, 1); }
+
+.brand-wordmark { position: absolute; top: -20px; left: -.5rem; display: block; width: 195px; height: auto; max-width: none; transform: translateY(8px); }
+
+.sidebar-collapse-control { width: 32px; min-width: 32px; height: 32px; margin: 0; justify-self: center; overflow: hidden; transition: opacity 160ms ease, transform 260ms cubic-bezier(.22, 1, .36, 1); }
+
+.app-shell.is-sidebar-collapsed .brand { grid-template-columns: calc(clamp(3.5rem, 5vw, 4.5rem) - 20px) 0 0; column-gap: 0; }
+
+.app-shell.is-sidebar-collapsed .brand-wordmark-frame { opacity: 0; transform: translateX(-.75rem); }
+
+.app-shell.is-sidebar-collapsed .sidebar-collapse-control { width: 0; min-width: 0; padding: 0; opacity: 0; transform: translateX(.75rem); pointer-events: none; }
+
+.sidebar-commands { align-items: center; }
+
+.new-session { min-height: 40px; border-color: transparent; padding: 7px 9px; background: var(--surface-raised); }
+
+.sidebar-commands > .icon-button { width: 32px; height: 32px; }
+
+.new-session:hover { background: var(--surface-hover); }
+
+.session-menu { box-shadow: 0 14px 32px var(--shadow); }
+
+.session-menu-separator { display: none; }
+
+.session-menu [role="menuitem"].danger { margin-top: 6px; background: color-mix(in srgb, var(--danger) 8%, transparent); }
+
+.session-row:hover, .session-select:hover { box-shadow: none; }
+
+.session-select:hover { background: transparent; }
+
+.session-actions .icon-button:hover { box-shadow: 0 6px 16px color-mix(in srgb, var(--shadow) 72%, transparent); }
+
+/* 会话操作菜单与侧栏共用底色，只在命中项时提供阴影反馈。 */
+.session-menu { width: 108px; min-width: 108px; padding: 4px; border-radius: var(--radius-control); background: var(--surface); box-shadow: none; }
+
+.session-menu [role="menuitem"] { width: 100%; min-height: 30px; justify-content: flex-start; gap: 6px; padding: 0 7px; background: transparent; box-shadow: none; font-size: 13px; white-space: nowrap; }
+
+.session-menu [role="menuitem"] svg { width: 14px; height: 14px; flex: 0 0 14px; }
+
+.session-menu [role="menuitem"][data-highlighted], .session-menu [role="menuitem"]:hover { background: var(--surface-hover); box-shadow: 0 5px 14px color-mix(in srgb, var(--shadow) 58%, transparent); }
+
+.session-menu [role="menuitem"].danger { margin-top: 0; background: transparent; }
+
+.session-menu [role="menuitem"].danger[data-highlighted], .session-menu [role="menuitem"].danger:hover { background: color-mix(in srgb, var(--danger) 8%, var(--surface-hover)); }
+
+.session-actions { opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
+
+.session-row:hover .session-actions, .session-row.selected .session-actions, .session-row:focus-within .session-actions { opacity: 1; pointer-events: auto; }
+
+.session-menu { max-height: calc(100dvh - 16px); overflow-y: auto; }
+
+.session-menu-fixed { position: fixed !important; z-index: 200; }
+
+.brand-mark { object-fit: contain; }
+
+/* 侧栏维持扫读优先级：当前会话最清晰，其余会话保持可读但不抢占正文。 */
+.session-select { color: var(--muted); font-size: .875rem; font-weight: 500; transition: color 140ms ease; }
+
+.session-row:hover .session-select, .session-row:focus-within .session-select, .session-row.selected .session-select { color: var(--text); }
+
+.session-row.selected .session-select { font-weight: 600; }
+
+/* 悬浮或打开会话操作菜单时，三点锚点升为独立的圆形浮面。 */
+.session-actions:has(.icon-button[aria-expanded="true"]) { opacity: 1; pointer-events: auto; }
+
+.session-actions .icon-button:is(:hover, [aria-expanded="true"]) { position: relative; z-index: 201; border-radius: var(--radius-round); background: var(--surface-raised); box-shadow: 0 5px 14px color-mix(in srgb, var(--shadow) 58%, transparent); }
+
+:root[data-theme="light"] .new-session { background: #eceeef; color: #3a3d42; }
+
+:root[data-theme="light"] .new-session:hover { background: #e2e4e7; }
+
+.sidebar-settings { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; margin: 10px; border: 0; border-radius: var(--radius-control); padding: 0 10px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: .875rem; }
+
+.sidebar-settings:hover, .sidebar-settings:focus-visible { background: var(--surface-hover); color: var(--text); }
+
+/* Final domain rules. */
+.sidebar-settings {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px;
+  border: 0;
+  border-radius: var(--radius-control);
+  padding: 0 10px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: .875rem;
+}
+
+.sidebar-settings:hover,
+.sidebar-settings:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.session-select {
+  color: var(--muted);
+  font-size: .875rem;
+  font-weight: 500;
+  transition: color 140ms ease;
+}
+
+.session-row:hover .session-select,
+.session-row:focus-within .session-select,
+.session-row.selected .session-select {
+  color: var(--text);
+}
+
+.session-row.selected .session-select {
+  font-weight: 600;
+}
+
+.session-actions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.session-row:hover .session-actions,
+.session-row.selected .session-actions,
+.session-row:focus-within .session-actions,
+.session-actions:has(.icon-button[aria-expanded="true"]) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.session-menu {
+  width: 108px;
+  min-width: 108px;
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  border: 0;
+  border-radius: var(--radius-control);
+  padding: 4px;
+  background: var(--surface);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--shadow) 76%, transparent);
+}
+
+.session-menu [role="menuitem"] {
+  min-height: 30px;
+  gap: 6px;
+  border: 0;
+  padding: 0 7px;
+  font-size: .8125rem;
+  white-space: nowrap;
+}
+
+.session-menu [role="menuitem"] svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  stroke-width: var(--system-icon-stroke);
+}
+
+.session-menu [role="menuitem"][data-highlighted],
+.session-menu [role="menuitem"]:hover {
+  background: var(--surface-hover);
+  box-shadow: none;
+}

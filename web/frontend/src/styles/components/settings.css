@@ -1,0 +1,207 @@
+/* Migrated component foundation. */
+.settings-workspace { height: 100dvh; min-height: 0; display: grid; grid-template-columns: 268px minmax(0, 1fr); background: var(--page); color: var(--text); }
+
+.settings-navigation { min-height: 0; display: flex; flex-direction: column; gap: 18px; padding: 18px 12px; background: var(--sidebar); }
+
+.settings-navigation h1, .settings-content h2, .settings-content h3 { margin: 0; letter-spacing: -.02em; }
+
+.settings-return, .settings-nav-current { min-height: 40px; display: flex; align-items: center; gap: 8px; border: 0; border-radius: var(--radius-control); padding: 0 10px; background: transparent; color: var(--muted); font: inherit; text-align: left; }
+
+.settings-return { cursor: pointer; }
+
+.settings-return:hover, .settings-return:focus-visible, .settings-nav-current { background: var(--surface-hover); color: var(--text); }
+
+.settings-content { min-height: 0; overflow: auto; padding: clamp(28px, 6vw, 72px) 28px 110px; }
+
+.settings-content-column { width: min(100%, 780px); margin: 0 auto; }
+
+.settings-heading { margin-bottom: 28px; }
+
+.settings-heading p, .settings-group p, .settings-unavailable p { color: var(--muted); line-height: 1.55; }
+
+.settings-groups { display: grid; gap: 18px; }
+
+.settings-group, .settings-unavailable { display: grid; gap: 14px; border-radius: var(--radius-panel); padding: 20px; background: var(--surface); }
+
+.settings-group label { display: grid; gap: 7px; color: var(--muted); font-size: .8125rem; }
+
+.settings-group input { min-height: 40px; border: 0; border-radius: var(--radius-control); padding: 0 11px; background: var(--surface-raised); color: var(--text); font: inherit; }
+
+.settings-status { margin: 0; color: var(--success) !important; }
+
+.settings-loading { color: var(--muted); }
+
+.settings-field-error { color: var(--danger); }
+
+.tool-permission-list { display: grid; gap: 2px; }
+
+.tool-permission-row { min-width: 0; min-height: 44px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 6px 0; background: transparent; }
+
+.tool-permission-copy { min-width: 0; display: flex; align-items: center; gap: 10px; overflow: hidden; white-space: nowrap; }
+
+.tool-permission-copy strong { min-width: 0; max-width: clamp(8rem, 22vw, 16rem); overflow: hidden; color: var(--text); font-size: .875rem; text-overflow: ellipsis; white-space: nowrap; }
+
+.tool-permission-copy span { min-width: 0; overflow: hidden; color: var(--muted); font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
+
+.tool-permission-unavailable { display: grid; gap: 8px; color: var(--muted); font-size: .8125rem; }
+
+.tool-permission-unavailable > div { display: flex; align-items: center; justify-content: space-between; min-height: 34px; padding: 0 10px; border-radius: var(--radius-control); background: var(--surface-raised); }
+
+.tool-permission-unavailable button, .settings-apply-bar button { min-height: 34px; border: 0; border-radius: var(--radius-control); padding: 0 11px; background: var(--surface-hover); color: var(--text); cursor: pointer; }
+
+.settings-apply-bar { position: sticky; bottom: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 9px; border-radius: var(--radius-panel); padding: 12px; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: 0 12px 28px var(--shadow); backdrop-filter: blur(14px); }
+
+.settings-apply-bar > span:first-child { flex: 1 1 18rem; color: var(--muted); font-size: .8125rem; }
+
+.settings-apply-bar button:last-child { background: var(--text); color: var(--page); }
+
+.settings-apply-bar button:disabled { cursor: not-allowed; opacity: .48; }
+
+@media (max-width: 720px) { .settings-workspace { grid-template-columns: 1fr; }.settings-navigation { flex-direction: row; align-items: center; padding: 10px 12px; }.settings-navigation h1 { display: none; }.settings-nav-current { margin-left: auto; }.settings-content { padding: 28px 16px 72px; } }
+
+/* 设置按领域连续排版，字段与工具行承担编辑层级，避免卡片堆叠。 */
+.settings-groups { gap: 32px; }
+
+.settings-group { gap: 16px; border: 0; border-radius: 0; padding: 0; background: transparent; box-shadow: none; }
+
+.settings-group > :is(h3, p) { max-width: 42rem; }
+
+.settings-field input, .tool-permission-row, .settings-apply-bar { border: 0; }
+
+.settings-field input:focus-visible { outline: 0; background: var(--surface-hover); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
+
+.settings-apply-bar[data-dirty="true"] > span:first-child { color: var(--accent); }
+
+.settings-apply-bar[data-state="pending"] > span:first-child, .settings-apply-bar[data-state="applying"] > span:first-child { color: var(--warning); }
+
+.settings-apply-bar[data-state="failed"] > span:first-child { color: var(--danger); }
+
+/* 设置输入以色面区分，粘性操作不遮挡本地密钥动作。 */
+.settings-group { gap: 12px; }
+
+.settings-group label { gap: 5px; }
+
+.settings-clear-api-key { min-height: 36px; }
+
+.settings-apply-bar { bottom: 20px; }
+
+.settings-apply-status { flex: 0 1 auto; color: var(--muted); font-size: .8125rem; }
+
+.settings-apply-revision { min-width: 0; overflow: hidden; color: var(--muted); font: .6875rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+
+:root[data-theme="light"] .settings-field input { background: color-mix(in srgb, var(--surface) 88%, var(--surface-raised)); }
+
+/* Apply 栏位于编辑滚动区外，始终可见但不遮挡字段。 */
+.settings-content { display: grid; overflow: hidden; padding-bottom: 28px; }
+
+.settings-content-column { height: 100%; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+
+.settings-editor-host, .settings-editor { height: 100%; min-height: 0; }
+
+.settings-editor { display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+
+.settings-editor-scroll { min-height: 0; padding: 0; }
+
+.settings-editor-scroll .scroll-area-viewport { padding: 0 8px 24px 0; }
+
+.settings-apply-bar { position: static; margin-top: 14px; }
+
+/* 设置使用左右参数行：控件以色面区分，键盘焦点不绘制轮廓或光晕。 */
+.settings-content-column { width: min(100%, 880px); }
+
+.settings-heading { margin-bottom: 20px; }
+
+.settings-group { gap: 6px; }
+
+.settings-group h3 { margin: 0 0 6px; }
+
+.settings-field { min-height: 54px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(13rem, 21rem); align-items: center; gap: 24px; padding: 6px 0; }
+
+.settings-field > span { color: var(--text); font-size: .875rem; }
+
+.settings-field input { width: 100%; min-height: 34px; border: 0; outline: 0; border-radius: 9px; padding: 0 10px; background: var(--surface-raised); color: var(--text); font: inherit; }
+
+.settings-field input:focus-visible { outline: 0; box-shadow: none; background: var(--surface-hover); }
+
+.settings-field-error { grid-column: 2; margin-top: -4px; }
+
+.settings-switch { width: 44px; min-width: 44px; height: 26px; min-height: 26px; justify-self: end; display: inline-flex; align-items: center; border: 0; outline: 0; border-radius: var(--radius-round); padding: 3px; background: color-mix(in srgb, var(--muted) 28%, transparent); cursor: pointer; transition: background 140ms ease; }
+
+.settings-switch-thumb { width: 20px; height: 20px; display: block; border-radius: var(--radius-round); background: var(--surface-raised); box-shadow: 0 1px 4px color-mix(in srgb, var(--shadow) 42%, transparent); transition: transform 140ms ease; }
+
+.settings-switch[aria-checked="true"] { background: color-mix(in srgb, var(--accent) 76%, var(--surface)); }
+
+.settings-switch[aria-checked="true"] .settings-switch-thumb { transform: translateX(18px); }
+
+.settings-switch:focus-visible { outline: 0; box-shadow: none; background: var(--surface-hover); }
+
+.settings-switch[aria-checked="true"]:focus-visible { background: color-mix(in srgb, var(--accent) 64%, var(--surface-hover)); }
+
+.settings-test-result { min-width: 0; color: var(--muted); font-size: .8125rem; }
+
+@media (max-width: 720px) { .settings-field { grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 9px 0; }.settings-field-error { grid-column: 1; margin-top: 0; }.settings-switch { justify-self: start; } }
+
+/* Final domain rules. */
+.settings-workspace {
+  grid-template-columns: 268px minmax(0, 1fr);
+}
+
+.settings-navigation {
+  background: var(--settings-navigation-surface);
+}
+
+.settings-content {
+  display: grid;
+  min-width: 0;
+  padding: clamp(28px, 5vw, 64px) clamp(24px, 4vw, 56px) 28px;
+  background: var(--workspace-surface);
+}
+
+.settings-content-column {
+  width: min(100%, 880px);
+  min-width: 0;
+  justify-self: center;
+  margin: 0;
+}
+
+.settings-loading-skeleton {
+  display: grid;
+  gap: 0;
+}
+
+.settings-skeleton-heading {
+  width: 7.5rem;
+  height: 18px;
+  margin: 0 0 12px;
+  border-radius: var(--radius-round);
+}
+
+.settings-skeleton-row {
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(13rem, 21rem);
+  align-items: center;
+  gap: 24px;
+  padding: 6px 0;
+}
+
+.settings-skeleton-row > span:first-child {
+  width: clamp(7rem, 32%, 12rem);
+  height: 13px;
+  border-radius: var(--radius-round);
+}
+
+.settings-skeleton-row > span:last-child {
+  width: 100%;
+  height: 34px;
+  border-radius: 9px;
+}
+
+.settings-apply-bar {
+  width: 100%;
+  margin-inline: 0;
+}
+
+:root[data-theme="light"] .settings-content .settings-field input {
+  background: var(--surface-raised);
+}

@@ -3,11 +3,12 @@ import { useCallback, useLayoutEffect, useRef, useState, type HTMLAttributes, ty
 type ScrollAreaProps = HTMLAttributes<HTMLDivElement> & {
   children: ReactNode;
   viewportRef?: MutableRefObject<HTMLDivElement | null>;
+  viewportClassName?: string;
   onViewportScroll?: UIEventHandler<HTMLDivElement>;
 };
 
 /** 渲染隐藏原生滚动条并带圆角滑块的通用滚动区域。 */
-export function ScrollArea({ children, className, viewportRef: externalViewportRef, onViewportScroll, ...props }: ScrollAreaProps) {
+export function ScrollArea({ children, className, viewportRef: externalViewportRef, viewportClassName, onViewportScroll, ...props }: ScrollAreaProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [thumb, setThumb] = useState<{ top: number; height: number } | null>(null);
 
@@ -52,5 +53,5 @@ export function ScrollArea({ children, className, viewportRef: externalViewportR
     onViewportScroll?.(event);
   };
 
-  return <div {...props} className={`scroll-area ${className || ""}`}><div ref={bindViewport} className="scroll-area-viewport" onScroll={handleScroll}>{children}</div>{thumb && <span className="scroll-area-thumb" style={{ height: thumb.height, transform: `translateY(${thumb.top}px)` }} />}</div>;
+  return <div {...props} className={`scroll-area ${className || ""}`}><div ref={bindViewport} className={`scroll-area-viewport ${viewportClassName || ""}`} onScroll={handleScroll}>{children}</div>{thumb && <span className="scroll-area-thumb" style={{ height: thumb.height, transform: `translateY(${thumb.top}px)` }} />}</div>;
 }

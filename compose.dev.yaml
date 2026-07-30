@@ -10,13 +10,16 @@ services:
       --reload-dir /app/Turning-Good-Agent
     volumes:
       - ./Turning-Good-Agent:/app/Turning-Good-Agent
+      - ./.skills:/app/.skills
       - sessions:/app/.sessions
       - ./settings.local.json:/app/settings.local.json
 
   frontend:
     image: node:22-alpine
     working_dir: /app/web/frontend
-    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
+    command: >-
+      sh -c "test -x node_modules/.bin/vite || npm ci;
+      exec npm run dev -- --host 0.0.0.0"
     environment:
       VITE_BACKEND_URL: http://backend:8000
       CHOKIDAR_USEPOLLING: "true"

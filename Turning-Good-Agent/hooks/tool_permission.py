@@ -4,14 +4,22 @@ from ..tools.registry import ToolRegistry
 from .base import AgentHook
 
 
-def validate_tool_permission_tools(tools: ToolRegistry, configured_names: list[str]) -> None:
+def validate_tool_permission_tools(
+    tools: ToolRegistry,
+    configured_names: list[str],
+    *,
+    allowed_unregistered_names: set[str] | None = None,
+) -> None:
     """校验审批配置和审批 Tool 都不会并行执行。"""
+    allowed_unregistered_names = allowed_unregistered_names or set()
     for name in configured_names:
-        if not tools.has(name):
+        if not tools.has(name) and name not in allowed_unregistered_names:
             raise ValueError(f"审批工具未注册：{name}")
     names = set(configured_names)
     names.update(name for name in tools.tool_names if bool(getattr(tools.get(name), "approval_required", False)))
     for name in names:
+        if not tools.has(name):
+            continue
         if bool(getattr(tools.get(name), "parallel_safe", False)):
             raise ValueError(f"审批工具不能设置 parallel_safe=true：{name}")
 

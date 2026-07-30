@@ -1,0 +1,91 @@
+/* Migrated component foundation. */
+.slash-command-menu { position: absolute; z-index: 40; bottom: calc(100% + 8px); left: 0; display: block; width: 100%; max-height: min(320px, 48dvh); overflow: hidden; border-radius: var(--radius-panel); padding: 0; background: var(--surface-raised); box-shadow: 0 14px 32px var(--shadow); }
+
+.slash-command-menu .scroll-area-viewport { height: auto; max-height: inherit; padding: 6px; }
+
+.slash-command-menu p { margin: 8px; color: var(--muted); font-size: .8125rem; }
+
+.slash-command-menu button { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 48px; border: 0; border-radius: var(--radius-control); padding: 7px 9px; background: transparent; color: var(--text); cursor: pointer; text-align: left; }
+
+.slash-command-menu button:hover, .slash-command-menu button:focus-visible { background: var(--surface-hover); }
+
+.slash-command-menu button span { display: grid; gap: 2px; }
+
+.slash-command-menu button small, .slash-command-menu button code { color: var(--muted); font-size: .75rem; }
+
+.slash-command-icon { width: 16px; height: 16px; display: block; justify-self: center; background: currentColor; -webkit-mask-position: center; mask-position: center; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-size: contain; mask-size: contain; }
+
+/* Slash 命令以单行目录呈现：命令靠左，说明靠右，超长内容不挤压主读点。 */
+.slash-command-menu { max-height: min(264px, 42dvh); }
+
+.slash-command-menu button { width: 100%; grid-template-columns: 16px minmax(0, max-content) minmax(0, 1fr); gap: 8px; min-height: 36px; padding: 5px 9px; }
+
+.slash-command-menu button > strong { min-width: 0; overflow: hidden; font-size: .8125rem; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+
+.slash-command-menu .slash-command-summary { min-width: 0; overflow: hidden; color: var(--muted); font-size: .75rem; line-height: 1.25; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+
+.slash-command-menu button[aria-selected="true"] { border: 0; box-shadow: none; background: var(--surface-hover); }
+
+/* Final domain rules. */
+.slash-command-menu {
+  position: absolute;
+  z-index: 40;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: 100%;
+  max-height: min(264px, 42dvh);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-panel);
+  padding: 0;
+  background: var(--surface-raised);
+  box-shadow: 0 14px 32px var(--shadow);
+}
+
+.slash-command-menu .scroll-area-viewport {
+  height: auto;
+  max-height: inherit;
+  padding: 6px;
+}
+
+.slash-command-menu button {
+  width: 100%;
+  min-height: 36px;
+  display: grid;
+  grid-template-columns: 16px minmax(0, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--radius-control);
+  padding: 5px 9px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.slash-command-menu button:hover,
+.slash-command-menu button:focus-visible,
+.slash-command-menu button[aria-selected="true"] {
+  outline: 0;
+  background: var(--surface-hover);
+  box-shadow: none;
+}
+
+.slash-command-menu button > strong,
+.slash-command-menu .slash-command-summary {
+  min-width: 0;
+  overflow: hidden;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slash-command-menu button > strong {
+  font-size: .8125rem;
+}
+
+.slash-command-menu .slash-command-summary {
+  color: var(--muted);
+  font-size: .75rem;
+  text-align: right;
+}

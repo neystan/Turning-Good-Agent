@@ -12,6 +12,7 @@ from .events import SessionEventHub
 
 if TYPE_CHECKING:
     from ...runtime.runtime import AgentRuntime
+    from .runtime_supervisor import RuntimeSupervisor
 
 
 _ACTION_RECEIPT_LIMIT = 2_048
@@ -105,16 +106,29 @@ class WebSessionCoordinator:
         self._closed = False
         self._accepted_actions: dict[str, tuple[str, str]] = {}
         self._action_lock = asyncio.Lock()
+        self._runtime_supervisor: RuntimeSupervisor[AgentRuntime] | None = None
 
     async def start(self) -> None:
         """注册 Web Adapter 工厂并启动 MessageBus 消费者。"""
-        from ...channels.web import WebChannelAdapter
-
-        self.runtime.channel_router.register(
-            "web", lambda message: WebChannelAdapter(self.bus, self.controls[message.session_id])
-        )
+        self.register_runtime(self.runtime)
         self._dispatcher = asyncio.create_task(self._dispatch_inbound())
         self._outbound = asyncio.create_task(self._consume_outbound())
+
+    def set_runtime_supervisor(self, supervisor: RuntimeSupervisor[AgentRuntime]) -> None:
+        """让每一轮在执行前从唯一监督器取得完整 Runtime。"""
+        self._runtime_supervisor = supervisor
+
+    def register_runtime(self, runtime: AgentRuntime) -> None:
+        """注册替换 Runtime 的 Web Channel Adapter。"""
+        from ...channels.web import WebChannelAdapter
+
+        runtime.channel_router.register(
+            "web", lambda message: WebChannelAdapter(self.bus, self.controls[message.session_id])
+        )
+
+    def is_globally_idle(self) -> bool:
+        """控制器为空即表示没有排队、运行、停止或审批等待的 Web turn。"""
+        return not self.controls
 
     async def close(self) -> None:
         """停止队列消费者并终止未开始的协作任务。"""
@@ -211,7 +225,12 @@ class WebSessionCoordinator:
         control.bind_slot(self._semaphore)
         try:
             await self.hub.publish(message.session_id, message.id, "task.running")
-            outbound = await self.runtime.run_turn(message)
+            runtime = (
+                await self._runtime_supervisor.acquire_runtime()
+                if self._runtime_supervisor is not None
+                else self.runtime
+            )
+            outbound = await runtime.run_turn(message)
             outbound.metadata["request_id"] = message.id
             await self.bus.publish_outbound(outbound)
         finally:
@@ -241,6 +260,8 @@ class WebSessionCoordinator:
         if pending:
             await self.hub.publish(outbound.session_id, request_id, "guidance.pending", {"items": pending})
         self.controls.pop(outbound.session_id, None)
+        if self._runtime_supervisor is not None:
+            await self._runtime_supervisor.notify_idle()
 
     def _remember_action_receipt(self, client_action_id: str, receipt: tuple[str, str]) -> None:
         """保留有限的受理回执，避免重试重复入队。"""

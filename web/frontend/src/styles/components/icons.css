@@ -1,0 +1,22 @@
+.icon-button > svg,
+.topbar svg,
+.inspector header svg,
+.settings-navigation svg,
+.sidebar-settings svg {
+  width: var(--system-icon-size);
+  height: var(--system-icon-size);
+  flex: 0 0 var(--system-icon-size);
+  stroke-width: var(--system-icon-stroke);
+  vertical-align: middle;
+}
+
+.slash-command-icon {
+  width: 15px;
+  height: 15px;
+  opacity: .9;
+}
+
+.slash-command-menu button[aria-selected="true"] .slash-command-icon,
+.slash-command-menu button:hover .slash-command-icon {
+  opacity: 1;
+}

@@ -88,7 +88,16 @@ class AgentRuntime:
         tools.register(PublishSkillDraftTool(skills))
         mcp = McpManager(settings.mcp)
         register_mcp_control_tools(mcp, tools)
-        validate_tool_permission_tools(tools, settings.tool_permissions.approval_required_tools)
+        configured_mcp_tools = {
+            tool_name if tool_name.startswith(f"mcp_{server_name}_") else f"mcp_{server_name}_{tool_name}"
+            for server_name, server in settings.mcp.servers.items()
+            for tool_name in server.enabled_tools
+        }
+        validate_tool_permission_tools(
+            tools,
+            settings.tool_permissions.approval_required_tools,
+            allowed_unregistered_names=configured_mcp_tools,
+        )
         hooks = HookManager()
         hooks.register(ToolPermissionHook(frozenset(settings.tool_permissions.approval_required_tools), tools))
         hooks.register(ToolResultTruncationHook(settings.runtime.max_tool_result_tokens))

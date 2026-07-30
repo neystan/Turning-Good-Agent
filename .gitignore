@@ -1,9 +1,10 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.venv/
+*.egg-info/
 .sessions/
 settings.local.json
-tests/
 SESSIONS_SPEC.md
 .skills/.drafts/
 .skills/.staging/

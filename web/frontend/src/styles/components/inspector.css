@@ -1,0 +1,366 @@
+/* Migrated component foundation. */
+.inspector header { display: flex; align-items: center; justify-content: space-between; padding: 17px; border-bottom: 1px solid var(--border); }
+
+.inspector h2 { margin: 4px 0 0; font-size: 17px; }
+
+.inspector > p { padding: 18px; }
+
+.inspector-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0 0 14px; }
+
+.inspector-summary div { border: 1px solid var(--border); border-radius: 5px; padding: 9px; background: var(--surface-raised); }
+
+.inspector-summary dt { color: var(--muted); font-size: 11px; }
+
+.inspector-summary dd { margin: 5px 0 0; font-size: 13px; font-variant-numeric: tabular-nums; }
+
+.inspector-section { border-top: 1px solid var(--border); }
+
+.inspector-section summary { display: flex; align-items: center; gap: 8px; padding: 11px 2px; cursor: pointer; list-style: none; }
+
+.inspector-section summary::-webkit-details-marker { display: none; }
+
+.inspector-section summary span:nth-child(2) { margin-left: auto; color: var(--muted); font: 12px ui-monospace, monospace; }
+
+.inspector-section[open] summary svg { transform: rotate(180deg); }
+
+.inspector-section pre { max-height: 280px; overflow: auto; margin: 0 0 12px; padding: 10px; border-radius: 5px; background: var(--page); color: var(--muted); font: 11px/1.55 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* 检查器默认展示结构化条目，原始 JSON 只在记录末端按需展开。 */
+.inspector header > div { display: grid; gap: 3px; }
+
+.inspector header > div > span { color: var(--muted); font-size: 11px; }
+
+.inspector-summary dd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+
+.inspector-records { display: grid; gap: 7px; padding: 0 0 12px; }
+
+.inspector-record { border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); }
+
+.inspector-record > summary { display: block; padding: 8px 9px; color: var(--text); font: 12px ui-monospace, monospace; cursor: pointer; list-style: none; }
+
+.inspector-record > summary::-webkit-details-marker, .inspector-raw > summary::-webkit-details-marker { display: none; }
+
+.inspector-record dl { display: grid; gap: 5px; margin: 0; padding: 0 9px 9px; }
+
+.inspector-record dl > div { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 7px; color: var(--muted); font-size: 11px; }
+
+.inspector-record dt, .inspector-record dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+
+.inspector-record dd { color: var(--text); text-align: right; }
+
+.inspector-raw { border-top: 1px solid var(--border); }
+
+.inspector-raw > summary { padding: 8px 9px; color: var(--muted); font-size: 11px; cursor: pointer; }
+
+.inspector-raw pre { margin: 0 9px 9px; }
+
+.inspector header { min-height: 56px; padding: 12px 14px; }
+
+.inspector header .icon-button { width: 36px; height: 36px; }
+
+.inspector-summary div { padding: 10px; }
+
+.inspector-record { background: color-mix(in srgb, var(--surface-raised) 88%, var(--surface)); }
+
+.inspector header { border-bottom: 0; background: var(--surface); }
+
+.inspector-summary div, .inspector-record, .inspector-section pre { border-color: transparent; background: var(--surface); }
+
+.inspector-section { margin: 7px 0; border-top: 0; border-radius: var(--radius-control); padding: 0 10px; background: color-mix(in srgb, var(--surface) 72%, transparent); }
+
+.inspector-section summary { min-height: 40px; padding: 10px 0; border-radius: var(--radius-control); }
+
+.inspector-section summary:hover { background: var(--surface-hover); }
+
+.inspector-records { padding-bottom: 8px; }
+
+.inspector-raw { border-top: 0; margin-top: 6px; }
+
+/* 顶部图标与检查器分组使用独立尺寸，避免通用 hover 阴影改变视觉中心。 */
+.top-actions .icon-button, .inspector header .icon-button { width: 36px; height: 36px; min-width: 36px; min-height: 36px; aspect-ratio: 1; flex: 0 0 36px; padding: 0; line-height: 0; }
+
+.top-actions .icon-button svg, .inspector header .icon-button svg { display: block; }
+
+.top-actions .icon-button:hover, .inspector header .icon-button:hover { background: var(--surface-hover); box-shadow: 0 5px 14px color-mix(in srgb, var(--shadow) 72%, transparent); }
+
+.inspector-section { overflow: visible; margin: 10px 0; padding: 0; background: transparent; box-shadow: none; }
+
+.inspector-section:hover { box-shadow: none; }
+
+.inspector-section summary { min-height: 42px; padding: 11px 13px; border-radius: var(--radius-panel); background: var(--surface); transition: background 140ms ease, box-shadow 140ms ease; }
+
+.inspector-section[open] summary, .inspector-section summary:hover { background: var(--surface-hover); box-shadow: 0 6px 18px color-mix(in srgb, var(--shadow) 42%, transparent); }
+
+.inspector-records { gap: 10px; padding: 10px 2px 4px; }
+
+.inspector-record { overflow: hidden; border-radius: var(--radius-control); background: var(--surface); box-shadow: 0 4px 12px color-mix(in srgb, var(--shadow) 28%, transparent); }
+
+.inspector-record > summary { padding: 11px 12px; background: var(--surface); }
+
+.inspector-record[open] > summary { background: var(--surface-hover); }
+
+.inspector-record dl { padding: 0 12px 12px; background: var(--surface); }
+
+.inspector-record dl > div { padding: 5px 0; }
+
+.inspector-raw { overflow: hidden; margin: 8px 0 0; border-radius: var(--radius-control); background: var(--surface-raised); }
+
+.inspector-raw > summary { padding: 10px 12px; }
+
+.inspector-raw pre { margin: 0; padding: 0 12px 12px; border-radius: 0; background: transparent; }
+
+/* 会话顶栏与检查器标题共用高度和下沿阴影，展开记录按卡片层级展示。 */
+.topbar, .inspector header { height: 56px; min-height: 56px; box-shadow: 0 7px 16px color-mix(in srgb, var(--shadow) 34%, transparent); z-index: 1; }
+
+.inspector header { padding: 0 14px; }
+
+.inspector h2 { margin: 0; }
+
+.inspector-records { padding: 10px 0 4px; }
+
+.inspector-record, .inspector-raw { border: 0; }
+
+.inspector-record { overflow: visible; border-radius: 0; background: transparent; box-shadow: none; }
+
+.inspector-record > summary { width: 100%; box-sizing: border-box; overflow: hidden; border-radius: var(--radius-control); background: var(--surface-hover); text-overflow: ellipsis; white-space: nowrap; }
+
+.inspector-record[open] > summary { background: var(--surface-hover); }
+
+.inspector-record dl { gap: 0; margin: 0; border-radius: 0 0 var(--radius-control) var(--radius-control); background: var(--surface); }
+
+.inspector-record dl > div { grid-template-columns: minmax(74px, .8fr) minmax(0, 1.2fr); align-items: start; column-gap: 14px; padding: 7px 0; }
+
+.inspector-record dd { text-align: right; line-height: 1.45; }
+
+.inspector-raw { box-shadow: none; }
+
+.inspector-raw pre { line-height: 1.55; }
+
+/* 检查器使用连续信息面，展开记录才成为独立层级。 */
+.inspector-body .scroll-area-viewport { padding: 14px; }
+
+.inspector-summary { gap: 0; margin: 0 0 12px; padding: 4px; border-radius: var(--radius-panel); background: var(--surface); }
+
+.inspector-summary div { min-height: 62px; border: 0; border-radius: var(--radius-control); padding: 10px; background: transparent; box-shadow: none; }
+
+.inspector-summary div:hover { background: var(--surface-hover); }
+
+.inspector-summary dd { margin-top: 4px; }
+
+.inspector-sections { overflow: hidden; border-radius: var(--radius-panel); padding: 4px; background: var(--surface); }
+
+.inspector-section { margin: 0; border-top: 0; border-radius: 0; background: transparent; }
+
+.inspector-section + .inspector-section { margin-top: 4px; }
+
+.inspector-section summary { min-height: 46px; padding: 0 10px; border-radius: var(--radius-control); background: transparent; box-shadow: none; }
+
+.inspector-section[open] summary, .inspector-section summary:hover { background: var(--surface-hover); box-shadow: none; }
+
+.inspector-records { display: grid; gap: 8px; padding: 4px 4px 8px; }
+
+.inspector-record > summary { padding: 10px 12px; background: var(--surface-raised); }
+
+.inspector-record[open] > summary { background: var(--surface-hover); }
+
+.inspector-record dl { padding: 2px 12px 10px; }
+
+.inspector-record dl > div { padding: 6px 0; }
+
+.inspector-raw { margin-top: 6px; border-radius: var(--radius-control); background: var(--surface-raised); }
+
+.inspector-raw > summary { padding: 9px 10px; }
+
+.inspector-raw pre { padding: 0 10px 10px; }
+
+.inspector-record-group { overflow: hidden; border-radius: var(--radius-control); background: var(--surface-raised); }
+
+.inspector-record-group > summary { display: flex; align-items: center; min-height: 38px; gap: 8px; padding: 0 10px; cursor: pointer; list-style: none; color: var(--muted); font-size: .75rem; font-weight: 600; }
+
+.inspector-record-group > summary::-webkit-details-marker { display: none; }
+
+.inspector-record-group > summary span:nth-child(2) { margin-left: auto; font: .75rem ui-monospace, monospace; }
+
+.inspector-record-group[open] > summary { background: var(--surface-hover); color: var(--text); }
+
+.inspector-record-group[open] > summary svg { transform: rotate(180deg); }
+
+.inspector-record-group > .inspector-records { padding: 4px; background: var(--surface); }
+
+.inspector-summary div:last-child { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; min-height: 42px; padding-block: 8px; }
+
+.inspector-summary div:last-child dd { margin: 0; }
+
+/* 顶栏只让会话标题承担主阅读权重，状态与图标共享固定操作基线。 */
+.topbar, .inspector header { min-height: 56px; border: 0; background: var(--chrome-surface); }
+
+/* 检查器先呈现语义标题，原始标识与数值留在展开详情中。 */
+.inspector-record > summary { font-family: inherit; font-size: .8125rem; font-weight: 600; line-height: 1.35; }
+
+.inspector-records { gap: 3px; padding: 3px 4px 6px; }
+
+.inspector-record > summary { min-height: 34px; padding: 8px 10px; border-radius: var(--radius-control); background: transparent; color: var(--muted); font-size: .75rem; font-weight: 600; }
+
+.inspector-record:hover > summary, .inspector-record[open] > summary { background: var(--surface-hover); color: var(--text); }
+
+.inspector-record[open] > summary { border-radius: var(--radius-control) var(--radius-control) 0 0; }
+
+.inspector-record dl { padding: 2px 10px 10px; border-radius: 0 0 var(--radius-control) var(--radius-control); background: var(--surface-hover); }
+
+.inspector-record dl > div { padding: 5px 0; }
+
+.inspector-record-group > .inspector-records { padding: 3px 4px 5px; }
+
+.inspector-summary dt { font-size: .75rem; font-weight: 500; }
+
+.inspector-summary dd { font-size: .875rem; font-weight: 500; }
+
+.inspector-record-group > summary { color: color-mix(in srgb, var(--text) 72%, var(--muted)); font-size: .8125rem; }
+
+.inspector-record > summary { color: color-mix(in srgb, var(--text) 72%, var(--muted)); font-size: .8125rem; font-weight: 500; }
+
+/* 检查器以连续阅读面呈现，只有原始 JSON 保留最深层的承载表面。 */
+.inspector-sections { overflow: visible; border: 0; border-radius: 0; padding: 0; background: transparent; }
+
+.inspector-section + .inspector-section { margin-top: 8px; }
+
+.inspector-section[open] > summary { background: var(--surface-hover); }
+
+.inspector-control-content { padding: 0 12px 12px; background: transparent; }
+
+.inspector-control-content > p { margin: 12px 0; color: var(--muted); line-height: 1.55; }
+
+.inspector-control-content .inspector-summary { margin: 0 0 8px; }
+
+.inspector-record-group { border: 0; border-radius: 0; background: transparent; }
+
+.inspector-record-group > summary { border-radius: var(--radius-control); background: transparent; }
+
+.inspector-record-group[open] > summary { background: var(--surface-hover); }
+
+.inspector-record-group > .inspector-records { padding: 3px 0 5px; background: transparent; }
+
+/* Final domain rules. */
+.inspector-loading-skeleton {
+  min-height: 0;
+  padding: 14px;
+}
+
+.inspector-skeleton-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.inspector-skeleton-summary > span,
+.inspector-skeleton-groups > span,
+.settings-skeleton-heading,
+.settings-skeleton-row > span {
+  display: block;
+  background: color-mix(in srgb, var(--surface-hover) 72%, transparent);
+}
+
+.inspector-skeleton-summary > span {
+  height: 52px;
+  border-radius: var(--radius-control);
+}
+
+.inspector-skeleton-groups {
+  display: grid;
+  gap: 6px;
+}
+
+.inspector-skeleton-groups > span {
+  height: 42px;
+  border-radius: var(--radius-control);
+}
+
+.inspector-summary {
+  gap: 6px;
+  margin: 0 0 18px;
+}
+
+.inspector-summary div {
+  border: 0;
+  border-radius: var(--radius-control);
+  padding: 10px 11px;
+  background: var(--surface-hover);
+}
+
+.inspector-section,
+.inspector-record-group,
+.inspector-record {
+  border: 0;
+  background: transparent;
+}
+
+.inspector-section + .inspector-section {
+  margin-top: 4px;
+}
+
+.inspector-section > summary {
+  min-height: 38px;
+  border-radius: var(--radius-control);
+  padding: 8px 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: .75rem;
+  font-weight: 500;
+}
+
+.inspector-section[open] > summary {
+  background: color-mix(in srgb, var(--surface-hover) 58%, transparent);
+  color: color-mix(in srgb, var(--text) 78%, var(--muted));
+}
+
+.inspector-records {
+  gap: 2px;
+  padding: 3px 2px 7px;
+  background: transparent;
+}
+
+.inspector-record > summary {
+  min-height: 34px;
+  border-radius: var(--radius-control);
+  padding: 8px 10px;
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 72%, var(--muted));
+  font-size: .8125rem;
+  font-weight: 500;
+}
+
+.inspector-section[open] .inspector-record:not([open]) > summary {
+  background: transparent;
+}
+
+.inspector-record:hover > summary,
+.inspector-record[open] > summary {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.inspector-record[open] > summary {
+  border-radius: var(--radius-control) var(--radius-control) 0 0;
+}
+
+.inspector-record dl {
+  padding: 2px 10px 10px;
+  border-radius: 0 0 var(--radius-control) var(--radius-control);
+  background: var(--surface-hover);
+}
+
+.inspector-raw {
+  margin: 4px 8px 10px;
+  border-radius: var(--radius-control);
+  background: var(--surface-deep);
+}
+
+.inspector-raw > summary {
+  background: transparent;
+}
+
+.inspector-raw pre,
+.inspector-section .inspector-raw pre {
+  background: var(--surface-deep);
+}

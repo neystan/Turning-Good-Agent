@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir \
 FROM python-base AS development
 
 COPY Turning-Good-Agent/ ./Turning-Good-Agent/
+COPY .skills/ ./.skills/
 
 FROM node:22-alpine AS frontend-build
 
@@ -29,6 +30,7 @@ RUN npm run build
 FROM python-base AS runtime
 
 COPY Turning-Good-Agent/ ./Turning-Good-Agent/
+COPY .skills/ ./.skills/
 COPY --from=frontend-build /build/web/static ./web/static/
 
 EXPOSE 8000
