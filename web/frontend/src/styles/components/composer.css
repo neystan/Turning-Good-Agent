@@ -227,7 +227,7 @@
 
 .composer-editor {
   position: relative;
-  min-height: 50px;
+  min-height: 64px;
   max-height: 220px;
   padding: .75rem 1rem 0;
   overflow-wrap: anywhere;

@@ -140,6 +140,11 @@ export function Composer({ session, running, actionsEnabled, segments, autoAppro
     removeGuidance(neighbor.id, text.id);
   };
 
+  const onPaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    insertPlainText(event.currentTarget, event.clipboardData.getData("text/plain").replaceAll("\r\n", "\n"));
+  };
+
   const selectSlash = (entry: CommandEntry) => {
     const caret = currentCaret();
     if (!caret) return;
@@ -167,7 +172,26 @@ export function Composer({ session, running, actionsEnabled, segments, autoAppro
   const connectionHint = actionsEnabled ? undefined : "正在重连，恢复后可操作";
   const empty = segments.every((segment) => segment.type === "text" && !segment.text);
   const guidance = segments.filter((segment): segment is Extract<ComposerSegment, { type: "guidance" }> => segment.type === "guidance");
-  return <footer ref={rootRef} className="composer"><SlashCommandMenu slashToken={slashToken} onSelect={selectSlash} /><div className="composer-input">{empty && <span className="composer-placeholder" aria-hidden="true">{running ? "补充当前任务方向…" : "发送消息…"}</span>}<div ref={editorRef} className="composer-editor" aria-label="消息内容" aria-multiline="true" aria-describedby={guidance.length ? "composer-selected-guidance" : undefined} contentEditable suppressContentEditableWarning role="textbox" tabIndex={0} onInput={(event) => { const next = readSegments(); const text = event.currentTarget.innerText.replaceAll(ZERO_WIDTH_SPACE, ""); const textSegment = [...next].reverse().find((segment) => segment.type === "text"); if (textSegment?.type === "text") latestCaret.current = { segmentId: textSegment.id, offset: textSegment.text.length }; internalEdit.current = true; onSegmentsChange(next); setSlashToken(text.match(/(?:^|\s)(\/\S*)$/)?.[1] || null); }} onKeyUp={refreshSlashToken} onClick={refreshSlashToken} onScroll={updateScrollThumb} onKeyDown={onKeyDown} />{guidance.length > 0 && <span id="composer-selected-guidance" className="sr-only">{guidance.map((segment) => `${segment.entry.kind === "mcp" ? "MCP" : "Skill"}：${segment.entry.label}`).join("，")}</span>}{scrollThumb && <span className="composer-scroll-thumb" style={{ height: scrollThumb.height, transform: `translateY(${scrollThumb.top}px)` }} />}</div><div className="composer-toolbar"><PermissionMenu autoApprove={autoApprove} onChange={onAutoApproveChange} /><span className="composer-spacer" /><ContextWindowIndicator context={contextWindow} />{running ? <button className="composer-action is-stop" type="button" aria-label="停止任务" title={connectionHint} disabled={!actionsEnabled} onClick={onStop}><Square size={9} fill="currentColor" strokeWidth={0} aria-hidden="true" /></button> : <button className="composer-action is-send" type="button" aria-label="发送消息" title={connectionHint} disabled={!actionsEnabled} onClick={onSend}><ArrowUp size={13} strokeWidth={2.5} aria-hidden="true" /></button>}</div></footer>;
+  return <footer ref={rootRef} className="composer"><SlashCommandMenu slashToken={slashToken} onSelect={selectSlash} /><div className="composer-input">{empty && <span className="composer-placeholder" aria-hidden="true">{running ? "补充当前任务方向…" : "发送消息…"}</span>}<div ref={editorRef} className="composer-editor" aria-label="消息内容" aria-multiline="true" aria-describedby={guidance.length ? "composer-selected-guidance" : undefined} contentEditable suppressContentEditableWarning role="textbox" tabIndex={0} onInput={(event) => { const next = readSegments(); const text = event.currentTarget.innerText.replaceAll(ZERO_WIDTH_SPACE, ""); const textSegment = [...next].reverse().find((segment) => segment.type === "text"); if (textSegment?.type === "text") latestCaret.current = { segmentId: textSegment.id, offset: textSegment.text.length }; internalEdit.current = true; onSegmentsChange(next); setSlashToken(text.match(/(?:^|\s)(\/\S*)$/)?.[1] || null); }} onKeyUp={refreshSlashToken} onClick={refreshSlashToken} onScroll={updateScrollThumb} onKeyDown={onKeyDown} onPaste={onPaste} />{guidance.length > 0 && <span id="composer-selected-guidance" className="sr-only">{guidance.map((segment) => `${segment.entry.kind === "mcp" ? "MCP" : "Skill"}：${segment.entry.label}`).join("，")}</span>}{scrollThumb && <span className="composer-scroll-thumb" style={{ height: scrollThumb.height, transform: `translateY(${scrollThumb.top}px)` }} />}</div><div className="composer-toolbar"><PermissionMenu autoApprove={autoApprove} onChange={onAutoApproveChange} /><span className="composer-spacer" /><ContextWindowIndicator context={contextWindow} />{running ? <button className="composer-action is-stop" type="button" aria-label="停止任务" title={connectionHint} disabled={!actionsEnabled} onClick={onStop}><Square size={9} fill="currentColor" strokeWidth={0} aria-hidden="true" /></button> : <button className="composer-action is-send" type="button" aria-label="发送消息" title={connectionHint} disabled={!actionsEnabled} onClick={onSend}><ArrowUp size={13} strokeWidth={2.5} aria-hidden="true" /></button>}</div></footer>;
+}
+
+function insertPlainText(editor: HTMLElement, text: string): void {
+  const selection = window.getSelection();
+  const range = selection?.rangeCount && selection.anchorNode && editor.contains(selection.anchorNode)
+    ? selection.getRangeAt(0)
+    : document.createRange();
+  if (!selection?.rangeCount || !selection.anchorNode || !editor.contains(selection.anchorNode)) {
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+  range.deleteContents();
+  const textNode = document.createTextNode(text);
+  range.insertNode(textNode);
+  range.setStartAfter(textNode);
+  range.collapse(true);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  editor.dispatchEvent(new InputEvent("input", { bubbles: true, data: text, inputType: "insertFromPaste" }));
 }
 
 function renderEditorSegments(editor: HTMLElement, segments: ComposerSegment[]): void {

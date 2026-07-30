@@ -1,8 +1,10 @@
-# Turning-Good-Agent Phase 6 Web Channel 与会话观测实施设计
+# Turning-Good-Agent Phase 6 Web Channel、控制面与会话观测实施设计
 
-状态：已实现。本文是 Phase 6 的唯一权威设计、实施边界、完成记录与人工验收标准，替代旧版只读 Dashboard 方案。
+状态：已实现。本文是 Phase 6 的唯一权威设计、实施边界、完成记录与验收标准，替代旧版只读 Dashboard 方案，并合并 `docs/superpowers/` 下 Web 工作台、控制面、Slash、检查器和桌面视觉收口文档中的当前有效事实。历史 spec/plan 仅保留决策与实施过程；与本文或当前代码冲突时，以本文和当前实现为准。
 
-2026-07-27 工作台视觉系统收口：WebSocket 动作使用 `client_action_id` 关联乐观消息、错误与有限受理回执，前端以历史加载版本闸门、有限退避重连和 `after_event_id` 回放保持会话稳定；会话栏仅按置顶优先排序，三点操作、搜索、重命名和删除确认由 Radix Primitive 处理定位、键盘、外部关闭与焦点回归。工作台采用石墨深浅主题，聊天区与侧栏独立滚动，短 user 消息按内容宽度显示。常态区域以背景层级、留白和克制阴影区分，可点击控件使用统一圆角 token。桌面检查器打开时，中央会话区通过 Grid 为右侧检查器预留宽度，消息列与 Composer 在剩余区域重新布局；平板和移动端改为全屏覆盖阅读。真实事件按 `request_id` 显示在同轮 user 与 assistant 消息之间的可折叠“思考中”活动簇，运行中 guidance 立即显示为 user 消息并由既有 `task.status` 标记“已引导”。输入区显示“默认权限 / 完全访问”菜单，以及只读上下文占用环；后者从最近一次 `SAVE.metadata.current_context_tokens` 与 `runtime.max_context_tokens` 读取，并在悬浮或键盘聚焦时显示读数。底层仍使用全局 `tool_permissions.auto_approve_tools`；检查器先展示累计 token、当前上下文、压缩次数与工具失败，再以结构化条目按需展开原始记录。此收口不新增 JSONL，也不新增 `guidance.consumed`，且“思考中”不表示或暴露模型内部思维链。浏览器视觉体验以本机人工操作验收为准，不将 Playwright 或 Chromium 作为 Phase 6 的验收前置条件。
+2026-07-30 控制面与桌面前端收口：设置已成为独立 `#settings` 工作面，支持字段级配置编辑、候选 LLM 测试、字段错误、Tool 审批规则和“应用配置”；有效配置写入 desired revision，并在所有 Web turn 空闲后由 `RuntimeSupervisor` 原子替换 Runtime。Composer 的 Slash 面板由后端 Command Catalog 驱动，可在空白边界后的任意 `/` 位置触发；`/context`、`/tools` 直接打开会话检查器，Skill 与已连接 MCP 以可删除、可移动的内联语义片段进入输入内容，发送时仍使用服务端原始 `insert_text`。加载态使用与最终参数行、检查器摘要和分组几何一致的骨架；样式已按 Sidebar、Timeline、Composer、Slash、Inspector、Settings、Overlay 和 Icons 分域，`components.css` 仅保留跨域共享规则。桌面视觉验收范围为 1024、1280、1440 与 1920px；本轮不宣称新增移动端视觉改造。
+
+2026-07-27 工作台视觉系统收口：WebSocket 动作使用 `client_action_id` 关联乐观消息、错误与有限受理回执，前端以历史加载版本闸门、有限退避重连和 `after_event_id` 回放保持会话稳定；会话栏仅按置顶优先排序，三点操作、搜索、重命名和删除确认由 Radix Primitive 处理定位、键盘、外部关闭与焦点回归。工作台采用石墨深浅主题，聊天区与侧栏独立滚动，短 user 消息按内容宽度显示。常态区域以背景层级、留白和克制阴影区分，可点击控件使用统一圆角 token。桌面检查器打开时，中央会话区通过 Grid 为右侧检查器预留宽度，消息列与 Composer 在剩余区域重新布局；平板和移动端改为全屏覆盖阅读。真实事件按 `request_id` 显示在同轮 user 与 assistant 消息之间的可折叠“思考中”活动簇，运行中 guidance 立即显示为 user 消息并由既有 `task.status` 标记“已引导”。输入区显示“默认权限 / 完全访问”菜单，以及只读上下文占用环；后者从最近一次 `SAVE.metadata.current_context_tokens` 与 `runtime.max_context_tokens` 读取，并在悬浮或键盘聚焦时显示读数。底层仍使用全局 `tool_permissions.auto_approve_tools`；检查器先展示累计 token、当前上下文、压缩次数与工具失败，再以结构化条目按需展开原始记录。此收口不新增 JSONL，也不新增 `guidance.consumed`，且“思考中”不表示或暴露模型内部思维链。浏览器视觉体验以真实页面、真实交互和截图为判断依据；Playwright 用于稳定复现与回归，但不以单一像素断言替代人工视觉判断。
 
 ## 1. 目标与定位
 
@@ -25,25 +27,30 @@ Web 是 Turning-Good-Agent 的一个 Channel Host，不是第二个 Runtime，�
 - 会话检查器：trace、工具调用、token、上下文和压缩统计。
 - Composer 只读上下文占用环与悬浮读数，复用最近一次保存后的真实上下文统计。
 - 全局工具自动批准按钮，持久化到 `settings.local.json`。
+- 独立设置工作面：字段级配置修改、API Key 替换/清除意图、候选 LLM 连通性测试、字段级错误和一次应用。
+- desired/active revision、全局空闲 Runtime 重载、失败时保留旧 Runtime，以及仅通过 REST 轮询读取重载状态。
+- 后端唯一真相的 Command Catalog、Tool Catalog、Context/Tool Call/MCP Read Model。
+- Composer Slash 命令面板、键盘选择、检查器直读动作，以及 Skill/MCP 的内联可编辑选择片段。
 - 默认深色与可持久化浅色主题。
 
 ### 2.2 明确不实现
 
 - 登录、账号、用户隔离、多租户、云同步、远程部署或公网暴露。
-- Web Provider/API Key、模型、MCP Server、Skill 和运行参数设置页。
+- Web 修改 Provider 类型、MCP Server 连接、部署、身份、存储路径或 Web host/port/并发/事件缓冲配置。
+- 配置档案、导入/导出、配置历史、跨刷新保留未应用编辑，或任意原始 JSON 配置编辑。
 - 文件上传、图片生成、多模态附件、复杂工具日志、文件 diff。
 - 会话分类、标签、手动排序、LLM 自动命名、自动归档。
 - 流式 delta 的 JSONL 落盘、重复监控 JSONL、跨服务重启恢复在途任务。
 - 微信、飞书 Channel；Phase 9 后续只负责办公软件 Channel。
 
-未来将单独设计 Web 设置中心。届时允许本地编辑 LLM、模型、密钥和 MCP 配置，但必须先定义密钥保护、配置校验、Runtime 热更新与 MCP 生命周期，不在 Phase 6 提供半成品入口。
+MCP Server 仅提供脱敏只读状态和 Catalog 检查；连接参数继续由本地配置文件管理。当前控制面不新增 Provider，也不允许浏览器修改任何未列入 allowlist 的字段。
 
 ## 3. 安全与部署边界
 
 - 这是完全本机、单用户、数据不上云的个人 Agent。
 - 默认监听 `127.0.0.1`；不提供公网启动说明、认证或跨域开放策略。
 - Web 不绕过 `security.py`、`ToolExecutor` 二次预检、Tool 权限 Hook 或 MCP 审批规则。
-- FastAPI 不读取或向浏览器返回 LLM API Key、MCP headers、MCP env 等私密配置。
+- FastAPI 控制服务可读取本机配置完成合并与验证，但绝不向浏览器返回 LLM API Key、MCP headers、MCP env、命令参数或连接凭据；Key 只允许 write-only 替换或显式清除，读取只返回 `api_key_configured`。
 - assistant 消息只渲染安全 Markdown，禁止原始 HTML。
 - 生产前端静态资源、字体和图标均从本地服务，不请求外部字体、分析或 CDN。
 
@@ -90,14 +97,14 @@ Web 是 Turning-Good-Agent 的一个 Channel Host，不是第二个 Runtime，�
 - 已经推送到浏览器的 assistant 文本以 `incomplete=true`、`outcome=cancelled` 保存；用户可看到任务停在何处。
 - 用户可以在终态后重新发送或编辑未注入 guidance 草稿，开始新任务。
 
-### 4.4 工具审批与完全访问
+### 4.4 双层工具权限
 
 - 审批卡只展示工具名与标准化参数，提供“允许一次”和“拒绝”。
-- 输入区左下角的“默认权限 / 完全访问”菜单默认处于默认权限；完全访问影响所有会话的后续审批点。
-- 全局状态保存到 `settings.local.json` 的 `tool_permissions.auto_approve_tools`，运行中策略立即更新。
+- 输入区左下角的“默认权限 / 完全访问”菜单控制 `tool_permissions.auto_approve_tools`，影响所有会话的后续审批点并立即更新，不等待 Runtime 重载。
+- 设置页的“工具权限”仅修改 `approval_required_tools` 成员关系：可见 Tool 来自当前 Runtime Tool Catalog；断线 MCP 的既有规则保留但只允许移除。修改必须点击“应用配置”，并在全局空闲后随 Runtime 重载生效。
 - 已经弹出的审批卡不因打开全局开关而自动通过。
 - 删除 `Session.auto_approve_tools`，CLI `/approve on|off` 也修改同一个全局策略，避免双重真相。
-- 自动批准不绕过任何硬安全检查。
+- 两层策略都不绕过 `security.py`、Tool Permission Hook 或 `ToolExecutor` 二次预检。
 
 ### 4.5 会话管理
 
@@ -118,14 +125,26 @@ Web 是 Turning-Good-Agent 的一个 Channel Host，不是第二个 Runtime，�
 - 运行中、等待审批和 `stopping` 会话禁止归档和删除；置顶、重命名不受影响。
 - 删除要求二次确认，直接删除 session 整个目录；Web 不复用 `/clear`、`/exit` 等 CLI 交互。
 
+### 4.6 设置、应用与 Slash
+
+1. 用户从侧栏左下角进入 `#settings`；聊天树卸载，设置成为独立主工作面，返回时恢复原会话路径。
+2. 未应用配置只存在于当前 React 组件。返回聊天、刷新或离开页面会丢弃编辑；只有点击“应用配置”才提交局部字段与 Tool add/remove 差异。
+3. 后端从最新保存配置合并请求，复用 `config/validate.py` 校验完整候选。HTTP 422 以 dotted path `field_errors` 回到对应字段；失败不写文件、不改变 Runtime。
+4. 成功保存后状态可能是 `active`、`pending`、`applying` 或 `failed`。前端没有控制面 WebSocket 事件，只在 `pending/applying` 时以单一、可取消、带版本闸门的轮询读取 `GET /api/control/config`，终态、请求失败、新 Apply 或离开设置页时停止。
+5. Composer 在光标前方为行首或空白、当前 token 以 `/` 开始时打开 Slash 面板。没有匹配项时面板完整消失；Arrow Up/Down 循环选择并同步滚动，Enter 选择，Escape 或点击 Composer 外关闭但保留输入。
+6. `/context` 与 `/tools` 删除当前 Slash token、保留其余输入，并直接打开当前会话检查器；关闭检查器、刷新或切换会话会清除临时控制面阅读状态，重新打开恢复常规会话观测。
+7. Skill 与已连接 MCP 使用不同专用图标和颜色，以一个不可拆分、可删除、可移动的内联语义片段替换 Slash token。它在视觉上与正文共用基线；发送给 Runtime 时仍展开为 Command Catalog 返回的原始 `insert_text`，不创建额外元数据或执行语义。
+
 ## 5. 系统架构
 
 ```text
 React + TypeScript + Vite
-  ├─ REST: 列表、历史、会话管理、持久化观测读取
+  ├─ REST: 会话、观测、配置、Catalog 与脱敏 Read Model
   └─ WebSocket: 发送、guidance、Stop、审批、实时事件、重连
           ↓
 FastAPI Web Host
+  ├─ WebConfigControlService（合并、校验、脱敏、revision、写入）
+  ├─ RuntimeSupervisor（空闲闸门、替换、失败回退）
   ├─ WebSessionCoordinator
   │   ├─ 每 session 串行 worker / guidance queue / Stop / 审批 future
   │   ├─ 全局最多 6 个运行槽位与等待队列
@@ -144,8 +163,10 @@ AsyncMessageBus.outbound -> SessionEventHub -> WebSocket
 ### 5.1 Web Host 的边界
 
 - FastAPI 只做协议适配、连接管理、会话调度与读取模型；不重写 Context、Tool、Memory 或 MCP 逻辑。
+- `config/settings.py` 只负责解析、默认值与数据模型；`config/validate.py` 是 CLI、Web、测试和 Runtime 重载共享的唯一配置规则与字段错误来源。
+- `web/backend/config_control.py` 只拥有 Web 配置应用流程；`web/backend/runtime_supervisor.py` 只拥有 Web Runtime 生命周期；`web/backend/read_models.py` 只从当前 Runtime manager 与既有 Session 文件构建脱敏读取模型。
 - `WebSessionCoordinator` 是 Web 唯一的并发控制位置，不能在 React 或 `AgentRuntime` 外另建 session 锁。
-- `runtime.start()` 在 FastAPI lifespan startup 仅调用一次，`runtime.close()` 在 shutdown 仅调用一次。
+- `RuntimeSupervisor` 是 Web 唯一允许发布 replacement Runtime 的位置；replacement 完整启动后才对 Coordinator 可见，失败时旧 Runtime 保持可用，新 turn 不会进入半替换实例。
 - CLI 继续使用当前路径；本阶段不为表面统一重写 CLI。
 
 ### 5.2 MessageBus 与 Channel Adapter
@@ -193,15 +214,29 @@ GET    /api/sessions/{session_id}/observability
 GET    /api/sessions/{session_id}/context-window
 PATCH  /api/sessions/{session_id}             # title / pinned / archived
 DELETE /api/sessions/{session_id}
-GET    /api/settings/ui                       # 仅主题与自动批准状态
-PATCH  /api/settings/ui                       # 仅主题与自动批准状态
+GET    /api/settings/ui                       # 即时全局 auto_approve_tools
+PATCH  /api/settings/ui                       # 即时全局 auto_approve_tools
+GET    /api/control/config
+POST   /api/control/config/apply
+POST   /api/control/config/test-llm
+GET    /api/control/commands
+GET    /api/control/tools
+GET    /api/control/sessions/{session_id}/context
+GET    /api/control/sessions/{session_id}/tool-calls?limit=&cursor=
+GET    /api/control/mcp/servers
+GET    /api/control/mcp/servers/{name}
 ```
 
 - `observability` 聚合既有 `session.json`、`turn_traces.jsonl`、`true_token_usage.jsonl` 和 `tool_calls.jsonl`，不创建新文件。
 - `context-window` 只读取最近一次 `SAVE.metadata.current_context_tokens`，并返回当前 `runtime.max_context_tokens`；没有已保存轮次时返回中性零值。
 - `DELETE` 仅接受终态会话；活动会话返回明确冲突错误。
 - `PATCH archived=true` 仅接受终态会话；直接打开归档 URL 可只读，发送前要求恢复。
-- `settings/ui` 绝不返回私密 LLM/MCP 字段。
+- `settings/ui` 绝不返回私密 LLM/MCP 字段，且不参与延迟 Config Apply。
+- `control/config` 只返回 allowlist 内的 desired/active 脱敏配置、revision、状态和安全错误；`apply` 只接收变更字段和 Tool add/remove，不接受未知路径或任意 JSON。
+- `test-llm` 对当前浏览器候选 LLM 字段执行最小无 Tool 请求，不写配置、Session、trace 或 token 账本；Provider 失败返回脱敏 502。
+- `commands` 每次面板打开时从 active Runtime 读取 `/context`、`/tools`、有效 Skill 与已连接 MCP；不包含 `/help`、`/history`、`/approve`、`/clear`、`/new`、`/exit` 或抽象 `/skills`、`/mcp`。
+- `tools` 返回 active Runtime 当前注册 Tool 与有效审批状态；不可用既有规则仅列入 `unavailable_approval_required`。
+- Context Read Model 不返回 system prompt、profile memory、Skill body、MCP attachment 或 Tool schema body；Tool Calls 只分页读取 `tool_calls.jsonl`，cursor 固定首屏快照边界；MCP Read Model 只返回脱敏状态、数量与已启用 Tool。
 
 ### 6.2 WebSocket 客户端动作
 
@@ -252,14 +287,16 @@ web/
       components/          # 会话栏、聊天、任务过程、审批、检查器
       features/            # sessions、chat、observability、settings
       state/               # 单一浏览器状态与事件 reducer
-      styles/              # token、布局、组件、主题
+      styles/              # token、布局与组件领域样式
+        components/        # Sidebar/Timeline/Composer/Slash/Inspector/Settings/Overlay/Icons
     package.json
     vite.config.ts
   static/                  # 前端构建产物，Git 忽略
 ```
 
-- 使用 React、TypeScript、Vite、`lucide-react`、安全 Markdown 渲染与本地打包字体。
+- 使用 React、TypeScript、Vite、`lucide-react`、安全 Markdown 渲染、本地字体与 Slash 专用本地 SVG 资产。
 - 不使用 Tailwind、通用 UI kit、外部 CDN 或远程字体。
+- `tokens.css` 只定义语义 token，`layout.css` 只定义应用骨架，组件领域文件维护各自规则；`components.css` 只容纳真实跨域共享样式，不以跨文件覆盖继续累积历史债务。
 - FastAPI 在生产模式托管 `web/static/`；开发模式由 Vite 提供热更新并代理 API/WebSocket。
 
 ### 7.2 信息架构
@@ -280,6 +317,7 @@ web/
 - 中栏是唯一主工作面：聊天、任务过程和输入。
 - 右侧检查器默认关闭；桌面端打开时作为中央 Grid 的右列占用响应式宽度，关闭时收回该列；窄屏改为覆盖阅读。会话条目悬停区和当前标题各有图标入口。
 - 窄屏将左栏和检查器切换为覆盖层，聊天和输入仍保持可用。
+- 设置页通过 Hash 切换为独立工作面：左侧导航使用独立背景色面，右侧编辑列在扣除导航列后的剩余空间内严格居中，Apply 栏与编辑列同宽、同轴。
 
 会话操作由紧凑图标触发器打开，并保留可访问名称；二级浮层以图标加文字展示置顶、重命名、归档/恢复和删除，不显示额外鼠标悬浮说明。检查器的累计指标与分类组采用连续信息面，只有展开的单条记录与原始 JSON 进入更深的圆角层级，避免观测面板成为卡片堆叠。
 
@@ -297,6 +335,8 @@ web/
 - 运行中输入保留可用，发送后变为 guidance；未注入 guidance 在 Stop 后成为可编辑草稿。
 - Stop 使用独立图标按钮，绝不绑定 `Escape`。
 - “默认权限 / 完全访问”菜单位于输入区左下角；完全访问状态明确可见。
+- Composer 默认预留两行文本高度，第三行后再向上扩展，发送/Stop、权限和上下文读数的工具栏基线不随输入或运行状态跳动。
+- `contentEditable` 粘贴只接受 `text/plain`，保留换行与光标位置，禁止继承外部颜色、背景、边框、字体或内联样式。
 
 ### 7.5 视觉系统
 
@@ -305,9 +345,9 @@ web/
 - 默认深色，主题切换保存为浏览器本地偏好；浅色与深色分别校验，同一语义使用同一套 Token。
 - 使用中性石墨灰阶作为常态表面；蓝色仅表示连接或运行，绿色表示完成，琥珀表示待审批，橙红或红色仅用于完全访问、失败、停止和删除。
 - CSS 定义三档基础圆角 token：紧凑控件 `14px`、面板 `18px`、图标与短操作胶囊 `999px`。新增主要组件优先复用这些 token；现有细节样式保留必要的局部圆角值。
-- 常态区域优先通过背景层级、留白和克制阴影区分；细边框仅用于输入、代码和高风险操作。
+- 常态区域、输入、点击、选中和展开状态通过背景层级、留白和克制阴影区分，不使用细边框或蓝色描边光晕；代码、JSON 和危险操作也优先使用实体背景语义。
 - 阴影只表达可操作性、浮层层级和当前命中元素。父容器、子按钮和图标不得因一次悬停产生叠加阴影。
-- 所有图标使用 `lucide-react`。不显示鼠标悬浮说明文字；图标仍保留可访问名称、键盘焦点和正确焦点顺序。
+- 系统操作图标使用 `lucide-react`，Slash 的 context/tools/Skill/MCP 使用项目内四枚专用 SVG：统一 24×24 viewBox、`currentColor`、1.9 圆角线宽和透明背景，在 16–18px 槽位显示；所有图标统一光学框、尺寸、颜色和垂直基线。Skill/MCP 保持来源区分，但视觉重量与系统图标一致。
 - 不使用浏览器原生确认框、选择框、滚动条或突兀默认焦点样式；使用产品内的 Radix 菜单、对话框、确认框与低对比度圆角滚动滑块。
 - 动效必须反映真实状态和布局变化。侧栏、检查器、弹层和折叠区过渡尺寸、位置或可见性；`prefers-reduced-motion` 下取消或简化动效。
 
@@ -362,6 +402,13 @@ web/
 - 检查器关闭时不占桌面列；打开时中央对话列与 Composer 在剩余空间内同步居中。摘要、分类、轮次和 Trace 记录按连续阅读层级组织，单条详情与原始 JSON 按需展开。
 - 当前桌面验收范围不包含新的移动端设计改造；既有窄屏覆盖层行为保留，但不作为本轮视觉优化的结论。
 
+#### 配置与读取控制面
+
+- 设置页只暴露后端 allowlist 字段；每个标量独立编辑，非同字段并发修改从最新文件合并，同字段以最后成功请求为准。未点击“应用配置”不会保存。
+- 配置候选由共享 validator 完整校验，成功后写 desired revision；空闲时 replacement Runtime 启动、发布并关闭旧实例，失败时保留旧 Runtime。Docker 单文件绑定挂载若拒绝 `os.replace`，使用 flush/fsync 的同步写入回退，仍以 `desired_revision == active_revision` 验证生效。
+- Slash 命令与 Tool 权限都由 active Runtime Catalog 驱动。前端不复制 Runtime 命令、Skill、MCP 或 Tool 名称规则；检查器读动作不发送聊天消息，也不写 Session 文件。
+- Settings 与 Inspector 的加载骨架复刻最终布局几何，不使用转圈动画；普通弹窗、输入与按钮不依赖细描边，危险删除操作保留实体危险色。
+
 #### 本机部署与开发
 
 - 生产入口为根目录 `compose.yaml`：多阶段构建先编译 Vite/React，再以 Python/FastAPI 运行静态 Web；宿主机仅映射 `127.0.0.1:8000`，会话使用命名卷 `/app/.sessions` 持久化，`settings.local.json` 以可写绑定挂载提供本地配置且不进入镜像或 Git。
@@ -372,6 +419,7 @@ web/
 
 - 前端 `pnpm run build` 通过；`web/frontend/tests/workbench_visual.spec.ts` 覆盖空状态与 Composer 间距、浅色侧栏/工作区分层、三个起步示例及深色输入表面，当前为 4 项通过。
 - 真实会话验收已检查高密度 Trace、检查器展开、深浅主题、搜索、会话操作菜单和浮层视口边界；`git diff --check` 无差异错误。
+- 2026-07-30 当前树重新验证：前端构建通过；默认 Playwright 为 `34 passed / 11 skipped`，显式启用 `TGA_REAL_PAGE=1` 后 11 项真实页面测试全部通过，因此 45 个浏览器场景均有通过记录；Python 为 `11 passed`，完整 `compileall` 与 CLI `/exit` 冒烟通过。
 - 本阶段继续不实现自动 LLM 会话标题、会话列表虚拟化、移动端视觉重做或任何模型 reasoning 展示。
 
 ## 8. 持久化、观测与 Hook
@@ -388,6 +436,8 @@ web/
 
 Web 只读取或通过既有 Store 写入这些事实，不新建 `web_events.jsonl`、`monitor.jsonl` 或流式 delta 日志。
 
+配置控制面只写已有 `settings.local.json`，revision、重载状态和 Catalog 属于内存/读取模型，不写入 Session JSON/JSONL。Context、Tool Calls 与 MCP 检查器结果也不会进入聊天历史或观测账本。
+
 断线失败、重试中的旧消息隐藏、活动簇和 pending draft 都是浏览器标签页状态，不属于 Session 持久化事实。SAVE 的唯一可靠持久化边界不因 Web 重试而改变。
 
 ### 8.2 Hook 边界
@@ -399,7 +449,16 @@ Web 只读取或通过既有 Store 写入这些事实，不新建 `web_events.js
 
 ## 9. 配置
 
-新增集中配置：
+集中配置继续由 `settings.local.json` 管理。Web 控制面可编辑的 allowlist 为：
+
+- `llm`：`base_url`、`model`、timeout/retry、streaming，以及 write-only API Key 替换/清除；`provider` 只读为 `openai-compatible`。
+- `runtime`：工具轮数/数量、并行调用、turn timeout、上下文与工具结果 token 上限。
+- `memory`：压缩阈值与最近窗口 token。
+- `sessions.retention_days`。
+- `skills`：每轮加载数量与 token 限额。
+- `tool_permissions.approval_required_tools`：只通过 Tool Catalog add/remove。
+
+部署、身份、数据目录、Web 与 MCP 连接字段继续只允许本地文件管理。当前配置示例：
 
 ```json
 {
@@ -419,6 +478,7 @@ Web 只读取或通过既有 Store 写入这些事实，不新建 `web_events.js
 - `web.max_concurrent_sessions` 只限制正在执行 LLM/Tool 的 session；排队、等待审批和停止中不占运行槽位。
 - `event_buffer_size` 是每 session 的内存事件上限，不落盘。
 - 浏览器主题保存在浏览器本地存储，不写入 Agent 配置。
+- 未应用设置不写 `localStorage`、Session cache 或 URL；配置重载状态通过 REST 查询，不新增 WebSocket 事件。
 
 ## 10. 实施任务
 
@@ -456,9 +516,26 @@ Web 只读取或通过既有 Store 写入这些事实，不新建 `web_events.js
 
 - [x] 验证队列、持久化、静态托管和 WebSocket 首轮实时流；测试目录只作本地验证。
 - [x] 完成 React TypeScript 构建与关键交互冒烟。
-- [x] 浏览器视觉体验采用本机人工交互验收；不将 Playwright 或 Chromium 作为验收前置条件。
+- [x] 浏览器视觉体验采用本机真实页面、Playwright 实机流程与人工截图审查结合验收，不以静态 CSS 或单一像素位置作为质量结论。
 - [x] 依据现有前端设计约束完成实现后审查：使用深/浅主题语义 token、无 UI kit、无远程资产、可访问图标、移动端覆盖层与减少动效支持。
 - [x] 同步 README、架构文档、总 Spec、Phase 9 边界和文档索引。
+
+### Task 6：Web 控制面与读取模型
+
+- [x] 将配置规则集中到 `config/validate.py`，并由 CLI、Web Apply、测试与 Runtime bootstrap 复用字段错误。
+- [x] 实现 `WebConfigControlService` 的 allowlist 合并、密钥脱敏、完整候选校验、revision 与安全写入。
+- [x] 实现 `RuntimeSupervisor` 的全局空闲闸门、replacement readiness、原子发布和失败回退。
+- [x] 实现 Command/Tool Catalog、Context/Tool Call/MCP Read Model 与 REST 契约，不新增控制面 WebSocket 或观测文件。
+- [x] 实现独立 Settings Workspace、字段编辑、LLM 测试、Tool 审批差异、字段错误和可取消轮询。
+- [x] 实现 Slash Catalog、键盘选择、检查器直读动作与内联 Skill/MCP 语义片段。
+
+### Task 7：桌面视觉与可维护性收口
+
+- [x] 使用背景色面、留白和轻阴影统一顶栏、检查器、Slash、设置、弹窗与深浅主题层级，删除普通状态细描边。
+- [x] 设置与检查器加载态改为最终几何骨架；检查器改为摘要、分组、记录、原始 JSON 的连续阅读层级。
+- [x] 所有产品级滚动区复用 `ScrollArea` 自绘圆角滑块，隐藏原生三角按钮。
+- [x] CSS 按组件领域拆分，保留 token、layout 与跨域共享层的单一职责。
+- [x] Composer 保留两行稳定高度，纯文本粘贴不继承外部样式；Slash 无匹配残余、键盘滚动与关闭状态完成回归覆盖。
 
 ## 11. 验收标准
 
@@ -472,5 +549,7 @@ Web 只读取或通过既有 Store 写入这些事实，不新建 `web_events.js
 - 审批卡只显示工具名与标准化参数；全局自动批准策略跨会话生效，安全预检仍不可绕过。
 - 会话检查器准确展示既有持久化 trace、tool calls、真实 token、上下文与压缩数据，不新增重复 JSONL。
 - Composer 上下文圆环准确读取最近一次 SAVE 后的 `current_context_tokens` 与集中 `max_context_tokens`，没有已保存数据时保持中性状态。
-- 桌面与移动端的人工验收应确认无溢出、遮挡、不可操作控件或缺失焦点；主题、键盘、Markdown 与代码复制可用。
-- 所有新增类/函数有精简中文注释；`pytest -q`、前端构建、Python 编译、`git diff --check` 和 CLI/Web 冒烟通过。浏览器视觉体验不以 Playwright 作为验收标准。
+- 设置只提交已修改字段与 Tool 差异，422 错误贴近字段；`pending/applying` 只通过单轮询读取至 `active/failed`，旧 Runtime 在失败时继续可用。
+- Command Catalog 只包含 `/context`、`/tools`、有效 Skill 与已连接 MCP；检查器直读不发送消息，Skill/MCP 选择保持可编辑并按原始 `insert_text` 发送。
+- 桌面端 1024/1280/1440/1920px 应确认无溢出、遮挡、不可操作控件或缺失焦点；深浅主题、加载态、检查器展开、Slash、设置与弹窗可用。本轮不把新增移动端视觉重做列为验收结论。
+- 所有新增类/函数有精简中文注释；`pytest -q`、前端构建、Python 编译、Playwright、`git diff --check` 和 CLI/Web 冒烟通过。Playwright 提供行为与几何回归证据，最终视觉质量仍需结合真实页面审查。

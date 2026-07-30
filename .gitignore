@@ -11,3 +11,4 @@ SESSIONS_SPEC.md
 web/static/
 web/frontend/node_modules/
 web/frontend/*.tsbuildinfo
+web/frontend/test-results/

@@ -205,3 +205,13 @@
 :root[data-theme="light"] .settings-content .settings-field input {
   background: var(--surface-raised);
 }
+
+.tool-permission-copy {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+}
+
+.tool-permission-copy span {
+  text-align: right;
+}

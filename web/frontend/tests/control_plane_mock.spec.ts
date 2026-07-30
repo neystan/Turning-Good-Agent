@@ -414,6 +414,40 @@ test("composer placeholder stays outside the editable content flow", async ({ pa
   await expect(editor).not.toContainText("发送消息…");
 });
 
+test("composer reserves two text lines before growing upward", async ({ page }) => {
+  await page.goto(baseUrl);
+
+  const editor = page.getByLabel("消息内容");
+  const emptyHeight = (await editor.boundingBox())!.height;
+  await editor.fill("第一行\n第二行");
+  const twoLineHeight = (await editor.boundingBox())!.height;
+  await editor.fill("第一行\n第二行\n第三行");
+  const threeLineHeight = (await editor.boundingBox())!.height;
+
+  expect(Math.abs(twoLineHeight - emptyHeight)).toBeLessThanOrEqual(1);
+  expect(threeLineHeight).toBeGreaterThan(twoLineHeight);
+});
+
+test("composer strips rich clipboard styling and keeps plain text", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: baseUrl });
+  await page.goto(baseUrl);
+  await page.evaluate(async () => {
+    await navigator.clipboard.write([new ClipboardItem({
+      "text/plain": new Blob(["粘贴的两行内容\n保持纯文本"], { type: "text/plain" }),
+      "text/html": new Blob(["<span style=\"background:#fff;color:#000;border:2px solid #000\">粘贴的两行内容<br>保持纯文本</span>"], { type: "text/html" }),
+    })]);
+  });
+
+  const editor = page.getByLabel("消息内容");
+  await editor.focus();
+  await page.keyboard.press("Control+V");
+
+  await expect(editor).toContainText("粘贴的两行内容");
+  await expect(editor).toContainText("保持纯文本");
+  await expect(editor.locator("[style]")).toHaveCount(0);
+  await expect(editor.locator("br")).toHaveCount(0);
+});
+
 test("sent guidance keeps its raw instruction between surrounding text", async ({ page }) => {
   await page.addInitScript(() => {
     const sent: Array<Record<string, unknown>> = [];
