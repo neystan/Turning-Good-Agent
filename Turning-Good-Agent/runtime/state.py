@@ -217,12 +217,13 @@ async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
     )
     for guidance in ctx.consumed_guidance:
         await runtime.sessions.save_user_message(session_id, guidance, count_content_tokens(guidance))
-    await runtime.sessions.save_assistant_message(
-        session_id,
-        ctx.final_content,
-        count_content_tokens(ctx.final_content),
-        metadata={"incomplete": True, "outcome": "cancelled"} if ctx.cancelled else None,
-    )
+    if ctx.final_content or not ctx.cancelled:
+        await runtime.sessions.save_assistant_message(
+            session_id,
+            ctx.final_content,
+            count_content_tokens(ctx.final_content),
+            metadata={"incomplete": True, "outcome": "cancelled"} if ctx.cancelled else None,
+        )
     if ctx.session is not None:
         await runtime.sessions.store.update_summary(session_id, ctx.session.summary)
         await runtime.sessions.store.update_uncompacted_history(session_id, ctx.session.uncompacted_history)
@@ -289,19 +290,20 @@ def build_virtual_history(ctx: TurnContext) -> list[MessageRecord]:
             created_at=now,
             metadata={},
         ))
-    records.append(
-        MessageRecord(
-            id=str(uuid4()),
-            session_id=ctx.inbound.session_id,
-            role="assistant",
-            content=ctx.final_content,
-            name=None,
-            tool_call_id=None,
-            token_count=count_content_tokens(ctx.final_content),
-            created_at=now,
-            metadata={},
+    if ctx.final_content or not ctx.cancelled:
+        records.append(
+            MessageRecord(
+                id=str(uuid4()),
+                session_id=ctx.inbound.session_id,
+                role="assistant",
+                content=ctx.final_content,
+                name=None,
+                tool_call_id=None,
+                token_count=count_content_tokens(ctx.final_content),
+                created_at=now,
+                metadata={},
+            )
         )
-    )
     return records
 
 

@@ -109,7 +109,7 @@ class AgentRuntime:
             context_builder=ContextBuilder(),
             agent_loop=AgentLoop(
                 llm,
-                tools,
+                tools,  
                 settings.runtime,
                 settings.llm.streaming_enabled,
                 hooks=hooks,

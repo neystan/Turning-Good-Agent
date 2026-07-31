@@ -70,56 +70,72 @@ class AgentLoop:
         tool_records: list[dict[str, Any]] = []
         usage = LLMUsage()
         consumed_guidance: list[str] = []
+
+        def finish(final_content: str, *, cancelled: bool = False) -> AgentLoopResult:
+            return AgentLoopResult(
+                final_content=final_content,
+                messages=working,
+                tool_calls=tool_records,
+                usage=usage,
+                loaded_skill_names=attachments.skill_names,
+                loaded_skill_token_count=attachments.skill_tokens,
+                consumed_guidance=consumed_guidance,
+                cancelled=cancelled,
+            )
+
         for _ in range(self.runtime.max_tool_rounds):
             if await self._apply_turn_control(working, channel_adapter, consumed_guidance):
-                return AgentLoopResult("", working, tool_records, usage, attachments.skill_names, attachments.skill_tokens, consumed_guidance, True)
+                return finish("", cancelled=True)
             response = await self._complete(working, openai_tools, channel_adapter)
             usage = usage.add(response.usage)
             if not response.tool_calls:
-                return AgentLoopResult(
-                    response.content,
-                    working,
-                    tool_records,
-                    usage,
-                    attachments.skill_names,
-                    attachments.skill_tokens,
-                    consumed_guidance,
-                )
+                if channel_adapter.is_stop_requested():
+                    return finish(response.content, cancelled=True)
+                if not response.content.strip():
+                    raise RuntimeError("模型返回了空响应。")
+                return finish(response.content)
             calls = response.tool_calls[: self.runtime.max_tool_calls_per_round]
             working.append(self._assistant_tool_message(response.content, calls))
-            if await self._apply_turn_control(working, channel_adapter, consumed_guidance):
-                return AgentLoopResult(response.content, working, tool_records, usage, attachments.skill_names, attachments.skill_tokens, consumed_guidance, True)
-            records = await self.tool_call_runner.execute_calls(calls, channel_adapter, auto_approve_tools)
+            if channel_adapter.is_stop_requested():
+                return finish(response.content, cancelled=True)
+            records = await self.tool_call_runner.execute_calls(
+                calls,
+                channel_adapter,
+                auto_approve_tools,
+            )
+            tool_messages: list[dict[str, Any]] = []
+            pending_attachments: list[tuple[int, ToolCall, dict[str, Any], object | None]] = []
             for call, record in zip(calls, records, strict=True):
                 tool_records.append(record)
                 attachment = record.pop("context_attachment", None)
                 tool_message = self._tool_result_message(call, record)
-                attachment_error = attachments.check(attachment, record, [*working, tool_message])
+                pending_attachments.append((len(tool_messages), call, record, attachment))
+                tool_messages.append(tool_message)
+            working.extend(tool_messages)
+            tool_message_start = len(working) - len(tool_messages)
+            for message_index, call, record, attachment in pending_attachments:
+                attachment_error = attachments.check(attachment, record, working)
                 if attachment_error is not None:
                     record["error"] = attachment_error
                     record["content"] = f"本轮上下文附件被拒绝：{attachment_error}"
-                    tool_message = self._tool_result_message(call, record)
-                working.append(tool_message)
+                    working[tool_message_start + message_index] = self._tool_result_message(
+                        call,
+                        record,
+                    )
                 if attachment_error is None:
                     attachments.commit(attachment, record, working)
             if await self._apply_turn_control(working, channel_adapter, consumed_guidance):
-                return AgentLoopResult(response.content, working, tool_records, usage, attachments.skill_names, attachments.skill_tokens, consumed_guidance, True)
+                return finish(response.content, cancelled=True)
         working.append({"role": "system", "content": TOOL_ROUND_LIMIT_SUMMARY_PROMPT})
-        summary = await self._complete(working, [], channel_adapter)
+        summary = await self._complete(working, [], channel_adapter, emit_deltas=False)
         usage = usage.add(summary.usage)
+        if channel_adapter.is_stop_requested():
+            return finish("", cancelled=True)
         content = summary.content.strip()
         if summary.protocol_error or summary.tool_calls or not content:
             content = self._tool_round_limit_fallback(tool_records)
         await channel_adapter.on_delta(content)
-        return AgentLoopResult(
-            content,
-            working,
-            tool_records,
-            usage,
-            attachments.skill_names,
-            attachments.skill_tokens,
-            consumed_guidance,
-        )
+        return finish(content)
 
     async def _apply_turn_control(
         self,
@@ -128,11 +144,9 @@ class AgentLoop:
         consumed_guidance: list[str],
     ) -> bool:
         """在安全检查点追加引导或确认协作式停止。"""
-        is_stop_requested = getattr(channel_adapter, "is_stop_requested", None)
-        if callable(is_stop_requested) and is_stop_requested():
+        if channel_adapter.is_stop_requested():
             return True
-        consume_guidance = getattr(channel_adapter, "consume_guidance", None)
-        guidance = await consume_guidance() if callable(consume_guidance) else []
+        guidance = await channel_adapter.consume_guidance()
         for content in guidance:
             text = content.strip()
             if not text:
@@ -192,6 +206,7 @@ class AgentLoop:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         channel_adapter: ChannelAdapter,
+        emit_deltas: bool = True,
     ) -> LLMResponse:
         """按配置选择非流式或流式模型调用。"""
         if not self.streaming_enabled or not hasattr(self.llm, "stream"):
@@ -205,7 +220,8 @@ class AgentLoop:
             usage = usage.add(chunk.usage)
             if chunk.delta_text:
                 content_parts.append(chunk.delta_text)
-                await channel_adapter.on_delta(chunk.delta_text)
+                if emit_deltas:
+                    await channel_adapter.on_delta(chunk.delta_text)
             if chunk.tool_calls:
                 tool_calls = chunk.tool_calls
             if chunk.protocol_error:
