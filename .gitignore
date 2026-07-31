@@ -8,6 +8,10 @@ settings.local.json
 SESSIONS_SPEC.md
 .skills/.drafts/
 .skills/.staging/
+/.skills/
+/.skill/
+/docs/
+/tests/
 web/static/
 web/frontend/node_modules/
 web/frontend/*.tsbuildinfo
