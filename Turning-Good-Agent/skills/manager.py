@@ -91,6 +91,23 @@ class SkillManager:
         if name not in self._manifests:
             raise RuntimeError(f"Skill 发布后校验失败：{name}")
 
+    def list_drafts(self) -> list[str]:
+        """返回当前未发布 Draft 的稳定名称列表。"""
+        drafts = self.directory / ".drafts"
+        if not drafts.exists():
+            return []
+        return sorted(path.name for path in drafts.iterdir() if path.is_dir())
+
+    async def delete_draft(self, name: str) -> None:
+        """删除已确认的 Draft，拒绝路径穿越和正式 Skill 目录。"""
+        if Path(name).name != name or name in {"", ".", ".."}:
+            raise RuntimeError("Skill Draft 名称无效")
+        drafts = (self.directory / ".drafts").resolve()
+        target = (drafts / name).resolve()
+        if target.parent != drafts or not target.is_dir():
+            raise RuntimeError(f"Skill Draft 不存在：{name}")
+        shutil.rmtree(target)
+
     async def install(self, source: str, ref: str | None, skill_path: str | None) -> SkillManifest:
         """安装外部 Skill 并刷新内存 Catalog。"""
         manifest = await self.installer.install(source, ref, skill_path)

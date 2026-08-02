@@ -73,6 +73,8 @@ class AgentRuntime:
         self._mcp_started = False
         self._mcp_start_lock = asyncio.Lock()
         self._skills_started = False
+        self._activity_lock = asyncio.Lock()
+        self._active_turns = 0
 
     @classmethod
     def create_default(cls, settings: Settings, llm: LLMProvider) -> "AgentRuntime":
@@ -116,7 +118,7 @@ class AgentRuntime:
                 attachment_context_token_limit=settings.mcp.attachment_context_token_limit,
                 skills=settings.skills,
             ),
-            profile_memory=ProfileMemory(),
+            profile_memory=ProfileMemory(settings.data_dir, settings.proactive),
             proactive=ProactiveManager(),
             hooks=hooks,
             mcp=mcp,
@@ -124,6 +126,17 @@ class AgentRuntime:
         )
 
     async def run_turn(
+        self,
+        msg: InboundMessage,
+    ) -> OutboundMessage:
+        """执行一轮消息处理，并在整个排队/运行期间标记 Runtime 非空闲。"""
+        await self._begin_turn()
+        try:
+            return await self._run_turn(msg)
+        finally:
+            await self._end_turn()
+
+    async def _run_turn(
         self,
         msg: InboundMessage,
     ) -> OutboundMessage:
@@ -173,6 +186,20 @@ class AgentRuntime:
         else:
             await ctx.channel_adapter.on_completed(outbound.content)
         return outbound
+
+    def is_globally_idle(self) -> bool:
+        """返回是否没有排队或运行中的前台 turn。"""
+        return self._active_turns == 0
+
+    async def _begin_turn(self) -> None:
+        """标记 Runtime 开始处理。"""
+        async with self._activity_lock:
+            self._active_turns += 1
+
+    async def _end_turn(self) -> None:
+        """标记 Runtime 结束处理。"""
+        async with self._activity_lock:
+            self._active_turns = max(0, self._active_turns - 1)
 
     async def close(self) -> None:
         """关闭 Runtime 持有的 MCP 连接。"""

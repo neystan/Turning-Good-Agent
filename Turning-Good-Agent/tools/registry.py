@@ -75,7 +75,10 @@ class ToolRegistry:
             ]
         return self._schemas_cache
 
-    def openai_tools(self) -> list[dict[str, object]]:
+    def openai_tools(
+        self,
+        exclude_names: frozenset[str] = frozenset(),
+    ) -> list[dict[str, object]]:
         """返回 OpenAI-compatible tool schema。"""
         if self._openai_tools_cache is None:
             self._openai_tools_cache = [
@@ -89,4 +92,10 @@ class ToolRegistry:
                 }
                 for tool in self._sorted_tools()
             ]
-        return self._openai_tools_cache
+        if not exclude_names:
+            return self._openai_tools_cache
+        return [
+            schema
+            for schema in self._openai_tools_cache
+            if schema["function"]["name"] not in exclude_names
+        ]

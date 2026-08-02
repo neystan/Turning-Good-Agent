@@ -62,6 +62,25 @@ docker compose -f compose.dev.yaml up --build
 docker compose -f compose.dev.yaml down
 ```
 
+### 在 Docker 中运行 CLI
+
+可以直接创建一个一次性 CLI 容器：
+
+```powershell
+docker compose -f compose.dev.yaml run --rm -it --no-deps backend python -u -m Turning-Good-Agent chat --session main
+```
+
+`run` 每次都会创建临时容器；`--rm` 只删除容器，不删除 `sessions` 持久卷。容器内项目路径为 `/app/Turning-Good-Agent`，会话与主动能力数据保存在 `/app/.sessions`。不要在容器中使用未挂载的 `--data-dir .phase7-test`，否则临时容器删除后数据也会消失。
+
+开发时也可以启动并复用同一个后端容器，再在其中热启动 CLI：
+
+```powershell
+docker compose -f compose.dev.yaml up -d --build backend
+docker compose -f compose.dev.yaml exec -it backend python -u -m Turning-Good-Agent chat --session main
+```
+
+代码通过挂载目录实时生效；修改 Python 源码通常不需要重新构建。修改 `Dockerfile` 或 Python 依赖后，重新执行 `up -d --build backend`。不要使用 `docker compose down -v`，否则会删除会话和主动能力数据。
+
 普通源码改动不需要重建镜像。修改 Python 依赖或 `Dockerfile` 后，重新执行带 `--build` 的启动命令。修改 `package.json` 或 `package-lock.json` 后，先停止开发服务并删除前端依赖卷，再重新启动；这不会删除会话数据：
 
 ```powershell
@@ -103,6 +122,7 @@ WebSettings      本机 Web Host 的监听、并发和事件缓冲限制
 LLMSettings      LLM Provider 配置
 McpSettings      MCP Server 与附件限制配置
 SkillsSettings   本地 Skill Catalog 与当前轮加载限制
+ProactiveSettings CLI 主动能力、长期记忆与后台审阅限制
 ```
 
 短期记忆默认策略：
@@ -123,7 +143,13 @@ max_context_tokens = 300000
 cp settings.example.json settings.local.json
 ```
 
-然后修改其中的 `llm`、`memory`、`runtime`、`sessions` 配置。
+然后修改其中的 `llm`、`memory`、`runtime`、`sessions`、`proactive` 配置。
+
+`proactive` 默认启用，使用 `Asia/Shanghai` 时区、Breakbeat 每 60 分钟、Dream 每 24 小时、Skill 沉淀每天一次。`review_provider`、`review_api_key`、`review_base_url`、`review_model` 必须全空或全部填写；全空时复用主 LLM，完整填写时可以使用另一家兼容服务。
+
+`now` Tool 使用同一个 `proactive.timezone` 返回带 IANA 时区、UTC offset 和 UTC 对照的当前时间。Cron 的周期任务保存 cron 表达式，一次性任务保存确定性的本地 `run_at`（也可由 `delay_seconds` 计算）；修改全局时区后会重算未来触发时间。`delete_cron` 与 `delete_breakbeat` 都会硬删除目标及其全部历史记录，不保留软删除状态。
+
+Breakbeat 事项只保存 `todo`、可空 `deadline`、由代码填写的 `source_session_id`，状态仅为 `in_progress` 或 `completed`；用户可用 `complete_breakbeat` 明确完成。Dream 只进行单阶段审阅，并直接追加到全局 `memory/USER.md` 或 `memory/SOUL.md`，不保存 Evidence、中间 registry 或 revision。`list_incidents` 从规则产生的 durable 记录列出 `open`/`resolved` 异常，不调用 LLM。
 
 运行时数据默认保存在：
 
@@ -141,13 +167,44 @@ true_token_usage.jsonl
 tool_calls.jsonl
 ```
 
+Phase 7 还在同一 `data_dir` 下使用独立目录，绝不改写上述会话事实：
+
+```text
+.sessions/
+  memory/
+    USER.md
+    SOUL.md
+  proactive/
+    cron_jobs.json
+    cron_audit.jsonl
+    breakbeat_items.jsonl
+    breakbeat_state.json
+    dream_state.json
+    observations.jsonl
+    skill_evolution_state.json
+    incidents.jsonl
+    deliveries.jsonl
+    executions.jsonl
+```
+
+`USER.md` 与 `SOUL.md` 每轮完整注入，但总量受 16,000 tokens 限制。Cron、Breakbeat、Dream、Skill Draft 和 incident 的详细审计只写入 `proactive/`；不会进入 `messages.jsonl`、summary、trace、token 或 tool-call 文件。
+
+手动运行 `run_breakbeat` 或 `run_dream` 时必须选择本次范围：`scope="session"` 只审阅当前会话，`scope="global"` 审阅所有未归档会话。触发 Tool 的当前用户消息虽然尚未进入 `messages.jsonl`，仍会以同一个消息 ID 和时间临时加入本次审阅；正常 SAVE 后不会重复处理。后台周期运行固定使用全局范围。`read_profile_memory` 可直接读取当前 `USER.md` 与 `SOUL.md`；`run_dream` 会返回本次实际追加的 target/content，而不是只返回通用完成提示。
+
+CLI 主动结果在真正投递时绑定到当时最新的活动会话（包括 `/new` 后的新会话），但不会写入该会话的 `messages.jsonl`。Web 后台中心与 IM 主动投递只保留接口，本阶段尚未实现消费者。
+
+Phase 7.1 不自动迁移尚未发布的旧主动数据。若启动时提示“检测到旧版 Phase 7 主动数据”，请先备份，再只清理 `<data_dir>/proactive/` 后重启；不要删除 `<data_dir>/memory/`，其中的 `USER.md` 与 `SOUL.md` 不受旧主动数据清理影响。
+
+会话过期清理只删除含有效 `session.json` 且确实超过保留期的会话目录。`memory/`、`proactive/`、其他未知目录以及元数据损坏的目录均不会被清理逻辑删除，因此新开 CLI 会话不会再导致 Cron、Breakbeat 或画像丢失。
+
 会话生命周期规则：
 
 ```text
 1. /new 只切换到新会话，不落空会话目录
 2. /clear 会直接删除当前会话目录
 3. 会话默认保留 7 天，超期目录会在后续会话请求前被清理
-4. 会话元数据保存标题、置顶和归档状态；自动批准是 `settings.local.json` 中的全局策略，默认关闭
+4. 清理只处理含有效 session.json 的真实会话目录，不处理 proactive、memory 或未知目录
+5. 会话元数据保存标题、置顶和归档状态；自动批准是 `settings.local.json` 中的全局策略，默认关闭
 ```
 
 ## 整体架构
@@ -185,6 +242,10 @@ flowchart TD
     Save --> Trace[StateTrace]
     Save --> TokenUsage[true_token_usage.jsonl]
     Save --> Proactive[ProactiveManager]
+    Proactive --> ProactiveService[ProactiveService: tga chat only]
+    ProactiveService --> Background[bounded background executor]
+    Background --> Delivery[durable DeliveryGate]
+    Delivery --> Bus
 
     Respond --> Outbound[OutboundMessage]
     Outbound --> CLIOut[CLI Output]
@@ -205,18 +266,18 @@ CLI 输入
 runtime/      状态机、Runtime、AgentLoop
 sessions/     会话、消息、JSONL 持久化、会话锁
 context/      system prompt、summary、uncompacted history 组装和 token 预算
-memory/       短期记忆压缩骨架、长期偏好骨架、事件记忆骨架
+memory/       短期记忆压缩、USER.md/SOUL.md 长期记忆与完整注入
 tools/        工具抽象、注册、执行、当前轮附件、内置工具
 llm/          LLM Provider 抽象和 OpenAI-compatible 实现
 hooks/        会话工具权限、工具结果截断、跨 Channel 状态提示
 observability trace 和 token 记录
-proactive/    主动能力扩展入口
+proactive/    CLI 同进程 Cron、Breakbeat、Dream、Skill Draft、incident、投递与独立审计
 .skills/      项目根目录唯一的正式 Skill 与草稿目录
 ```
 
 ## 当前阶段
 
-项目当前已完成 Phase 3 Hooks、Phase 4 MCP Client、Phase 5 Skills，以及 Phase 6 本机 Web 工作台。
+项目当前已完成 Phase 3 Hooks、Phase 4 MCP Client、Phase 5 Skills、Phase 6 本机 Web 工作台，以及 Phase 7 CLI 主动能力与长期记忆。
 
 已完成：
 
@@ -238,6 +299,7 @@ ContextAttachment 仅进入当前 AgentLoop working messages
 MCP Client：stdio / Streamable HTTP、后台 Server Worker、Catalog、显式 enabled_tools、list_changed 刷新和连接级重试
 Skills：启动扫描全量元数据、`load_skill` 当前轮完整加载、草稿创建/发布与受审批外部安装
 Web：FastAPI + WebSocket、React 工作台、会话管理、运行中 guidance、Stop、审批与会话检查器
+Phase 7：单 Runtime 下的 Cron、Breakbeat、Dream、严格 Observation/Draft、系统 incident、全局空闲后投递和 USER/SOUL 完整注入
 请求失败错误回显
 可恢复 LLM 错误重试
 文件基础工具：list_dir / find_file / read_file / write_file / edit_file / grep

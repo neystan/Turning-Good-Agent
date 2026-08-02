@@ -5,6 +5,7 @@ class ProactiveManager:
     """管理主动能力处理器。"""
 
     def __init__(self) -> None:
+        """初始化对象状态。"""
         self.handlers: list[ProactiveHandler] = []
 
     def register(self, handler: ProactiveHandler) -> None:

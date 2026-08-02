@@ -25,9 +25,7 @@ class JsonlSessionStore:
     async def load_session(self, session_id: str) -> Session | None:
         """按 ID 加载最新会话记录。"""
         path = self._session_file(session_id)
-        if not path.exists():
-            return None
-        return self._dict_to_session(json.loads(path.read_text(encoding="utf-8")))
+        return self._read_session_file(path)
 
     async def create_session(self, session_id: str, user_id: str, channel: str) -> Session:
         """创建新会话并写入独立目录。"""
@@ -53,14 +51,12 @@ class JsonlSessionStore:
         for session_dir in self._all_session_dirs():
             session_file = session_dir / "session.json"
             if not session_file.exists():
-                shutil.rmtree(session_dir)
-                removed += 1
                 continue
-            payload = json.loads(session_file.read_text(encoding="utf-8"))
-            updated_at = payload.get("updated_at") or payload.get("created_at")
-            if not updated_at:
+            session = self._read_session_file(session_file)
+            if session is None:
                 continue
-            if datetime.fromisoformat(updated_at) < deadline:
+            expired = datetime.fromisoformat(session.updated_at) < deadline
+            if expired:
                 shutil.rmtree(session_dir)
                 removed += 1
         return removed
@@ -74,12 +70,15 @@ class JsonlSessionStore:
         name: str | None = None,
         tool_call_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        *,
+        message_id: str | None = None,
+        created_at: str | None = None,
     ) -> MessageRecord:
         """保存一条会话消息。"""
-        now = utc_now_iso()
+        now = created_at or utc_now_iso()
         metadata = metadata or {}
         record = MessageRecord(
-            id=str(uuid4()),
+            id=message_id or str(uuid4()),
             session_id=session_id,
             role=role,
             content=content,
@@ -114,9 +113,9 @@ class JsonlSessionStore:
     async def list_sessions(self, archived: bool | None = None) -> list[Session]:
         """读取会话列表并按置顶和最后活动时间排序。"""
         sessions = [
-            self._dict_to_session(json.loads((path / "session.json").read_text(encoding="utf-8")))
+            session
             for path in self._all_session_dirs()
-            if (path / "session.json").exists()
+            if (session := self._read_session_file(path / "session.json")) is not None
         ]
         if archived is not None:
             sessions = [item for item in sessions if item.archived is archived]
@@ -239,7 +238,11 @@ class JsonlSessionStore:
         if table not in paths:
             raise ValueError(f"不支持的表：{table}")
         if table == "sessions":
-            return sum(1 for session_dir in self._all_session_dirs() if (session_dir / "session.json").exists())
+            return sum(
+                1
+                for session_dir in self._all_session_dirs()
+                if self._read_session_file(session_dir / "session.json") is not None
+            )
         return sum(len(self._read_jsonl(session_dir / paths[table])) for session_dir in self._all_session_dirs())
 
     async def _touch_session(self, session_id: str) -> None:
@@ -324,16 +327,56 @@ class JsonlSessionStore:
     def _find_session_dir(self, session_id: str) -> Path:
         """按 session_id 查找真实目录，不存在时返回兼容路径。"""
         legacy_dir = self.sessions_dir / quote(session_id, safe="")
-        if (legacy_dir / "session.json").exists():
+        legacy_session = self._read_session_file(legacy_dir / "session.json")
+        if legacy_session is not None and legacy_session.id == session_id:
             return legacy_dir
         for session_dir in self._all_session_dirs():
             session_file = session_dir / "session.json"
-            if not session_file.exists():
-                continue
-            payload = json.loads(session_file.read_text(encoding="utf-8"))
-            if payload.get("id") == session_id:
+            session = self._read_session_file(session_file)
+            if session is not None and session.id == session_id:
                 return session_dir
         return legacy_dir
+
+    def _read_session_file(self, path: Path) -> Session | None:
+        """安全读取有效 Session；未知或损坏目录不会中断扫描。"""
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                return None
+            string_fields = (
+                "id",
+                "user_id",
+                "channel",
+                "title",
+                "summary",
+                "created_at",
+                "updated_at",
+            )
+            if any(not isinstance(payload.get(field), str) for field in string_fields):
+                return None
+            if not payload["id"]:
+                return None
+            if not isinstance(payload.get("pinned"), bool) or not isinstance(
+                payload.get("archived"), bool
+            ):
+                return None
+            history = payload.get("uncompacted_history")
+            if not isinstance(history, list) or any(
+                not isinstance(item, dict)
+                or not isinstance(item.get("role"), str)
+                or not isinstance(item.get("content"), str)
+                for item in history
+            ):
+                return None
+            for field in ("created_at", "updated_at"):
+                timestamp = datetime.fromisoformat(payload[field])
+                if timestamp.tzinfo is None:
+                    return None
+            return self._dict_to_session(payload)
+        except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            return None
 
     def _dict_to_session(self, row: dict[str, Any]) -> Session:
         """将字典转换为 Session。"""

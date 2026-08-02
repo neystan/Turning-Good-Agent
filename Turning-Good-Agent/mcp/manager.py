@@ -1,4 +1,6 @@
 import asyncio
+import inspect
+import logging
 from collections.abc import Callable
 
 from ..config.settings import McpServerSettings, McpSettings
@@ -9,6 +11,9 @@ from .adapter import McpToolAdapter
 from .client import McpClient
 from .server_worker import McpServerWorker
 from .types import McpCapability, McpCatalog, McpServerStatus
+
+
+logger = logging.getLogger(__name__)
 
 
 class McpManager:
@@ -25,6 +30,7 @@ class McpManager:
         self.workers: dict[str, McpServerWorker] = {}
         self.catalogs: dict[str, McpCatalog] = {}
         self.statuses: dict[str, McpServerStatus] = {}
+        self._status_listeners: list[Callable[[McpServerStatus], object]] = []
         self._locks: dict[str, asyncio.Lock] = {}
         self._registry: ToolRegistry | None = None
 
@@ -49,7 +55,7 @@ class McpManager:
         server_settings = self.settings.servers.get(name)
         if server_settings is None:
             status = McpServerStatus(name=name, error="MCP Server 不存在", state="failed")
-            self.statuses[name] = status
+            await self._publish_status(status)
             return status
         worker = self.workers.get(name)
         if worker is None or worker.task is None or worker.task.done():
@@ -57,6 +63,16 @@ class McpManager:
         else:
             await worker.reconnect()
         return self.statuses[name]
+
+    def add_status_listener(self, listener: Callable[[McpServerStatus], object]) -> None:
+        """注册一个只读 MCP 状态观察者。"""
+        if listener not in self._status_listeners:
+            self._status_listeners.append(listener)
+
+    def remove_status_listener(self, listener: Callable[[McpServerStatus], object]) -> None:
+        """移除一个状态观察者。"""
+        if listener in self._status_listeners:
+            self._status_listeners.remove(listener)
 
     async def handle_list_changed(self, name: str, registry: ToolRegistry | None = None) -> McpServerStatus:
         """请求所属 Worker 复用连接刷新 Catalog。"""
@@ -132,7 +148,7 @@ class McpManager:
 
     async def _start_worker(self, name: str, server_settings: McpServerSettings) -> None:
         """创建一个独立连接的 MCP Worker。"""
-        self.statuses[name] = McpServerStatus(name=name, state="connecting")
+        await self._publish_status(McpServerStatus(name=name, state="connecting"))
 
         async def on_catalog(catalog: McpCatalog) -> None:
             """将 Worker 发现结果应用到 Manager。"""
@@ -140,11 +156,22 @@ class McpManager:
 
         async def on_status(status: McpServerStatus) -> None:
             """保存 Worker 发布的状态快照。"""
-            self.statuses[name] = status
+            await self._publish_status(status)
 
         worker = McpServerWorker(name, server_settings, self._client_factory, on_catalog, on_status)
         self.workers[name] = worker
         await worker.start()
+
+    async def _publish_status(self, status: McpServerStatus) -> None:
+        """保存状态，并隔离通知观察者的异常。"""
+        self.statuses[status.name] = status
+        for listener in tuple(self._status_listeners):
+            try:
+                outcome = listener(status)
+                if inspect.isawaitable(outcome):
+                    await outcome
+            except Exception:
+                logger.exception("MCP 状态监听器执行失败")
 
     async def _apply_catalog(self, name: str, catalog: McpCatalog) -> None:
         """原子替换一个 Server 的 Catalog 与 Tool 注册。"""

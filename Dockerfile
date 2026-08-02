@@ -10,7 +10,9 @@ RUN pip install --no-cache-dir \
     "tiktoken>=0.7.0" \
     "mcp>=1.26.0,<2.0.0" \
     "fastapi>=0.115.0" \
-    "uvicorn[standard]>=0.30.0"
+    "uvicorn[standard]>=0.30.0" \
+    "tzdata>=2024.1" \
+    "prompt_toolkit>=3.0.0"
 
 FROM python-base AS development
 

@@ -18,6 +18,7 @@ class PreparedToolCall:
     call: ToolCall
     tool: BaseTool | None
     validation_error: str | None
+    blocked_reason: str | None = None
 
 
 class ToolCallRunner:
@@ -41,12 +42,13 @@ class ToolCallRunner:
         calls: list[ToolCall],
         channel_adapter: ChannelAdapter,
         auto_approve_tools: bool,
+        excluded_tool_names: frozenset[str] = frozenset(),
     ) -> list[dict[str, Any]]:
         """按安全边界执行模型给出的工具批次。"""
         records: list[dict[str, Any]] = []
         parallel_batch: list[PreparedToolCall] = []
         for call in calls:
-            prepared = self._prepare_call(call)
+            prepared = self._prepare_call(call, excluded_tool_names)
             if self._is_parallel_safe(prepared):
                 parallel_batch.append(prepared)
                 continue
@@ -56,8 +58,19 @@ class ToolCallRunner:
         records.extend(await self._execute_parallel_batch(parallel_batch, channel_adapter, auto_approve_tools))
         return records
 
-    def _prepare_call(self, call: ToolCall) -> PreparedToolCall:
+    def _prepare_call(
+        self,
+        call: ToolCall,
+        excluded_tool_names: frozenset[str],
+    ) -> PreparedToolCall:
         """规范化参数并保留校验错误。"""
+        if call.name in excluded_tool_names:
+            return PreparedToolCall(
+                call,
+                None,
+                None,
+                blocked_reason="后台执行不允许调用该工具",
+            )
         tool, args, validation_error = self.tools.prepare_call(call.name, call.args)
         return PreparedToolCall(ToolCall(call.id, call.name, args), tool, validation_error)
 
@@ -98,6 +111,15 @@ class ToolCallRunner:
     ) -> dict[str, Any]:
         """执行单个已规范化调用的审批和结果管道。"""
         call = prepared.call
+        if prepared.blocked_reason:
+            return await self._finalize(
+                call,
+                self._error_record(
+                    call,
+                    f"工具 {call.name} 被后台策略阻止：{prepared.blocked_reason}",
+                    prepared.blocked_reason,
+                ),
+            )
         if prepared.validation_error:
             return await self._finalize(
                 call,

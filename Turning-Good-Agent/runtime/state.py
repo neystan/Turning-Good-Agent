@@ -214,6 +214,8 @@ async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
         session_id,
         ctx.inbound.content,
         count_content_tokens(ctx.inbound.content),
+        message_id=ctx.inbound.id,
+        created_at=ctx.inbound.created_at,
     )
     for guidance in ctx.consumed_guidance:
         await runtime.sessions.save_user_message(session_id, guidance, count_content_tokens(guidance))

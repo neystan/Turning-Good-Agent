@@ -94,6 +94,30 @@ class SkillsSettings:
 
 
 @dataclass(slots=True)
+class ProactiveSettings:
+    """保存 Phase 7 主动能力的集中配置。"""
+
+    enabled: bool = True
+    timezone: str = "Asia/Shanghai"
+    review_provider: str | None = None
+    review_api_key: str | None = None
+    review_base_url: str | None = None
+    review_model: str | None = None
+    background_max_concurrency: int = 4
+    breakbeat_refresh_minutes: int = 60
+    dream_refresh_hours: int = 24
+    review_window_token_limit: int = 100_000
+    profile_total_token_limit: int = 16_000
+    user_profile_token_limit: int = 12_000
+    soul_profile_token_limit: int = 4_000
+    skill_observation_turn_interval: int = 10
+    skill_observation_token_limit: int = 160
+    skill_evolution_batch_token_limit: int = 100_000
+    skill_evolution_batches_per_kind: int = 3
+    skill_evolution_daily_draft_limit: int = 10
+
+
+@dataclass(slots=True)
 class LLMSettings:
     """保存 LLM Provider 配置。"""
 
@@ -122,6 +146,7 @@ class Settings:
     web: WebSettings = field(default_factory=WebSettings)
     mcp: McpSettings = field(default_factory=McpSettings)
     skills: SkillsSettings = field(default_factory=SkillsSettings)
+    proactive: ProactiveSettings = field(default_factory=ProactiveSettings)
     llm: LLMSettings = field(default_factory=LLMSettings)
     local_config_path: Path | None = field(default=None, repr=False)
 
@@ -172,6 +197,7 @@ class Settings:
             settings.web = _load_web_settings(payload.get("web", {}))
             settings.mcp = _load_mcp_settings(payload.get("mcp", {}))
             settings.skills = _load_skills_settings(payload.get("skills", {}))
+            settings.proactive = _load_proactive_settings(payload.get("proactive", {}))
             llm = payload.get("llm", {})
             for key in (
                 "provider",
@@ -270,6 +296,67 @@ def _load_skills_settings(payload: object) -> SkillsSettings:
     if settings.max_loaded_skill_tokens_per_turn < settings.max_skill_tokens:
         raise ValueError("skills.max_loaded_skill_tokens_per_turn 不能小于 skills.max_skill_tokens")
     return settings
+
+
+def _load_proactive_settings(payload: object) -> ProactiveSettings:
+    """解析 Phase 7 主动能力配置，跨字段规则留给共享 validator。"""
+    if not isinstance(payload, dict):
+        raise ValueError("proactive 必须是 object")
+    settings = ProactiveSettings()
+    settings.enabled = _proactive_boolean(payload, "enabled", settings.enabled)
+    if "timezone" in payload:
+        value = payload["timezone"]
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("proactive.timezone 必须是非空字符串")
+        settings.timezone = value.strip()
+    for key in ("review_provider", "review_api_key", "review_base_url", "review_model"):
+        setattr(settings, key, _proactive_optional_string(payload, key))
+    for key in (
+        "background_max_concurrency",
+        "breakbeat_refresh_minutes",
+        "dream_refresh_hours",
+        "review_window_token_limit",
+        "profile_total_token_limit",
+        "user_profile_token_limit",
+        "soul_profile_token_limit",
+        "skill_observation_turn_interval",
+        "skill_observation_token_limit",
+        "skill_evolution_batch_token_limit",
+        "skill_evolution_batches_per_kind",
+        "skill_evolution_daily_draft_limit",
+    ):
+        setattr(settings, key, _proactive_positive_integer(payload, key, getattr(settings, key)))
+    return settings
+
+
+def _proactive_boolean(payload: dict[str, object], name: str, default: bool) -> bool:
+    """读取不允许隐式转换的主动布尔配置。"""
+    if name not in payload:
+        return default
+    value = payload[name]
+    if type(value) is not bool:
+        raise ValueError(f"proactive.{name} 必须是布尔值")
+    return value
+
+
+def _proactive_positive_integer(payload: dict[str, object], name: str, default: int) -> int:
+    """读取不允许 bool 或字符串的主动正整数配置。"""
+    if name not in payload:
+        return default
+    value = payload[name]
+    if type(value) is not int or value <= 0:
+        raise ValueError(f"proactive.{name} 必须是正整数")
+    return value
+
+
+def _proactive_optional_string(payload: dict[str, object], name: str) -> str | None:
+    """读取主动模型的可选非空字符串配置。"""
+    value = payload.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"proactive.{name} 必须是非空字符串或 null")
+    return value.strip()
 
 
 def _load_mcp_server(name: str, payload: object) -> McpServerSettings:

@@ -4,6 +4,7 @@ import json
 
 from .session_context import count_message_tokens
 from .system_prompt import SkillCatalogItem, build_system_prompt, render_skill_catalog
+from ..memory.long_term import ProfileMemorySnapshot, profile_memory_system_contents
 from ..sessions.token_counter import count_content_tokens
 from ..sessions.types import MessageRecord
 
@@ -14,7 +15,7 @@ def build_context_token_breakdown(
     history: list[MessageRecord],
     current_input: str,
     output: str,
-    profile_memory: str,
+    profile_memory: str | ProfileMemorySnapshot,
     openai_tools: list[dict[str, object]],
     include_current_turn: bool,
     skills: list[SkillCatalogItem] | None = None,
@@ -22,7 +23,7 @@ def build_context_token_breakdown(
     """按实际模型输入构建统一 token 分解。"""
     skill_catalog_tokens = count_content_tokens(render_skill_catalog(skills or []))
     system_tokens = count_content_tokens(build_system_prompt([]))
-    profile_memory_tokens = count_content_tokens(f"长期偏好：{profile_memory}") if profile_memory else 0
+    profile_memory_tokens = sum(count_content_tokens(content) for content in profile_memory_system_contents(profile_memory))
     summary_tokens = count_content_tokens(f"会话摘要：{summary}") if summary else 0
     history_tokens = count_message_tokens(history)
     current_input_tokens = count_content_tokens(current_input)
@@ -59,7 +60,7 @@ def build_save_context_token_breakdown(
     uncompacted_history: list[MessageRecord],
     current_input: str,
     output: str,
-    profile_memory: str,
+    profile_memory: str | ProfileMemorySnapshot,
     openai_tools: list[dict[str, object]],
     tool_count: int,
     skills: list[SkillCatalogItem] | None = None,

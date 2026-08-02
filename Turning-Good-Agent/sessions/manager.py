@@ -21,6 +21,7 @@ class SessionManager:
     """封装会话加载、保存和快捷命令。"""
 
     def __init__(self, store: JsonlSessionStore, settings: Settings | None = None) -> None:
+        """初始化对象状态。"""
         self.store = store
         self.settings = settings
         self.locks = SessionLocks()
@@ -130,9 +131,19 @@ class SessionManager:
         session_id: str,
         content: str,
         token_count: int = 0,
+        *,
+        message_id: str | None = None,
+        created_at: str | None = None,
     ) -> MessageRecord:
         """保存用户消息。"""
-        return await self.store.save_message(session_id, "user", content, token_count)
+        return await self.store.save_message(
+            session_id,
+            "user",
+            content,
+            token_count,
+            message_id=message_id,
+            created_at=created_at,
+        )
 
     async def save_assistant_message(
         self,
@@ -147,6 +158,10 @@ class SessionManager:
     async def recent_messages(self, session_id: str, limit: int) -> list[MessageRecord]:
         """读取最近消息。"""
         return await self.store.recent_messages(session_id, limit)
+
+    async def list_sessions(self, archived: bool | None = None) -> list[Session]:
+        """列出会话，供主动审阅按原始消息建立独立快照。"""
+        return await self.store.list_sessions(archived)
 
     async def all_messages(self, session_id: str) -> list[MessageRecord]:
         """读取当前会话全部消息。"""

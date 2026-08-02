@@ -3,7 +3,7 @@
   "user_id": "local-user",
   "channel": "cli",
   "runtime": {
-    "max_tool_rounds": 5,
+    "max_tool_rounds": 10,
     "max_tool_calls_per_round": 8,
     "turn_timeout_seconds": 120,
     "max_context_tokens": 300000,
@@ -54,6 +54,26 @@
     "max_loaded_skills_per_turn": 3,
     "max_skill_tokens": 8000,
     "max_loaded_skill_tokens_per_turn": 16000
+  },
+  "proactive": {
+    "enabled": true,
+    "timezone": "Asia/Shanghai",
+    "review_provider": null,
+    "review_api_key": null,
+    "review_base_url": null,
+    "review_model": null,
+    "background_max_concurrency": 4,
+    "breakbeat_refresh_minutes": 60,
+    "dream_refresh_hours": 24,
+    "review_window_token_limit": 100000,
+    "profile_total_token_limit": 16000,
+    "user_profile_token_limit": 12000,
+    "soul_profile_token_limit": 4000,
+    "skill_observation_turn_interval": 10,
+    "skill_observation_token_limit": 160,
+    "skill_evolution_batch_token_limit": 100000,
+    "skill_evolution_batches_per_kind": 3,
+    "skill_evolution_daily_draft_limit": 10
   },
   "llm": {
     "provider": "openai-compatible",

@@ -56,11 +56,24 @@ class AgentLoop:
         messages: list[dict[str, Any]],
         channel_adapter: ChannelAdapter | None = None,
         auto_approve_tools: bool = False,
+        *,
+        allow_tools: bool = True,
+        excluded_tool_names: frozenset[str] = frozenset(),
     ) -> AgentLoopResult:
         """运行模型调用和工具循环直到得到最终文本。"""
         channel_adapter = channel_adapter or SilentChannelAdapter()
         working = list(messages)
-        openai_tools = self.tools.openai_tools()
+        if not allow_tools:
+            openai_tools = []
+        elif excluded_tool_names:
+            openai_tools = self.tools.openai_tools(excluded_tool_names)
+        else:
+            openai_tools = self.tools.openai_tools()
+        execution_excluded_tool_names = excluded_tool_names
+        if not allow_tools:
+            execution_excluded_tool_names = frozenset(
+                set(excluded_tool_names) | set(getattr(self.tools, "tool_names", []))
+            )
         attachments = AttachmentManager(
             self.runtime,
             self.skills,
@@ -72,6 +85,7 @@ class AgentLoop:
         consumed_guidance: list[str] = []
 
         def finish(final_content: str, *, cancelled: bool = False) -> AgentLoopResult:
+            """封装本轮最终结果。"""
             return AgentLoopResult(
                 final_content=final_content,
                 messages=working,
@@ -98,11 +112,19 @@ class AgentLoop:
             working.append(self._assistant_tool_message(response.content, calls))
             if channel_adapter.is_stop_requested():
                 return finish(response.content, cancelled=True)
-            records = await self.tool_call_runner.execute_calls(
-                calls,
-                channel_adapter,
-                auto_approve_tools,
-            )
+            if execution_excluded_tool_names:
+                records = await self.tool_call_runner.execute_calls(
+                    calls,
+                    channel_adapter,
+                    auto_approve_tools,
+                    execution_excluded_tool_names,
+                )
+            else:
+                records = await self.tool_call_runner.execute_calls(
+                    calls,
+                    channel_adapter,
+                    auto_approve_tools,
+                )
             tool_messages: list[dict[str, Any]] = []
             pending_attachments: list[tuple[int, ToolCall, dict[str, Any], object | None]] = []
             for call, record in zip(calls, records, strict=True):

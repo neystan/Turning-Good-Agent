@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -86,10 +87,13 @@ class McpServerWorker:
 
     async def close(self) -> None:
         """请求 Worker 在自身 Task 中关闭 Client。"""
-        if self._task is None or self._task.done():
+        task = self._task
+        if task is None or task.done():
             return
-        await self._enqueue("close", require_connected=False)
-        await self._task
+        self._close_requested = True
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
     async def _request(self, name: str, *args: Any) -> Any:
         """拒绝未连接请求或投递可执行命令。"""
@@ -135,6 +139,9 @@ class McpServerWorker:
                 await client.connect()
                 catalog = await client.discover()
                 await self._on_catalog(catalog)
+            except asyncio.CancelledError:
+                await self._close_specific_client(client)
+                raise
             except Exception as exc:
                 await self._close_specific_client(client)
                 if not is_mcp_connection_error(exc) or retry_index >= self.settings.connect_retry_attempts:
