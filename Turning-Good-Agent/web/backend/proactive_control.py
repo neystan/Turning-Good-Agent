@@ -24,7 +24,7 @@ class ProactiveConflictError(ProactiveControlError):
 class ProactiveRuntime:
     running: bool = False
     next_run_at: str | None = None
-    usage: dict[str, int] = field(default_factory=dict)
+    entity_states: dict[str, str] = field(default_factory=dict)
 
 @dataclass(frozen=True, slots=True)
 class ProactiveSnapshot:
@@ -61,6 +61,7 @@ class WebProactiveControlService:
         return {domain: self.snapshot_domain(domain) for domain in _DOMAINS}
 
     def snapshot_domain(self, domain: ProactiveDomain) -> ProactiveSnapshot:
+        self._require_domain(domain)
         data = self._domain_data(domain)
         return ProactiveSnapshot(domain, data, self._runtime_view(domain, data), self._proactive_revision)
 
@@ -101,29 +102,40 @@ class WebProactiveControlService:
             await self.runtime.skills.delete_draft(name)
             return self._changed("skill", name, "delete_draft")
 
-    async def resolve_incident(self, identifier: str) -> ProactiveNoticeTarget:
+    async def resolve_incident(self, fingerprint: str) -> ProactiveNoticeTarget:
         async with self._locks["incident"]:
             payload = self._read("incidents.json", {"incidents": []})
-            item = self._find(self._items(payload, "incidents"), identifier, "Incident")
+            item = self._find_by_field(
+                self._items(payload, "incidents"),
+                "fingerprint",
+                fingerprint,
+                "Incident",
+            )
             if item.get("state") == "resolved":
-                raise ProactiveConflictError(f"Incident 已解决：{identifier}")
+                raise ProactiveConflictError(f"Incident 已解决：{fingerprint}")
             occurred_at = utc_now_iso()
             item["state"] = "resolved"
             item["last_detected_at"] = occurred_at
             item["history"].append(
-                {"state": "resolved", "occurred_at": occurred_at, "message": item["message"]}
+                {
+                    "state": "resolved",
+                    "occurred_at": occurred_at,
+                    "message": "用户在 Web 中标记已解决",
+                }
             )
             self.store.write_json("incidents.json", payload)
-            return self._changed("incident", identifier, "resolve")
+            return self._changed("incident", fingerprint, "resolve")
 
-    async def delete_incident(self, identifier: str) -> ProactiveNoticeTarget:
+    async def delete_incident(self, fingerprint: str) -> ProactiveNoticeTarget:
         async with self._locks["incident"]:
             payload = self._read("incidents.json", {"incidents": []})
             items = self._items(payload, "incidents")
-            self._find(items, identifier, "Incident")
-            payload["incidents"] = [item for item in items if item.get("id") != identifier]
+            self._find_by_field(items, "fingerprint", fingerprint, "Incident")
+            payload["incidents"] = [
+                item for item in items if item.get("fingerprint") != fingerprint
+            ]
             self.store.write_json("incidents.json", payload)
-            return self._changed("incident", identifier, "delete")
+            return self._changed("incident", fingerprint, "delete")
 
     def _domain_data(self, domain: ProactiveDomain) -> dict[str, Any]:
         if domain == "cron":
@@ -137,15 +149,45 @@ class WebProactiveControlService:
         if domain == "skill":
             data = self._read("skill.json", {"observations": [], "next_run_at": None, "usage": self._usage()})
             return {**data, "drafts": self._draft_views()}
-        return self._read("incidents.json", {"incidents": []})
+        if domain == "incident":
+            return self._read("incidents.json", {"incidents": []})
+        raise ValueError(f"未知主动领域：{domain}")
 
     def _runtime_view(self, domain: ProactiveDomain, data: dict[str, Any]) -> ProactiveRuntime:
-        manager = getattr(self.proactive_service, domain, None)
-        next_run_at = getattr(manager, "next_run_at", data.get("next_run_at"))
-        if hasattr(next_run_at, "isoformat"):
-            next_run_at = next_run_at.isoformat()
-        usage = data.get("usage", {})
-        return ProactiveRuntime(bool(getattr(manager, "running", False)), next_run_at, dict(usage) if isinstance(usage, dict) else {})
+        manager = self._manager_for_domain(domain)
+        if domain == "cron":
+            cron = manager
+            if cron is None:
+                return ProactiveRuntime()
+            states = {
+                str(job["id"]): str(cron.runtime_state(str(job["id"])))
+                for job in self._items(data, "jobs")
+            }
+            deadline = cron.next_deadline()
+            return ProactiveRuntime(
+                running=any(state in {"queued", "running"} for state in states.values()),
+                next_run_at=self._iso_value(deadline),
+                entity_states=states,
+            )
+        if manager is None:
+            return ProactiveRuntime()
+        return ProactiveRuntime(
+            running=bool(getattr(manager, "running", False)),
+            next_run_at=self._iso_value(getattr(manager, "next_run_at", None)),
+            entity_states={"service": "running" if getattr(manager, "running", False) else "idle"},
+        )
+
+    def _manager_for_domain(self, domain: ProactiveDomain) -> Any | None:
+        if self.proactive_service is None:
+            return None
+        names = {
+            "cron": "cron",
+            "breakbeat": "breakbeat",
+            "dream": "dream",
+            "skill": "skill_evolution",
+            "incident": "incidents",
+        }
+        return getattr(self.proactive_service, names[domain], None)
 
     def _draft_views(self) -> list[dict[str, str]]:
         root = self.runtime.skills.directory / ".drafts"
@@ -226,10 +268,32 @@ class WebProactiveControlService:
 
     @staticmethod
     def _find(items: list[dict[str, Any]], identifier: str, label: str) -> dict[str, Any]:
+        return WebProactiveControlService._find_by_field(items, "id", identifier, label)
+
+    @staticmethod
+    def _find_by_field(
+        items: list[dict[str, Any]],
+        field: str,
+        value: str,
+        label: str,
+    ) -> dict[str, Any]:
         for item in items:
-            if item.get("id") == identifier:
+            if item.get(field) == value:
                 return item
-        raise ProactiveNotFoundError(f"{label} 不存在：{identifier}")
+        raise ProactiveNotFoundError(f"{label} 不存在：{value}")
+
+    @staticmethod
+    def _iso_value(value: object) -> str | None:
+        if value is None:
+            return None
+        if hasattr(value, "isoformat"):
+            return str(value.isoformat())
+        return value if isinstance(value, str) else None
+
+    @staticmethod
+    def _require_domain(domain: object) -> None:
+        if domain not in _DOMAINS:
+            raise ValueError(f"未知主动领域：{domain}")
 
     @staticmethod
     def _usage() -> dict[str, int]:
