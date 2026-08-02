@@ -114,7 +114,6 @@ class ProactiveSettings:
     skill_observation_token_limit: int = 160
     skill_evolution_batch_token_limit: int = 100_000
     skill_evolution_batches_per_kind: int = 3
-    skill_evolution_daily_draft_limit: int = 10
 
 
 @dataclass(slots=True)
@@ -323,7 +322,6 @@ def _load_proactive_settings(payload: object) -> ProactiveSettings:
         "skill_observation_token_limit",
         "skill_evolution_batch_token_limit",
         "skill_evolution_batches_per_kind",
-        "skill_evolution_daily_draft_limit",
     ):
         setattr(settings, key, _proactive_positive_integer(payload, key, getattr(settings, key)))
     return settings

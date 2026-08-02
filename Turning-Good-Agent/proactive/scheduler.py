@@ -57,14 +57,14 @@ def next_cron_fire(expression: str, after: datetime, timezone: ZoneInfo) -> date
     raise ValueError("Cron 在两年内没有可执行时刻")
 
 
-def local_run_at_after_delay(delay_seconds: float, now: datetime, timezone: ZoneInfo) -> str:
-    """把相对延迟转换为全局时区中的一次性本地 wall-clock。"""
+def next_run_at_after_delay(delay_seconds: float, now: datetime, timezone: ZoneInfo) -> str:
+    """把相对延迟转换为带 UTC offset 的一次性固定时刻。"""
     if isinstance(delay_seconds, bool) or not isinstance(delay_seconds, (int, float)):
         raise ValueError("delay_seconds 必须是数字")
     if delay_seconds <= 0:
         raise ValueError("delay_seconds 必须大于 0")
-    run_at = (_as_utc(now) + timedelta(seconds=delay_seconds)).astimezone(timezone)
-    return run_at.replace(tzinfo=None).isoformat(timespec="seconds")
+    next_run_at = (_as_utc(now) + timedelta(seconds=delay_seconds)).astimezone(timezone)
+    return next_run_at.isoformat(timespec="seconds")
 
 
 def next_job_fire(job: "CronJob", after: datetime, timezone: ZoneInfo) -> datetime | None:
@@ -73,12 +73,11 @@ def next_job_fire(job: "CronJob", after: datetime, timezone: ZoneInfo) -> dateti
         if job.cron is None:
             raise ValueError("周期 Cron Job 缺少 cron")
         return next_cron_fire(job.cron, after, timezone)
-    if job.run_at is None:
-        raise ValueError("一次性 Cron Job 缺少 run_at")
-    local = datetime.fromisoformat(job.run_at)
-    if local.tzinfo is not None:
-        raise ValueError("run_at 必须是不含 UTC offset 的本地时间")
-    scheduled = local.replace(tzinfo=timezone)
+    if job.next_run_at is None:
+        return None
+    scheduled = datetime.fromisoformat(job.next_run_at)
+    if scheduled.tzinfo is None or scheduled.utcoffset() is None:
+        raise ValueError("next_run_at 必须包含 UTC offset")
     return scheduled if scheduled.astimezone(UTC) > _as_utc(after) else None
 
 

@@ -54,7 +54,6 @@ def validate_settings(
     _positive(errors, "proactive.skill_observation_token_limit", settings.proactive.skill_observation_token_limit)
     _positive(errors, "proactive.skill_evolution_batch_token_limit", settings.proactive.skill_evolution_batch_token_limit)
     _positive(errors, "proactive.skill_evolution_batches_per_kind", settings.proactive.skill_evolution_batches_per_kind)
-    _positive(errors, "proactive.skill_evolution_daily_draft_limit", settings.proactive.skill_evolution_daily_draft_limit)
 
     if settings.memory.recent_window_token_limit > settings.memory.compact_token_threshold:
         errors["memory.recent_window_token_limit"] = "不能大于 compact_token_threshold"

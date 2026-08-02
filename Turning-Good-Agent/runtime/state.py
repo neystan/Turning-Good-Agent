@@ -219,20 +219,26 @@ async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
     )
     for guidance in ctx.consumed_guidance:
         await runtime.sessions.save_user_message(session_id, guidance, count_content_tokens(guidance))
+    completed_assistant_message_id: str | None = None
     if ctx.final_content or not ctx.cancelled:
-        await runtime.sessions.save_assistant_message(
+        assistant_message = await runtime.sessions.save_assistant_message(
             session_id,
             ctx.final_content,
             count_content_tokens(ctx.final_content),
             metadata={"incomplete": True, "outcome": "cancelled"} if ctx.cancelled else None,
         )
+        if not ctx.cancelled:
+            completed_assistant_message_id = assistant_message.id
     if ctx.session is not None:
         await runtime.sessions.store.update_summary(session_id, ctx.session.summary)
         await runtime.sessions.store.update_uncompacted_history(session_id, ctx.session.uncompacted_history)
     await runtime.sessions.store.save_tool_calls(ctx.turn_id, session_id, ctx.tool_calls)
     if ctx.true_token_usage:
         await runtime.sessions.store.save_true_token_usage(ctx.turn_id, session_id, ctx.true_token_usage)
-    await runtime.proactive.emit(CONVERSATION_COMPLETED, {"session_id": session_id, "turn_id": ctx.turn_id})
+    payload: dict[str, object] = {"session_id": session_id, "turn_id": ctx.turn_id}
+    if completed_assistant_message_id is not None:
+        payload["completed_assistant_message_id"] = completed_assistant_message_id
+    await runtime.proactive.emit(CONVERSATION_COMPLETED, payload)
     return "ok"
 
 

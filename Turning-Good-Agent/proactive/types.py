@@ -11,6 +11,61 @@ OBSERVATION_KINDS = frozenset(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class UsageTotals:
+    """保存一项主动能力的累计模型用量。"""
+
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+
+    def __post_init__(self) -> None:
+        """拒绝无法恢复的负数统计。"""
+        values = (self.calls, self.input_tokens, self.output_tokens, self.total_tokens)
+        if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in values):
+            raise ValueError("usage 字段必须是非负整数")
+    def add(
+        self,
+        *,
+        calls: int = 1,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        total_tokens: int | None = None,
+    ) -> "UsageTotals":
+        """返回叠加一次调用后的新累计值。"""
+        consumed = input_tokens + output_tokens if total_tokens is None else total_tokens
+        return UsageTotals(
+            calls=self.calls + calls,
+            input_tokens=self.input_tokens + input_tokens,
+            output_tokens=self.output_tokens + output_tokens,
+            total_tokens=self.total_tokens + consumed,
+        )
+
+    def to_dict(self) -> dict[str, int]:
+        """转换为最小 JSON 对象。"""
+        return {
+            "calls": self.calls,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.total_tokens,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: object) -> "UsageTotals":
+        """从能力快照恢复累计用量。"""
+        if not isinstance(payload, dict):
+            raise ValueError("usage 必须是 object")
+        input_tokens = payload.get("input_tokens", 0)
+        output_tokens = payload.get("output_tokens", 0)
+        return cls(
+            calls=payload.get("calls", 0),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=payload.get("total_tokens", input_tokens + output_tokens),
+        )
+
+
 def utc_now_iso() -> str:
     """返回主动能力审计使用的 UTC 时间。"""
     return datetime.now(UTC).isoformat()
@@ -32,21 +87,18 @@ class CronJob:
     recurring: bool
     delivery_channels: list[str]
     updated_at: str
-    run_at: str | None = None
+    next_run_at: str | None = None
 
     def __post_init__(self) -> None:
         """确保周期与一次性计划只保存各自所需的最小字段。"""
         if self.recurring:
-            if self.cron is None or not self.cron.strip() or self.run_at is not None:
-                raise ValueError("周期 Cron Job 必须设置 cron 且不能设置 run_at")
+            if self.cron is None or not self.cron.strip() or self.next_run_at is None:
+                raise ValueError("周期 Cron Job 必须设置 cron 与 next_run_at")
             self.cron = self.cron.strip()
-            return
-        if self.cron is not None or self.run_at is None or not self.run_at.strip():
-            raise ValueError("一次性 Cron Job 必须设置 run_at 且不能设置 cron")
-        parsed = datetime.fromisoformat(self.run_at)
-        if parsed.tzinfo is not None:
-            raise ValueError("run_at 必须是不含 UTC offset 的本地时间")
-        self.run_at = parsed.isoformat(timespec="seconds")
+        elif self.cron is not None:
+            raise ValueError("一次性 Cron Job 不能设置 cron")
+        if self.next_run_at is not None:
+            self.next_run_at = _aware_iso(self.next_run_at, field_name="next_run_at")
 
     def to_dict(self) -> dict[str, Any]:
         """转换为可持久化字典。"""
@@ -55,27 +107,44 @@ class CronJob:
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "CronJob":
         """从字典恢复对象。"""
-        if set(payload).intersection({"status", "last_triggered_at", "last_completed_at", "last_error"}):
-            raise ValueError("检测到旧版 Cron 生命周期字段")
-        if payload.get("recurring") is False and payload.get("cron") is not None:
-            raise ValueError("检测到旧版一次性 Cron 结构")
+        required = {
+            "id",
+            "cron",
+            "created_at",
+            "prompt",
+            "recurring",
+            "delivery_channels",
+            "updated_at",
+            "next_run_at",
+        }
+        if set(payload) != required:
+            raise ValueError("Cron Job 字段无效")
         recurring = payload["recurring"]
         if not isinstance(recurring, bool):
             raise ValueError("Cron recurring 必须是 boolean")
-        channels = payload.get("delivery_channels", ["all"])
+        string_fields = ("id", "created_at", "prompt", "updated_at")
+        if any(not isinstance(payload[field], str) for field in string_fields):
+            raise ValueError("Cron Job 字符串字段无效")
+        cron = payload["cron"]
+        next_run_at = payload["next_run_at"]
+        if cron is not None and not isinstance(cron, str):
+            raise ValueError("Cron cron 必须是 string 或 null")
+        if next_run_at is not None and not isinstance(next_run_at, str):
+            raise ValueError("Cron next_run_at 必须是 string 或 null")
+        channels = payload["delivery_channels"]
         if not isinstance(channels, list) or not channels or not all(
             isinstance(item, str) and item.strip() for item in channels
         ):
             raise ValueError("Cron delivery_channels 必须是非空字符串数组")
         return cls(
-            id=str(payload["id"]),
-            cron=_optional_string(payload.get("cron")),
-            created_at=str(payload["created_at"]),
-            prompt=str(payload["prompt"]),
+            id=payload["id"],
+            cron=cron,
+            created_at=payload["created_at"],
+            prompt=payload["prompt"],
             recurring=recurring,
             delivery_channels=list(channels),
-            updated_at=str(payload.get("updated_at", payload["created_at"])),
-            run_at=_optional_string(payload.get("run_at")),
+            updated_at=payload["updated_at"],
+            next_run_at=next_run_at,
         )
 
 
@@ -129,7 +198,7 @@ class Incident:
     last_detected_at: str
     occurrence_count: int
     message: str
-    resolved_at: str | None = None
+    history: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """转换为可持久化字典。"""
@@ -138,41 +207,60 @@ class Incident:
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "Incident":
         """从持久化记录恢复并校验 Incident。"""
-        state = str(payload["state"])
+        required = {
+            "id",
+            "fingerprint",
+            "source",
+            "state",
+            "first_detected_at",
+            "last_detected_at",
+            "occurrence_count",
+            "message",
+            "history",
+        }
+        if set(payload) != required:
+            raise ValueError("Incident 字段无效")
+        string_fields = (
+            "id",
+            "fingerprint",
+            "source",
+            "state",
+            "first_detected_at",
+            "last_detected_at",
+            "message",
+        )
+        if any(not isinstance(payload[field], str) for field in string_fields):
+            raise ValueError("Incident 字符串字段无效")
+        state = payload["state"]
         if state not in {"open", "resolved"}:
             raise ValueError(f"无效的 Incident state：{state}")
+        occurrence_count = payload["occurrence_count"]
+        if isinstance(occurrence_count, bool) or not isinstance(occurrence_count, int) or occurrence_count < 1:
+            raise ValueError("Incident occurrence_count 必须是正整数")
+        history = payload["history"]
+        if not isinstance(history, list) or not all(
+            isinstance(entry, dict)
+            and set(entry) == {"state", "occurred_at", "message"}
+            and all(isinstance(value, str) for value in entry.values())
+            for entry in history
+        ):
+            raise ValueError("Incident history 无效")
         return cls(
-            id=str(payload["id"]),
-            fingerprint=str(payload["fingerprint"]),
-            source=str(payload["source"]),
+            id=payload["id"],
+            fingerprint=payload["fingerprint"],
+            source=payload["source"],
             state=state,
-            first_detected_at=str(payload["first_detected_at"]),
-            last_detected_at=str(payload["last_detected_at"]),
-            occurrence_count=int(payload["occurrence_count"]),
-            message=str(payload["message"]),
-            resolved_at=_optional_string(payload.get("resolved_at")),
+            first_detected_at=payload["first_detected_at"],
+            last_detected_at=payload["last_detected_at"],
+            occurrence_count=occurrence_count,
+            message=payload["message"],
+            history=[dict(entry) for entry in history],
         )
 
 
-@dataclass(slots=True)
-class DeliveryRecord:
-    """保存主动输出的可靠投递状态。"""
-
-    id: str
-    created_at: str
-    session_id: str
-    target_channel: str
-    event_type: str
-    content: str
-    metadata: dict[str, Any] = field(default_factory=dict)
-    state: str = "pending"
-    delivered_at: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        """转换为可持久化字典。"""
-        return asdict(self)
-
-
-def _optional_string(value: object) -> str | None:
-    """读取可选字符串值。"""
-    return None if value is None else str(value)
+def _aware_iso(value: str, *, field_name: str) -> str:
+    """校验并规范化带 UTC offset 的 ISO 时刻。"""
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{field_name} 必须包含 UTC offset")
+    return parsed.isoformat(timespec="seconds")

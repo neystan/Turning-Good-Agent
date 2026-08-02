@@ -72,8 +72,7 @@
     "skill_observation_turn_interval": 10,
     "skill_observation_token_limit": 160,
     "skill_evolution_batch_token_limit": 100000,
-    "skill_evolution_batches_per_kind": 3,
-    "skill_evolution_daily_draft_limit": 10
+    "skill_evolution_batches_per_kind": 3
   },
   "llm": {
     "provider": "openai-compatible",

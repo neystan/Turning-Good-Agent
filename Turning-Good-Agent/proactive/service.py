@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -24,7 +24,7 @@ from .cron import CreateCronTool, CronManager, DeleteCronTool, ListCronsTool
 from .delivery import DeliveryGate
 from .dream import DreamManager, ReadProfileMemoryTool, RunDreamTool
 from .events import CONVERSATION_COMPLETED
-from .executor import ProactiveExecutionContext, ProactiveExecutionResult, ProactiveExecutor
+from .executor import ProactiveExecutionResult, ProactiveExecutor
 from .incidents import IncidentMonitor, ListIncidentsTool
 from .skill_evolution import (
     DeleteSkillDraftTool,
@@ -49,17 +49,21 @@ class _BoundedExecutor:
 
     async def run(
         self,
-        context: ProactiveExecutionContext,
+        capability: str,
         prompt: str,
         *,
-        allow_tools: bool = True,
+        allowed_tool_names: frozenset[str] | None = None,
         on_started: Callable[[], Awaitable[None]] | None = None,
     ) -> ProactiveExecutionResult:
         """取得后台容量后再通知调用方任务真正开始。"""
         async with self._semaphore:
             if on_started is not None:
                 await on_started()
-            return await self._delegate.run(context, prompt, allow_tools=allow_tools)
+            return await self._delegate.run(
+                capability,
+                prompt,
+                allowed_tool_names=allowed_tool_names,
+            )
 
 
 class ProactiveService:
@@ -93,8 +97,7 @@ class ProactiveService:
         primary = _BoundedExecutor(
             ProactiveExecutor(
                 runtime.agent_loop,
-                audit_store=self.store,
-                excluded_tool_names=frozenset(
+                approval_required_tool_names=frozenset(
                     runtime.settings.tool_permissions.approval_required_tools
                 ),
             ),
@@ -103,8 +106,7 @@ class ProactiveService:
         review = _BoundedExecutor(
             ProactiveExecutor(
                 self._review_loop(),
-                audit_store=self.store,
-                excluded_tool_names=frozenset(
+                approval_required_tool_names=frozenset(
                     runtime.settings.tool_permissions.approval_required_tools
                 ),
             ),
@@ -146,14 +148,15 @@ class ProactiveService:
             primary,
             skills,
             runtime.settings.proactive,
+            schedule_changed=self._wake_scheduler,
         )
         self._running = False
         self._scheduler_task: asyncio.Task[None] | None = None
         self._delivery_task: asyncio.Task[None] | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
-        self._next_skill_evolution: datetime | None = None
         self._breakbeat_task: asyncio.Task[None] | None = None
         self._dream_task: asyncio.Task[None] | None = None
+        self._skill_evolution_task: asyncio.Task[None] | None = None
         self._mcp_listener: Callable[[Any], None] | None = None
         runtime.proactive.register(self)
 
@@ -216,12 +219,11 @@ class ProactiveService:
         """恢复 durable 状态并启动未来触发，不补跑错过时间。"""
         if self._running or not self.runtime.settings.proactive.enabled:
             return
-        await self.delivery.cancel_pending()
         self._running = True
         now = datetime.now(UTC)
         self.breakbeat.initialize_schedule(now)
         self.dream.initialize_schedule(now)
-        self._next_skill_evolution = now + timedelta(days=1)
+        self.skill_evolution.initialize_schedule(now)
         self._install_mcp_listener()
         self._scheduler_task = asyncio.create_task(self._scheduler_loop(), name="proactive-scheduler")
         self._delivery_task = asyncio.create_task(self._delivery_loop(), name="proactive-delivery")
@@ -244,8 +246,10 @@ class ProactiveService:
         if self._background_tasks:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
         self._background_tasks.clear()
+        self._breakbeat_task = None
+        self._dream_task = None
+        self._skill_evolution_task = None
         await self.cron.close()
-        await self.delivery.cancel_pending()
 
     async def handle(self, event: str, payload: dict[str, object]) -> None:
         """接收 SAVE 后的轻量事实，不延长前台回复路径。"""
@@ -253,7 +257,13 @@ class ProactiveService:
             return
         session_id = payload.get("session_id")
         if isinstance(session_id, str) and session_id:
-            self._spawn(self._observe_session(session_id))
+            assistant_message_id = payload.get("completed_assistant_message_id")
+            self._spawn(
+                self._observe_session(
+                    session_id,
+                    assistant_message_id if isinstance(assistant_message_id, str) else None,
+                )
+            )
 
     async def _scheduler_loop(self) -> None:
         """等待最早 deadline 或显式计划变更，不做每秒全量扫描。"""
@@ -268,9 +278,15 @@ class ProactiveService:
                     self._breakbeat_task = self._spawn(self._run_breakbeat_tick(), wake_on_done=True)
                 if _due(self.dream.next_run_at, now) and not self.dream.running and not _task_active(self._dream_task):
                     self._dream_task = self._spawn(self._run_dream_tick(), wake_on_done=True)
-                if self._next_skill_evolution is not None and now >= self._next_skill_evolution:
-                    self._next_skill_evolution = now + timedelta(days=1)
-                    self._spawn(self._run_skill_evolution_tick())
+                if (
+                    _due(self.skill_evolution.next_run_at, now)
+                    and not self.skill_evolution.running
+                    and not _task_active(self._skill_evolution_task)
+                ):
+                    self._skill_evolution_task = self._spawn(
+                        self._run_skill_evolution_tick(),
+                        wake_on_done=True,
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -283,7 +299,7 @@ class ProactiveService:
                 self.cron.next_deadline(now),
                 None if _task_active(self._breakbeat_task) else self.breakbeat.next_run_at,
                 None if _task_active(self._dream_task) else self.dream.next_run_at,
-                self._next_skill_evolution,
+                None if _task_active(self._skill_evolution_task) else self.skill_evolution.next_run_at,
             )
             if self._schedule_event.is_set():
                 continue
@@ -311,10 +327,17 @@ class ProactiveService:
                 )
             await asyncio.sleep(0.1)
 
-    async def _observe_session(self, session_id: str) -> None:
+    async def _observe_session(
+        self,
+        session_id: str,
+        completed_assistant_message_id: str | None,
+    ) -> None:
         """执行当前处理。"""
         try:
-            await self.skill_evolution.maybe_observe(session_id)
+            await self.skill_evolution.maybe_observe(
+                session_id,
+                completed_assistant_message_id=completed_assistant_message_id,
+            )
         except Exception:
             await self.incidents.report_failure(
                 fingerprint=f"proactive:observation:{session_id}",
@@ -328,10 +351,10 @@ class ProactiveService:
             outcome = await self.breakbeat.run(manual=False, scope="global")
             if outcome.should_notify:
                 await self.delivery.enqueue(
-                    session_id="proactive",
                     target_channel=self._target_channel,
                     event_type="proactive.breakbeat.completed",
                     content=outcome.summary,
+                    source_id="breakbeat",
                 )
             if outcome.errors:
                 await self.incidents.report_failure(
@@ -358,10 +381,10 @@ class ProactiveService:
             outcome = await self.dream.run(manual=False, scope="global")
             if outcome.changed:
                 await self.delivery.enqueue(
-                    session_id="proactive",
                     target_channel=self._target_channel,
                     event_type="proactive.dream.completed",
                     content=outcome.summary,
+                    source_id="dream",
                 )
             if outcome.errors:
                 await self.incidents.report_failure(
@@ -388,10 +411,10 @@ class ProactiveService:
             outcome = await self.skill_evolution.run_evolution(manual=False)
             if outcome.created_count:
                 await self.delivery.enqueue(
-                    session_id="proactive",
                     target_channel=self._target_channel,
                     event_type="proactive.skill_evolution.completed",
                     content=outcome.summary,
+                    source_id="skill_evolution",
                 )
             await self.incidents.report_recovery(
                 fingerprint="proactive:skill_evolution",

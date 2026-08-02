@@ -42,13 +42,13 @@ class ToolCallRunner:
         calls: list[ToolCall],
         channel_adapter: ChannelAdapter,
         auto_approve_tools: bool,
-        excluded_tool_names: frozenset[str] = frozenset(),
+        allowed_tool_names: frozenset[str] | None = None,
     ) -> list[dict[str, Any]]:
         """按安全边界执行模型给出的工具批次。"""
         records: list[dict[str, Any]] = []
         parallel_batch: list[PreparedToolCall] = []
         for call in calls:
-            prepared = self._prepare_call(call, excluded_tool_names)
+            prepared = self._prepare_call(call, allowed_tool_names)
             if self._is_parallel_safe(prepared):
                 parallel_batch.append(prepared)
                 continue
@@ -61,10 +61,10 @@ class ToolCallRunner:
     def _prepare_call(
         self,
         call: ToolCall,
-        excluded_tool_names: frozenset[str],
+        allowed_tool_names: frozenset[str] | None,
     ) -> PreparedToolCall:
         """规范化参数并保留校验错误。"""
-        if call.name in excluded_tool_names:
+        if allowed_tool_names is not None and call.name not in allowed_tool_names:
             return PreparedToolCall(
                 call,
                 None,

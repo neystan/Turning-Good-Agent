@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from typing import Any
 
 from ..tools.base import ToolResult
@@ -18,90 +19,144 @@ class IncidentMonitor:
         delivery_gate: DeliveryGate,
         *,
         target_channel: str,
-        session_id: str = "proactive",
     ) -> None:
         """初始化对象状态。"""
         self._store = store
         self._delivery_gate = delivery_gate
         self._target_channel = target_channel
-        self._session_id = session_id
         self._lock = asyncio.Lock()
 
     async def report_failure(self, *, fingerprint: str, source: str, message: str) -> bool:
         """记录失败；仅从健康或已恢复状态进入失败时通知。"""
         async with self._lock:
-            open_incident = self._open_incident(fingerprint)
+            incidents = self._load_incidents()
+            index = self._index_for_fingerprint(incidents, fingerprint)
             now = utc_now_iso()
-            if open_incident is not None:
-                open_incident["last_detected_at"] = now
-                open_incident["occurrence_count"] = int(open_incident["occurrence_count"]) + 1
-                open_incident["message"] = message
-                self._store.append_jsonl("incidents.jsonl", open_incident)
+            if index is not None and incidents[index]["state"] == "open":
+                incident = incidents[index]
+                incident["occurrence_count"] = int(incident["occurrence_count"]) + 1
+                incident["last_detected_at"] = now
+                self._save_incidents(incidents)
                 return False
-
-            incident = Incident(
-                id=new_id("incident"),
-                fingerprint=fingerprint,
-                source=source,
-                state="open",
-                first_detected_at=now,
-                last_detected_at=now,
-                occurrence_count=1,
-                message=message,
-            ).to_dict()
-            self._store.append_jsonl("incidents.jsonl", incident)
-            await self._delivery_gate.enqueue(
-                session_id=self._session_id,
-                target_channel=self._target_channel,
-                event_type="proactive.incident.opened",
-                content=f"系统异常：{message}",
-                metadata={"incident_id": incident["id"], "fingerprint": fingerprint, "source": source},
-            )
+            previous = deepcopy(incidents)
+            if index is None:
+                incident: dict[str, Any] = {
+                    "id": new_id("incident"),
+                    "fingerprint": fingerprint,
+                    "source": source,
+                    "state": "open",
+                    "first_detected_at": now,
+                    "last_detected_at": now,
+                    "occurrence_count": 1,
+                    "message": message,
+                    "history": [self._history_entry("open", now, message)],
+                }
+                incidents.append(incident)
+            else:
+                incident = incidents[index]
+                incident["state"] = "open"
+                incident["last_detected_at"] = now
+                incident["occurrence_count"] = int(incident["occurrence_count"]) + 1
+                incident["message"] = message
+                incident["history"].append(self._history_entry("open", now, message))
+            self._save_incidents(incidents)
+            try:
+                await self._delivery_gate.enqueue(
+                    target_channel=self._target_channel,
+                    event_type="proactive.incident.opened",
+                    content=f"系统异常：{message}",
+                    source_id=fingerprint,
+                )
+            except Exception:
+                self._save_incidents(previous)
+                raise
             return True
 
     async def report_recovery(self, *, fingerprint: str, source: str, message: str) -> bool:
         """记录恢复；仅关闭仍处于 open 的同一 incident。"""
         async with self._lock:
-            incident = self._open_incident(fingerprint)
-            if incident is None:
+            incidents = self._load_incidents()
+            index = self._index_for_fingerprint(incidents, fingerprint)
+            if index is None:
                 return False
+            incident = incidents[index]
+            if incident["state"] == "resolved":
+                return False
+            previous = deepcopy(incidents)
             now = utc_now_iso()
             incident["state"] = "resolved"
             incident["last_detected_at"] = now
-            incident["resolved_at"] = now
             incident["message"] = message
-            self._store.append_jsonl("incidents.jsonl", incident)
-            await self._delivery_gate.enqueue(
-                session_id=self._session_id,
-                target_channel=self._target_channel,
-                event_type="proactive.incident.resolved",
-                content=f"系统已恢复：{message}",
-                metadata={"incident_id": incident["id"], "fingerprint": fingerprint, "source": source},
-            )
+            incident["history"].append(self._history_entry("resolved", now, message))
+            self._save_incidents(incidents)
+            try:
+                await self._delivery_gate.enqueue(
+                    target_channel=self._target_channel,
+                    event_type="proactive.incident.resolved",
+                    content=f"系统已恢复：{message}",
+                    source_id=fingerprint,
+                )
+            except Exception:
+                self._save_incidents(previous)
+                raise
             return True
 
     def list_incidents(self, state: str | None = None) -> list[Incident]:
-        """从 durable 日志重建每个 Incident 的最新状态。"""
+        """读取当前 Incident 快照。"""
         if state not in {None, "open", "resolved"}:
             raise ValueError("Incident state 只能是 open 或 resolved")
-        latest: dict[str, Incident] = {}
-        for record in self._store.read_jsonl("incidents.jsonl"):
-            incident = Incident.from_dict(record)
-            latest[incident.id] = incident
-        values = [item for item in latest.values() if state is None or item.state == state]
+        values = [
+            Incident.from_dict(record)
+            for record in self._load_incidents()
+            if state is None or record["state"] == state
+        ]
         return sorted(values, key=lambda item: (item.last_detected_at, item.id), reverse=True)
 
-    def _open_incident(self, fingerprint: str) -> dict[str, Any] | None:
-        """创建新的系统异常记录。"""
-        current: dict[str, dict[str, Any]] = {}
-        for record in self._store.read_jsonl("incidents.jsonl"):
-            incident_id = str(record.get("id", ""))
-            if incident_id:
-                current[incident_id] = record
-        for incident in reversed(list(current.values())):
-            if incident.get("fingerprint") == fingerprint and incident.get("state") == "open":
-                return dict(incident)
+    def get_by_fingerprint(self, fingerprint: str) -> Incident | None:
+        """返回指定 fingerprint 的当前 Incident。"""
+        incidents = self._load_incidents()
+        index = self._index_for_fingerprint(incidents, fingerprint)
+        return None if index is None else Incident.from_dict(incidents[index])
+
+    async def delete_by_fingerprint(self, fingerprint: str) -> int:
+        """硬删除指定 fingerprint 的当前 Incident。"""
+        async with self._lock:
+            incidents = self._load_incidents()
+            retained = [record for record in incidents if record["fingerprint"] != fingerprint]
+            removed = len(incidents) - len(retained)
+            if removed:
+                self._save_incidents(retained)
+            return removed
+
+    def _load_incidents(self) -> list[dict[str, Any]]:
+        """读取当前 Incident 快照。"""
+        payload = self._store.read_json("incidents.json", {"incidents": []})
+        if not isinstance(payload, dict) or set(payload) != {"incidents"}:
+            raise ValueError("incidents.json 必须仅包含 incidents")
+        incidents = payload["incidents"]
+        if not isinstance(incidents, list) or not all(isinstance(record, dict) for record in incidents):
+            raise ValueError("incidents.json 的 incidents 必须是对象数组")
+        parsed = [Incident.from_dict(record) for record in incidents]
+        if len({incident.fingerprint for incident in parsed}) != len(parsed):
+            raise ValueError("incidents.json 包含重复 fingerprint")
+        return [incident.to_dict() for incident in parsed]
+
+    def _save_incidents(self, incidents: list[dict[str, Any]]) -> None:
+        """写入当前 Incident 快照。"""
+        self._store.write_json("incidents.json", {"incidents": incidents})
+
+    @staticmethod
+    def _index_for_fingerprint(incidents: list[dict[str, Any]], fingerprint: str) -> int | None:
+        """查找一个 fingerprint 对应的唯一当前记录。"""
+        for index, incident in enumerate(incidents):
+            if incident.get("fingerprint") == fingerprint:
+                return index
         return None
+
+    @staticmethod
+    def _history_entry(state: str, occurred_at: str, message: str) -> dict[str, str]:
+        """记录一次状态转换。"""
+        return {"state": state, "occurred_at": occurred_at, "message": message}
 
 
 class ListIncidentsTool:
@@ -133,7 +188,7 @@ class ListIncidentsTool:
             return ToolResult("暂无系统异常。")
         return ToolResult(
             "\n".join(
-                f"[{item.state}] {item.id} | {item.source} | {item.occurrence_count} 次 | {item.message}"
+                f"[{item.state}] {item.fingerprint} | {item.source} | {item.occurrence_count} 次 | {item.message}"
                 for item in incidents
             )
         )
