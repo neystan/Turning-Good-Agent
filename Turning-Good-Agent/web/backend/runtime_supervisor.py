@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Generic, TypeVar
+import inspect
 
 
 RuntimeT = TypeVar("RuntimeT")
@@ -26,8 +27,8 @@ class RuntimeSupervisor(Generic[RuntimeT]):
         runtime_factory: Callable[[], Awaitable[RuntimeT]],
         idle_probe: Callable[[], bool],
         active_revision: str,
-        on_prepare: Callable[[RuntimeT], None] | None = None,
-        on_activate: Callable[[RuntimeT], None] | None = None,
+        on_prepare: Callable[[RuntimeT], object] | None = None,
+        on_activate: Callable[[RuntimeT], object] | None = None,
     ) -> None:
         self._runtime = initial_runtime
         self._runtime_factory = runtime_factory
@@ -82,17 +83,20 @@ class RuntimeSupervisor(Generic[RuntimeT]):
                 return
             self._state = "applying"
             self._ready.clear()
+            replacement: RuntimeT | None = None
+            activated = False
             try:
                 replacement = await self._runtime_factory()
                 if self._on_prepare is not None:
-                    self._on_prepare(replacement)
+                    await _await_if_needed(self._on_prepare(replacement))
                 start = getattr(replacement, "start", None)
                 if callable(start):
                     await start()
                 if self._on_activate is not None:
-                    self._on_activate(replacement)
+                    await _await_if_needed(self._on_activate(replacement))
                 previous = self._runtime
                 self._runtime = replacement
+                activated = True
                 self._active_revision = self._desired_revision
                 self._state = "active"
                 close = getattr(previous, "close", None)
@@ -101,5 +105,14 @@ class RuntimeSupervisor(Generic[RuntimeT]):
             except Exception as exc:
                 self._state = "failed"
                 self._last_apply_error = str(exc)
+                if replacement is not None and not activated:
+                    close = getattr(replacement, "close", None)
+                    if callable(close):
+                        await close()
             finally:
                 self._ready.set()
+
+
+async def _await_if_needed(value: object) -> None:
+    if inspect.isawaitable(value):
+        await value

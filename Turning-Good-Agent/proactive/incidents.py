@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from typing import Any
 
@@ -19,15 +20,18 @@ class IncidentMonitor:
         delivery_gate: DeliveryGate,
         *,
         target_channel: str,
+        state_changed: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """初始化对象状态。"""
         self._store = store
         self._delivery_gate = delivery_gate
         self._target_channel = target_channel
+        self._state_changed = state_changed
         self._lock = asyncio.Lock()
 
     async def report_failure(self, *, fingerprint: str, source: str, message: str) -> bool:
         """记录失败；仅从健康或已恢复状态进入失败时通知。"""
+        changed = False
         async with self._lock:
             incidents = self._load_incidents()
             index = self._index_for_fingerprint(incidents, fingerprint)
@@ -37,43 +41,50 @@ class IncidentMonitor:
                 incident["occurrence_count"] = int(incident["occurrence_count"]) + 1
                 incident["last_detected_at"] = now
                 self._save_incidents(incidents)
-                return False
-            previous = deepcopy(incidents)
-            if index is None:
-                incident: dict[str, Any] = {
-                    "id": new_id("incident"),
-                    "fingerprint": fingerprint,
-                    "source": source,
-                    "state": "open",
-                    "first_detected_at": now,
-                    "last_detected_at": now,
-                    "occurrence_count": 1,
-                    "message": message,
-                    "history": [self._history_entry("open", now, message)],
-                }
-                incidents.append(incident)
+                changed = True
+                should_notify = False
             else:
-                incident = incidents[index]
-                incident["state"] = "open"
-                incident["last_detected_at"] = now
-                incident["occurrence_count"] = int(incident["occurrence_count"]) + 1
-                incident["message"] = message
-                incident["history"].append(self._history_entry("open", now, message))
-            self._save_incidents(incidents)
-            try:
-                await self._delivery_gate.enqueue(
-                    target_channel=self._target_channel,
-                    event_type="proactive.incident.opened",
-                    content=f"系统异常：{message}",
-                    source_id=fingerprint,
-                )
-            except Exception:
-                self._save_incidents(previous)
-                raise
-            return True
+                previous = deepcopy(incidents)
+                if index is None:
+                    incident: dict[str, Any] = {
+                        "id": new_id("incident"),
+                        "fingerprint": fingerprint,
+                        "source": source,
+                        "state": "open",
+                        "first_detected_at": now,
+                        "last_detected_at": now,
+                        "occurrence_count": 1,
+                        "message": message,
+                        "history": [self._history_entry("open", now, message)],
+                    }
+                    incidents.append(incident)
+                else:
+                    incident = incidents[index]
+                    incident["state"] = "open"
+                    incident["last_detected_at"] = now
+                    incident["occurrence_count"] = int(incident["occurrence_count"]) + 1
+                    incident["message"] = message
+                    incident["history"].append(self._history_entry("open", now, message))
+                self._save_incidents(incidents)
+                try:
+                    await self._delivery_gate.enqueue(
+                        target_channel=self._target_channel,
+                        event_type="proactive.incident.opened",
+                        content=f"系统异常：{message}",
+                        source_id=fingerprint,
+                    )
+                except Exception:
+                    self._save_incidents(previous)
+                    raise
+                changed = True
+                should_notify = True
+        if changed:
+            await self._notify_state_changed()
+        return should_notify
 
     async def report_recovery(self, *, fingerprint: str, source: str, message: str) -> bool:
         """记录恢复；仅关闭仍处于 open 的同一 incident。"""
+        changed = False
         async with self._lock:
             incidents = self._load_incidents()
             index = self._index_for_fingerprint(incidents, fingerprint)
@@ -99,7 +110,10 @@ class IncidentMonitor:
             except Exception:
                 self._save_incidents(previous)
                 raise
-            return True
+            changed = True
+        if changed:
+            await self._notify_state_changed()
+        return True
 
     def list_incidents(self, state: str | None = None) -> list[Incident]:
         """读取当前 Incident 快照。"""
@@ -126,7 +140,13 @@ class IncidentMonitor:
             removed = len(incidents) - len(retained)
             if removed:
                 self._save_incidents(retained)
-            return removed
+        if removed:
+            await self._notify_state_changed()
+        return removed
+
+    async def _notify_state_changed(self) -> None:
+        if self._state_changed is not None:
+            await self._state_changed()
 
     def _load_incidents(self) -> list[dict[str, Any]]:
         """读取当前 Incident 快照。"""

@@ -14,6 +14,8 @@ from fastapi.staticfiles import StaticFiles
 from ...bus.queue import AsyncMessageBus
 from ...config.settings import Settings
 from ...llm.factory import build_llm
+from ...proactive.delivery import WebDeliverySink
+from ...proactive.service import ProactiveService
 from ...runtime.runtime import AgentRuntime
 from ...sessions.types import MessageRecord, Session, ToolCallRecord
 from .coordinator import WebSessionCoordinator
@@ -28,6 +30,14 @@ from .read_models import (
     page_tool_calls,
 )
 from .runtime_supervisor import RuntimeSupervisor
+from .proactive_control import (
+    ProactiveConflictError,
+    ProactiveNotFoundError,
+    WebProactiveControlService,
+)
+from .proactive_events import ProactiveEventHub, snapshot_payload
+from .proactive_ownership import ProactiveOwnershipLease
+from .proactive_lifecycle import WebProactiveLifecycle
 
 
 def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
@@ -41,6 +51,48 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
     config_path = settings.local_config_path or Path.cwd() / "settings.local.json"
     native_tool_names = {name for name in runtime.agent_loop.tools.tool_names if not name.startswith("mcp_")}
     supervisor_holder: dict[str, RuntimeSupervisor[AgentRuntime]] = {}
+    ownership = ProactiveOwnershipLease(settings.data_dir, owner_kind="web")
+    proactive_control = WebProactiveControlService(runtime)
+    proactive_events = ProactiveEventHub(proactive_control, ownership.state)
+
+    async def publish_web_notice(**notice: str) -> None:
+        domain = str(notice["domain"])
+        targets = {
+            "cron": "#proactive/cron",
+            "breakbeat": "#proactive/breakbeat",
+            "dream": "#proactive/memory",
+            "skill": "#proactive/skills",
+            "incident": "#proactive/incidents",
+        }
+        await proactive_events.publish_notice(
+            domain=domain,  # type: ignore[arg-type]
+            entity_id=notice["entity_id"],
+            severity=notice["severity"],
+            title=notice["title"],
+            message=notice["message"],
+            target=targets[domain],
+        )
+        await proactive_events.publish_snapshot(domain, changed=False)  # type: ignore[arg-type]
+
+    async def publish_domain_change(domain: str) -> None:
+        await proactive_events.publish_snapshot(domain, changed=True)  # type: ignore[arg-type]
+
+    def create_proactive_service(selected_runtime: AgentRuntime) -> ProactiveService:
+        return ProactiveService(
+            selected_runtime,
+            coordinator.bus,
+            target_channel="web",
+            delivery_sink=WebDeliverySink(publish_web_notice),
+            on_domain_change=publish_domain_change,
+        )
+
+    proactive_lifecycle = WebProactiveLifecycle(
+        runtime,
+        ownership,
+        service_factory=create_proactive_service,
+        bind_runtime=proactive_control.replace_runtime,
+        publish_state=proactive_events.publish_all,
+    )
 
     def live_tool_names() -> set[str]:
         active_runtime = supervisor_holder.get("supervisor", None)
@@ -71,6 +123,7 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
         idle_probe=coordinator.is_globally_idle,
         active_revision=initial_config.revision,
         on_prepare=coordinator.register_runtime,
+        on_activate=proactive_lifecycle.activate_replacement,
     )
     supervisor_holder["supervisor"] = supervisor
     coordinator.set_runtime_supervisor(supervisor)
@@ -82,9 +135,11 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
         coordinator.register_runtime(runtime)
         await runtime.start()
         await coordinator.start()
+        await proactive_lifecycle.start()
         try:
             yield
         finally:
+            await proactive_lifecycle.stop()
             await coordinator.close()
             await supervisor.close()
 
@@ -92,6 +147,81 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
     app.state.coordinator = coordinator
     app.state.runtime_supervisor = supervisor
     app.state.config_control = config_control
+    app.state.proactive_control = proactive_control
+    app.state.proactive_events = proactive_events
+    app.state.proactive_ownership = ownership
+    app.state.proactive_lifecycle = proactive_lifecycle
+
+    def proactive_error(exc: Exception) -> HTTPException:
+        if isinstance(exc, ProactiveNotFoundError):
+            return HTTPException(404, str(exc))
+        if isinstance(exc, ProactiveConflictError):
+            return HTTPException(409, str(exc))
+        return HTTPException(422, str(exc))
+
+    def proactive_snapshot(domain: str) -> dict[str, object]:
+        return snapshot_payload(proactive_control.snapshot_domain(domain), ownership.state())
+
+    @app.get("/api/proactive")
+    async def get_proactive_snapshot() -> dict[str, object]:
+        return {
+            "snapshots": proactive_events.initial_snapshots(),
+            "owner": ownership.state().to_dict(),
+            "proactive_revision": proactive_control.proactive_revision,
+        }
+
+    @app.get("/api/proactive/cron")
+    async def get_proactive_cron() -> dict[str, object]:
+        return proactive_snapshot("cron")
+
+    @app.get("/api/proactive/breakbeat")
+    async def get_proactive_breakbeat() -> dict[str, object]:
+        return proactive_snapshot("breakbeat")
+
+    @app.get("/api/proactive/memory")
+    async def get_proactive_memory() -> dict[str, object]:
+        return proactive_snapshot("dream")
+
+    @app.get("/api/proactive/skills")
+    async def get_proactive_skills() -> dict[str, object]:
+        return proactive_snapshot("skill")
+
+    @app.get("/api/proactive/incidents")
+    async def get_proactive_incidents() -> dict[str, object]:
+        return proactive_snapshot("incident")
+
+    async def proactive_action(domain: str, action: Any, *args: str) -> dict[str, object]:
+        if not ownership.state().writable:
+            raise HTTPException(409, "主动能力由另一个 Host 持有，当前为只读")
+        try:
+            await action(*args)
+            return await proactive_events.publish_snapshot(domain, changed=False)  # type: ignore[arg-type]
+        except (ProactiveNotFoundError, ProactiveConflictError, ValueError) as exc:
+            raise proactive_error(exc) from exc
+
+    @app.delete("/api/proactive/cron/{job_id}")
+    async def delete_proactive_cron(job_id: str) -> dict[str, object]:
+        return await proactive_action("cron", proactive_control.delete_cron, job_id)
+
+    @app.post("/api/proactive/breakbeat/{item_id}/complete")
+    async def complete_proactive_breakbeat(item_id: str) -> dict[str, object]:
+        return await proactive_action("breakbeat", proactive_control.complete_breakbeat, item_id)
+
+    @app.delete("/api/proactive/breakbeat/{item_id}")
+    async def delete_proactive_breakbeat(item_id: str) -> dict[str, object]:
+        return await proactive_action("breakbeat", proactive_control.delete_breakbeat, item_id)
+
+    @app.delete("/api/proactive/skills/drafts/{name}")
+    async def delete_proactive_draft(name: str) -> dict[str, object]:
+        return await proactive_action("skill", proactive_control.delete_draft, name)
+
+    @app.post("/api/proactive/incidents/{fingerprint}/resolve")
+    async def resolve_proactive_incident(fingerprint: str) -> dict[str, object]:
+        return await proactive_action("incident", proactive_control.resolve_incident, fingerprint)
+
+    @app.delete("/api/proactive/incidents/{fingerprint}")
+    async def delete_proactive_incident(fingerprint: str) -> dict[str, object]:
+        return await proactive_action("incident", proactive_control.delete_incident, fingerprint)
 
     def config_view() -> dict[str, object]:
         desired = config_control.read_desired()
@@ -263,6 +393,20 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
         if await supervisor.current_runtime.sessions.store.load_session(session_id) is None:
             raise HTTPException(404, "会话不存在")
         await supervisor.current_runtime.sessions.store.clear_session(session_id)
+
+    @app.websocket("/ws/proactive")
+    async def proactive_websocket(websocket: WebSocket) -> None:
+        await websocket.accept()
+        queue = await proactive_events.subscribe()
+        try:
+            for payload in proactive_events.initial_snapshots():
+                await websocket.send_json(payload)
+            while True:
+                await websocket.send_json(await queue.get())
+        except WebSocketDisconnect:
+            return
+        finally:
+            await proactive_events.unsubscribe(queue)
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket) -> None:

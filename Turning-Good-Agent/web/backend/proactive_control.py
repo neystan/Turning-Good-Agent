@@ -39,6 +39,15 @@ class ProactiveNoticeTarget:
     identifier: str
     action: str
 
+
+@dataclass(frozen=True, slots=True)
+class _ProactiveBinding:
+    """将 Runtime、Service 与 Store 作为一个不可分割的读模型绑定。"""
+
+    runtime: Any
+    proactive_service: Any | None
+    store: ProactiveStore
+
 class WebProactiveControlService:
     def __init__(
         self,
@@ -47,14 +56,42 @@ class WebProactiveControlService:
         proactive_service: Any | None = None,
         store: ProactiveStore | None = None,
     ) -> None:
-        self.runtime = runtime
-        self.proactive_service = proactive_service
-        self.store = store or ProactiveStore(runtime.settings.data_dir)
+        self._binding = _ProactiveBinding(
+            runtime,
+            proactive_service,
+            store or ProactiveStore(runtime.settings.data_dir),
+        )
         self._locks = {domain: asyncio.Lock() for domain in _DOMAINS}
         self._proactive_revision = 0
 
     @property
+    def runtime(self) -> Any:
+        return self._binding.runtime
+
+    @property
+    def proactive_service(self) -> Any | None:
+        return self._binding.proactive_service
+
+    @property
+    def store(self) -> ProactiveStore:
+        return self._binding.store
+
+    def replace_runtime(self, runtime: Any, proactive_service: Any | None) -> None:
+        """原子切换 Web 读模型绑定，不影响旧绑定直到替换已可用。"""
+        self._binding = _ProactiveBinding(runtime, proactive_service, ProactiveStore(runtime.settings.data_dir))
+
+    @property
     def proactive_revision(self) -> int:
+        return self._proactive_revision
+
+    def bump_revision(self) -> int:
+        """记录一个后台领域变更并返回新的独立主动 revision。"""
+        self._proactive_revision += 1
+        return self._proactive_revision
+
+    def advance_revision(self, revision: int) -> int:
+        """接受本机所有者桥接而来的较新 revision。"""
+        self._proactive_revision = max(self._proactive_revision, revision)
         return self._proactive_revision
 
     def snapshot_all(self) -> dict[ProactiveDomain, ProactiveSnapshot]:
@@ -201,7 +238,7 @@ class WebProactiveControlService:
         return result
 
     def _changed(self, domain: ProactiveDomain, identifier: str, action: str) -> ProactiveNoticeTarget:
-        self._proactive_revision += 1
+        self.bump_revision()
         return ProactiveNoticeTarget(domain, identifier, action)
 
     def _read(self, name: str, default: dict[str, Any]) -> dict[str, Any]:

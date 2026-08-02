@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from ..bus.messages import OutboundMessage
 from ..bus.queue import AsyncMessageBus
@@ -100,3 +101,60 @@ class DeliveryGate:
     def _save_deliveries(self, deliveries: list[dict[str, str]]) -> None:
         """写入当前待投递快照。"""
         self._store.write_json("pending_deliveries.json", {"deliveries": deliveries})
+
+
+class WebDeliverySink:
+    """将 Web 主动通知保留在内存事件流，绝不触碰 CLI Outbox。"""
+
+    def __init__(self, publish: Callable[..., Awaitable[None]]) -> None:
+        self._publish = publish
+
+    async def enqueue(
+        self,
+        *,
+        target_channel: str,
+        event_type: str,
+        content: str,
+        source_id: str,
+    ) -> dict[str, str]:
+        """直接发布当前浏览器生命周期内的通知。"""
+        del target_channel
+        domain = _web_domain(event_type)
+        severity = "error" if event_type == "proactive.incident.opened" else "info"
+        await self._publish(
+            domain=domain,
+            entity_id=source_id,
+            severity=severity,
+            title=_web_notice_title(event_type),
+            message=content,
+        )
+        return {"event_type": event_type, "source_id": source_id}
+
+    async def delete_by_source_id(self, source_id: str) -> int:
+        """Web 没有 durable delivery，因此删除不会改写 pending_deliveries.json。"""
+        del source_id
+        return 0
+
+
+def _web_domain(event_type: str) -> str:
+    if ".cron." in event_type:
+        return "cron"
+    if ".breakbeat." in event_type:
+        return "breakbeat"
+    if ".dream." in event_type:
+        return "dream"
+    if ".skill_evolution." in event_type:
+        return "skill"
+    return "incident"
+
+
+def _web_notice_title(event_type: str) -> str:
+    titles: dict[str, str] = {
+        "proactive.cron.completed": "定时提醒已完成",
+        "proactive.breakbeat.completed": "Breakbeat 已完成",
+        "proactive.dream.completed": "长期记忆已更新",
+        "proactive.skill_evolution.completed": "Skill 演进已完成",
+        "proactive.incident.opened": "发现主动能力异常",
+        "proactive.incident.resolved": "主动能力已恢复",
+    }
+    return titles.get(event_type, "主动能力更新")

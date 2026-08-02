@@ -77,6 +77,8 @@ class ProactiveService:
         target_channel: str,
         active_session_id: Callable[[], str | None] | None = None,
         active_inbound_message: Callable[[], InboundMessage | None] | None = None,
+        delivery_sink: Any | None = None,
+        on_domain_change: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         """初始化对象状态。"""
         self.runtime = runtime
@@ -85,13 +87,19 @@ class ProactiveService:
         self._active_session_id = active_session_id or (lambda: None)
         self._active_inbound_message = active_inbound_message or (lambda: None)
         self.store = ProactiveStore(runtime.settings.data_dir)
-        self.delivery = DeliveryGate(
+        self.delivery = delivery_sink or DeliveryGate(
             self.store,
             bus,
             idle_probe=runtime.is_globally_idle,
             active_session_id=self._active_session_id if target_channel == "cli" else None,
         )
-        self.incidents = IncidentMonitor(self.store, self.delivery, target_channel=target_channel)
+        self._on_domain_change = on_domain_change
+        self.incidents = IncidentMonitor(
+            self.store,
+            self.delivery,
+            target_channel=target_channel,
+            state_changed=lambda: self._domain_changed("incident"),
+        )
         self._background_semaphore = asyncio.Semaphore(runtime.settings.proactive.background_max_concurrency)
         self._schedule_event = asyncio.Event()
         primary = _BoundedExecutor(
@@ -119,7 +127,7 @@ class ProactiveService:
             runtime.settings.proactive,
             target_channel=target_channel,
             incidents=self.incidents,
-            schedule_changed=self._wake_scheduler,
+            schedule_changed=self._cron_schedule_changed,
         )
         self.breakbeat = BreakbeatManager(
             self.store,
@@ -226,7 +234,8 @@ class ProactiveService:
         self.skill_evolution.initialize_schedule(now)
         self._install_mcp_listener()
         self._scheduler_task = asyncio.create_task(self._scheduler_loop(), name="proactive-scheduler")
-        self._delivery_task = asyncio.create_task(self._delivery_loop(), name="proactive-delivery")
+        if callable(getattr(self.delivery, "flush", None)):
+            self._delivery_task = asyncio.create_task(self._delivery_loop(), name="proactive-delivery")
 
     async def stop(self) -> None:
         """停止调度、取消尚未结束的后台工作并保留已有 durable 结果。"""
@@ -271,7 +280,8 @@ class ProactiveService:
             self._schedule_event.clear()
             now = datetime.now(UTC)
             try:
-                await self.cron.run_due(now)
+                if await self.cron.run_due(now):
+                    await self._domain_changed("cron")
                 if _due(self.breakbeat.next_run_at, now) and not self.breakbeat.running and not _task_active(
                     self._breakbeat_task
                 ):
@@ -344,6 +354,8 @@ class ProactiveService:
                 source="skill_evolution",
                 message="Skill Observation 审阅失败。",
             )
+        finally:
+            await self._domain_changed("skill")
 
     async def _run_breakbeat_tick(self) -> None:
         """执行当前处理。"""
@@ -374,6 +386,8 @@ class ProactiveService:
                 source="breakbeat",
                 message="Breakbeat 审阅失败。",
             )
+        finally:
+            await self._domain_changed("breakbeat")
 
     async def _run_dream_tick(self) -> None:
         """执行当前处理。"""
@@ -404,6 +418,8 @@ class ProactiveService:
                 source="dream",
                 message="Dream 审阅失败。",
             )
+        finally:
+            await self._domain_changed("dream")
 
     async def _run_skill_evolution_tick(self) -> None:
         """执行当前处理。"""
@@ -427,6 +443,8 @@ class ProactiveService:
                 source="skill_evolution",
                 message="Skill 自进化审阅失败。",
             )
+        finally:
+            await self._domain_changed("skill")
 
     def _spawn(self, coroutine: Awaitable[None], *, wake_on_done: bool = False) -> asyncio.Task[None]:
         """执行当前处理。"""
@@ -440,6 +458,16 @@ class ProactiveService:
     def _wake_scheduler(self) -> None:
         """通知 deadline 循环立即重新计算等待时长。"""
         self._schedule_event.set()
+
+    def _cron_schedule_changed(self) -> None:
+        """Cron 状态改变时同时刷新 deadline 与 Web 运行时投影。"""
+        self._wake_scheduler()
+        if self._running and self._on_domain_change is not None:
+            self._spawn(self._domain_changed("cron"))
+
+    async def _domain_changed(self, domain: str) -> None:
+        if self._on_domain_change is not None:
+            await self._on_domain_change(domain)
 
     def _current_message_record(self) -> MessageRecord | None:
         """把尚未 SAVE 的 CLI 入站消息转换为一次性审阅记录。"""
