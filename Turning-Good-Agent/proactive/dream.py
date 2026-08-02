@@ -286,7 +286,10 @@ class RunDreamTool:
     """立即执行内置 Dream 单例，不创建新的 Dream 实例。"""
 
     name = "run_dream"
-    description = "当用户明确要求运行 Dream 或总结长期记忆时，立即执行一次 Dream 审阅。"
+    description = (
+        "当用户明确要求运行 Dream 或总结长期记忆时执行。"
+        "仅在用户明确说“全局”或“全部”时审阅全部会话，否则只审阅当前会话。"
+    )
     parallel_safe = False
     input_schema = {
         "type": "object",
@@ -294,7 +297,7 @@ class RunDreamTool:
             "scope": {
                 "type": "string",
                 "enum": ["global", "session"],
-                "description": "全局审阅，或只审阅当前会话",
+                "description": "仅当用户明确说“全局”或“全部”时填 global；否则填 session。",
             }
         },
         "required": ["scope"],

@@ -340,7 +340,10 @@ class RunBreakbeatTool:
     """仅允许模型在用户明确要求执行 Breakbeat 时调用。"""
 
     name = "run_breakbeat"
-    description = "仅当用户明确要求执行 Breakbeat 时，立即审阅待办事项。"
+    description = (
+        "仅当用户明确要求执行 Breakbeat 时审阅待办事项。"
+        "仅在用户明确说“全局”或“全部”时审阅全部会话，否则只审阅当前会话。"
+    )
     parallel_safe = False
     input_schema = {
         "type": "object",
@@ -348,7 +351,7 @@ class RunBreakbeatTool:
             "scope": {
                 "type": "string",
                 "enum": ["global", "session"],
-                "description": "全局审阅，或只审阅当前会话",
+                "description": "仅当用户明确说“全局”或“全部”时填 global；否则填 session。",
             }
         },
         "required": ["scope"],
