@@ -83,6 +83,8 @@ class ProactiveOwnershipLease:
                     descriptor = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 except FileExistsError:
                     current = self._read_record()
+                    if current is not None and not current and not self._path.exists():
+                        continue
                     if current is None or not self._stale(current):
                         return self._state_for_record(current)
                     try:
@@ -168,21 +170,21 @@ class ProactiveOwnershipLease:
 
     def _stale(self, record: dict[str, object]) -> bool:
         owner_id = record.get("owner_id")
+        owner_kind = record.get("owner_kind")
         pid = record.get("owner_pid")
-        if not isinstance(owner_id, str) or not isinstance(pid, int):
-            return True
         heartbeat = _parse_heartbeat(record.get("heartbeat_at"))
-        if heartbeat is not None and (datetime.now(UTC) - heartbeat).total_seconds() >= _LEASE_EXPIRY_SECONDS:
-            return True
-        if os.name == "nt":
-            return not _windows_pid_alive(pid)
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return True
-        except PermissionError:
+        if (
+            not isinstance(owner_id, str)
+            or not owner_id
+            or not isinstance(owner_kind, str)
+            or not owner_kind
+            or not isinstance(pid, int)
+            or isinstance(pid, bool)
+            or pid < 1
+            or heartbeat is None
+        ):
             return False
-        return False
+        return (datetime.now(UTC) - heartbeat).total_seconds() >= _LEASE_EXPIRY_SECONDS
 
     @contextmanager
     def _exclusive_mutation(self):

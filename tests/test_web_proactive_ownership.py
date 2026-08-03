@@ -8,6 +8,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import threading
 
+import pytest
+
 ownership_module = __import__(
     "Turning-Good-Agent.web.backend.proactive_ownership",
     fromlist=["ProactiveOwnershipLease"],
@@ -38,7 +40,14 @@ def test_stale_owner_record_can_be_taken_over(tmp_path: Path) -> None:
         path = tmp_path / "proactive" / ".owner.json"
         path.parent.mkdir(parents=True)
         path.write_text(
-            json.dumps({"owner_id": "dead", "owner_kind": "cli"}),
+            json.dumps(
+                {
+                    "owner_id": "dead",
+                    "owner_kind": "cli",
+                    "owner_pid": os.getpid(),
+                    "heartbeat_at": (datetime.now(UTC) - timedelta(seconds=31)).isoformat(),
+                }
+            ),
             encoding="utf-8",
         )
         lease = ProactiveOwnershipLease(tmp_path, owner_kind="web", owner_id="web")
@@ -103,6 +112,57 @@ def test_fresh_remote_heartbeat_remains_readonly_despite_live_pid_collision(tmp_
     asyncio.run(run())
 
 
+def test_fresh_remote_heartbeat_remains_readonly_when_owner_pid_is_absent(tmp_path: Path) -> None:
+    async def run() -> None:
+        path = tmp_path / "proactive" / ".owner.json"
+        path.parent.mkdir(parents=True)
+        record = {
+            "owner_id": "cli-container",
+            "owner_kind": "cli",
+            "owner_pid": 2_147_483_647,
+            "heartbeat_at": datetime.now(UTC).isoformat(),
+        }
+        path.write_text(json.dumps(record), encoding="utf-8")
+        lease = ProactiveOwnershipLease(tmp_path, owner_kind="web", owner_id="web-container")
+
+        state = await lease.try_takeover()
+
+        assert state.writable is False
+        assert state.owner_id == "cli-container"
+        assert json.loads(path.read_text(encoding="utf-8")) == record
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "record",
+    (
+        {"owner_id": "cli", "owner_kind": "cli", "owner_pid": 1},
+        {"owner_id": "cli", "owner_kind": "cli", "owner_pid": 1, "heartbeat_at": "malformed"},
+        {"owner_id": "cli", "owner_kind": "cli", "owner_pid": 1, "heartbeat_at": "2026-08-03T12:00:00"},
+        {"owner_kind": "cli", "owner_pid": 1, "heartbeat_at": datetime.now(UTC).isoformat()},
+        {"owner_id": "cli", "owner_pid": 1, "heartbeat_at": datetime.now(UTC).isoformat()},
+        {"owner_id": "cli", "owner_kind": "cli", "heartbeat_at": datetime.now(UTC).isoformat()},
+        {"owner_id": "", "owner_kind": "cli", "owner_pid": 1, "heartbeat_at": datetime.now(UTC).isoformat()},
+        {"owner_id": "cli", "owner_kind": 1, "owner_pid": 1, "heartbeat_at": datetime.now(UTC).isoformat()},
+        {"owner_id": "cli", "owner_kind": "cli", "owner_pid": "1", "heartbeat_at": datetime.now(UTC).isoformat()},
+    ),
+)
+def test_incomplete_ownership_records_remain_readonly(tmp_path: Path, record: dict[str, object]) -> None:
+    async def run() -> None:
+        path = tmp_path / "proactive" / ".owner.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(record), encoding="utf-8")
+        lease = ProactiveOwnershipLease(tmp_path, owner_kind="web", owner_id="web-container")
+
+        state = await lease.try_takeover()
+
+        assert state.writable is False
+        assert json.loads(path.read_text(encoding="utf-8")) == record
+
+    asyncio.run(run())
+
+
 def test_partial_or_unreadable_live_record_is_never_deleted_for_takeover(tmp_path: Path) -> None:
     async def run() -> None:
         first = ProactiveOwnershipLease(tmp_path, owner_kind="web", owner_id="first", heartbeat_seconds=60)
@@ -142,7 +202,14 @@ def test_concurrent_stale_takeover_keeps_exactly_one_owner(tmp_path: Path) -> No
     stale_path = tmp_path / "proactive" / ".owner.json"
     stale_path.parent.mkdir(parents=True)
     stale_path.write_text(
-        json.dumps({"owner_id": "dead", "owner_kind": "cli"}),
+        json.dumps(
+            {
+                "owner_id": "dead",
+                "owner_kind": "cli",
+                "owner_pid": os.getpid(),
+                "heartbeat_at": (datetime.now(UTC) - timedelta(seconds=31)).isoformat(),
+            }
+        ),
         encoding="utf-8",
     )
     first_at_compare = threading.Event()
