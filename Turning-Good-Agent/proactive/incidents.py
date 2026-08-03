@@ -132,6 +132,25 @@ class IncidentMonitor:
         index = self._index_for_fingerprint(incidents, fingerprint)
         return None if index is None else Incident.from_dict(incidents[index])
 
+    async def resolve_by_fingerprint(self, fingerprint: str) -> Incident:
+        """记录 Web 用户确认解决，不生成主动投递。"""
+        async with self._lock:
+            incidents = self._load_incidents()
+            index = self._index_for_fingerprint(incidents, fingerprint)
+            if index is None:
+                raise ValueError(f"Incident 不存在：{fingerprint}")
+            incident = incidents[index]
+            if incident["state"] == "resolved":
+                raise ValueError(f"Incident 已解决：{fingerprint}")
+            now = utc_now_iso()
+            incident["state"] = "resolved"
+            incident["last_detected_at"] = now
+            incident["history"].append(self._history_entry("resolved", now, "用户在 Web 中标记已解决"))
+            self._save_incidents(incidents)
+            resolved = Incident.from_dict(incident)
+        await self._notify_state_changed()
+        return resolved
+
     async def delete_by_fingerprint(self, fingerprint: str) -> int:
         """硬删除指定 fingerprint 的当前 Incident。"""
         async with self._lock:

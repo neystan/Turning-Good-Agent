@@ -166,12 +166,14 @@ class BreakbeatManager:
             self._save_state(state)
             return item
 
-    async def complete_item(self, item_id: str) -> BreakbeatItem:
+    async def complete_item(self, item_id: str, *, strict: bool = False) -> BreakbeatItem:
         """确定性完成一个事项。"""
         async with self._lock:
             state = self._state()
             item = _item_by_id(state["items"], item_id)
             if item.status == "completed":
+                if strict:
+                    raise ValueError(f"Breakbeat 已完成：{item_id}")
                 return item
             completed = replace(item, status="completed", updated_at=utc_now_iso())
             state["items"] = [

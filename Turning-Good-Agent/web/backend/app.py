@@ -197,7 +197,7 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
         return proactive_snapshot("incident")
 
     async def proactive_action(domain: str, action: Any, *args: str) -> dict[str, object]:
-        if not ownership.state().writable:
+        if proactive_control.runtime.settings.proactive.enabled and not ownership.state().writable:
             raise HTTPException(409, "主动能力由另一个 Host 持有，当前为只读")
         try:
             await action(*args)

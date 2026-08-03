@@ -107,8 +107,12 @@ class WebProactiveControlService:
             payload = self._read("cron.json", {"jobs": [], "usage": self._usage()})
             jobs = self._items(payload, "jobs")
             self._find(jobs, identifier, "Cron Job")
-            payload["jobs"] = [item for item in jobs if item.get("id") != identifier]
-            self.store.write_json("cron.json", payload)
+            cron = self._manager_for_domain("cron")
+            if cron is None:
+                payload["jobs"] = [item for item in jobs if item.get("id") != identifier]
+                self.store.write_json("cron.json", payload)
+            else:
+                await cron.delete_job(identifier)
             return self._changed("cron", identifier, "delete")
 
     async def complete_breakbeat(self, identifier: str) -> ProactiveNoticeTarget:
@@ -117,9 +121,13 @@ class WebProactiveControlService:
             item = self._find(self._items(payload, "items"), identifier, "Breakbeat")
             if item.get("status") == "completed":
                 raise ProactiveConflictError(f"Breakbeat 已完成：{identifier}")
-            item["status"] = "completed"
-            item["updated_at"] = utc_now_iso()
-            self.store.write_json("breakbeat.json", payload)
+            breakbeat = self._manager_for_domain("breakbeat")
+            if breakbeat is None:
+                item["status"] = "completed"
+                item["updated_at"] = utc_now_iso()
+                self.store.write_json("breakbeat.json", payload)
+            else:
+                await breakbeat.complete_item(identifier, strict=True)
             return self._changed("breakbeat", identifier, "complete")
 
     async def delete_breakbeat(self, identifier: str) -> ProactiveNoticeTarget:
@@ -127,8 +135,12 @@ class WebProactiveControlService:
             payload = self._read("breakbeat.json", self._breakbeat_default())
             items = self._items(payload, "items")
             self._find(items, identifier, "Breakbeat")
-            payload["items"] = [item for item in items if item.get("id") != identifier]
-            self.store.write_json("breakbeat.json", payload)
+            breakbeat = self._manager_for_domain("breakbeat")
+            if breakbeat is None:
+                payload["items"] = [item for item in items if item.get("id") != identifier]
+                self.store.write_json("breakbeat.json", payload)
+            else:
+                await breakbeat.delete_item(identifier)
             return self._changed("breakbeat", identifier, "delete")
 
     async def delete_draft(self, name: str) -> ProactiveNoticeTarget:
@@ -150,17 +162,21 @@ class WebProactiveControlService:
             )
             if item.get("state") == "resolved":
                 raise ProactiveConflictError(f"Incident 已解决：{fingerprint}")
-            occurred_at = utc_now_iso()
-            item["state"] = "resolved"
-            item["last_detected_at"] = occurred_at
-            item["history"].append(
-                {
-                    "state": "resolved",
-                    "occurred_at": occurred_at,
-                    "message": "用户在 Web 中标记已解决",
-                }
-            )
-            self.store.write_json("incidents.json", payload)
+            incidents = self._manager_for_domain("incident")
+            if incidents is None:
+                occurred_at = utc_now_iso()
+                item["state"] = "resolved"
+                item["last_detected_at"] = occurred_at
+                item["history"].append(
+                    {
+                        "state": "resolved",
+                        "occurred_at": occurred_at,
+                        "message": "用户在 Web 中标记已解决",
+                    }
+                )
+                self.store.write_json("incidents.json", payload)
+            else:
+                await incidents.resolve_by_fingerprint(fingerprint)
             return self._changed("incident", fingerprint, "resolve")
 
     async def delete_incident(self, fingerprint: str) -> ProactiveNoticeTarget:
@@ -168,10 +184,14 @@ class WebProactiveControlService:
             payload = self._read("incidents.json", {"incidents": []})
             items = self._items(payload, "incidents")
             self._find_by_field(items, "fingerprint", fingerprint, "Incident")
-            payload["incidents"] = [
-                item for item in items if item.get("fingerprint") != fingerprint
-            ]
-            self.store.write_json("incidents.json", payload)
+            incidents = self._manager_for_domain("incident")
+            if incidents is None:
+                payload["incidents"] = [
+                    item for item in items if item.get("fingerprint") != fingerprint
+                ]
+                self.store.write_json("incidents.json", payload)
+            else:
+                await incidents.delete_by_fingerprint(fingerprint)
             return self._changed("incident", fingerprint, "delete")
 
     def _domain_data(self, domain: ProactiveDomain) -> dict[str, Any]:

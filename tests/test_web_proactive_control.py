@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
+from fastapi.testclient import TestClient
 
 
 control_module = importlib.import_module("Turning-Good-Agent.web.backend.proactive_control")
@@ -13,6 +14,8 @@ settings_module = importlib.import_module("Turning-Good-Agent.config.settings")
 memory_module = importlib.import_module("Turning-Good-Agent.memory.long_term")
 skills_module = importlib.import_module("Turning-Good-Agent.skills.manager")
 store_module = importlib.import_module("Turning-Good-Agent.proactive.store")
+app_module = importlib.import_module("Turning-Good-Agent.web.backend.app")
+incidents_module = importlib.import_module("Turning-Good-Agent.proactive.incidents")
 
 ProactiveConflictError = control_module.ProactiveConflictError
 ProactiveNotFoundError = control_module.ProactiveNotFoundError
@@ -22,6 +25,8 @@ ProactiveSettings = settings_module.ProactiveSettings
 Settings = settings_module.Settings
 SkillManager = skills_module.SkillManager
 ProactiveStore = store_module.ProactiveStore
+create_app = app_module.create_app
+IncidentMonitor = incidents_module.IncidentMonitor
 
 
 class _FakeCron:
@@ -42,6 +47,53 @@ class _FakeManager:
         self.next_run_at = next_run_at
 
 
+class _LiveCron(_FakeCron):
+    def __init__(self) -> None:
+        super().__init__({"cron-1": "active"})
+        self.deleted: list[str] = []
+
+    async def delete_job(self, job_id: str) -> object:
+        self.deleted.append(job_id)
+        return object()
+
+
+class _LiveBreakbeat(_FakeManager):
+    def __init__(self) -> None:
+        super().__init__(running=False, next_run_at=None)
+        self.completed: list[tuple[str, bool]] = []
+        self.deleted: list[str] = []
+
+    async def complete_item(self, item_id: str, *, strict: bool = False) -> object:
+        self.completed.append((item_id, strict))
+        return object()
+
+    async def delete_item(self, item_id: str) -> object:
+        self.deleted.append(item_id)
+        return object()
+
+
+class _LiveIncidents:
+    def __init__(self) -> None:
+        self.resolved: list[str] = []
+        self.deleted: list[str] = []
+
+    async def resolve_by_fingerprint(self, fingerprint: str) -> object:
+        self.resolved.append(fingerprint)
+        return object()
+
+    async def delete_by_fingerprint(self, fingerprint: str) -> int:
+        self.deleted.append(fingerprint)
+        return 1
+
+
+class _DeliveryRecorder:
+    def __init__(self) -> None:
+        self.enqueued: list[dict[str, object]] = []
+
+    async def enqueue(self, **payload: object) -> None:
+        self.enqueued.append(payload)
+
+
 def _usage() -> dict[str, int]:
     return {"calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
@@ -49,11 +101,19 @@ def _usage() -> dict[str, int]:
 def _runtime(tmp_path: Path) -> SimpleNamespace:
     settings = Settings(data_dir=tmp_path)
     settings.proactive = ProactiveSettings()
+    settings.tool_permissions.approval_required_tools = []
+    settings.local_config_path = tmp_path / "settings.local.json"
+    settings.local_config_path.write_text(
+        '{"data_dir":".","tool_permissions":{"approval_required_tools":[]}}',
+        encoding="utf-8",
+    )
     skills = SkillManager(tmp_path / ".skills", settings.skills)
     return SimpleNamespace(
         settings=settings,
         profile_memory=ProfileMemory(tmp_path, settings.proactive),
         skills=skills,
+        agent_loop=SimpleNamespace(tools=SimpleNamespace(tool_names=[])),
+        mcp=SimpleNamespace(statuses={}),
     )
 
 
@@ -247,6 +307,127 @@ def test_actions_report_missing_and_conflicting_records_without_partial_writes(t
     assert store.read_json("breakbeat.json", {})["items"][0]["status"] == "completed"
     assert store.read_json("incidents.json", {})["incidents"][0]["state"] == "resolved"
     assert service.proactive_revision == 2
+
+
+def test_owner_actions_delegate_to_live_managers(tmp_path: Path) -> None:
+    service, store = _service(tmp_path)
+    _seed_snapshots(store)
+    cron = _LiveCron()
+    breakbeat = _LiveBreakbeat()
+    incidents = _LiveIncidents()
+    service.replace_runtime(
+        service.runtime,
+        SimpleNamespace(
+            cron=cron,
+            breakbeat=breakbeat,
+            dream=None,
+            skill_evolution=None,
+            incidents=incidents,
+        ),
+    )
+
+    asyncio.run(service.delete_cron("cron-1"))
+    asyncio.run(service.complete_breakbeat("breakbeat-1"))
+    asyncio.run(service.delete_breakbeat("breakbeat-1"))
+    asyncio.run(service.resolve_incident("cron:failed"))
+    asyncio.run(service.delete_incident("cron:failed"))
+
+    assert cron.deleted == ["cron-1"]
+    assert breakbeat.completed == [("breakbeat-1", True)]
+    assert breakbeat.deleted == ["breakbeat-1"]
+    assert incidents.resolved == ["cron:failed"]
+    assert incidents.deleted == ["cron:failed"]
+
+
+def test_manual_incident_resolve_does_not_enqueue_delivery(tmp_path: Path) -> None:
+    store = ProactiveStore(tmp_path)
+    _seed_snapshots(store)
+    delivery = _DeliveryRecorder()
+    monitor = IncidentMonitor(store, delivery, target_channel="web")
+
+    asyncio.run(monitor.resolve_by_fingerprint("cron:failed"))
+
+    incident = store.read_json("incidents.json", {})["incidents"][0]
+    assert incident["state"] == "resolved"
+    assert incident["history"][-1]["message"] == "用户在 Web 中标记已解决"
+    assert delivery.enqueued == []
+
+
+def test_http_reads_return_complete_domain_snapshots(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    runtime.settings.proactive.enabled = False
+    _seed_snapshots(ProactiveStore(tmp_path))
+    _create_draft(SimpleNamespace(runtime=runtime))
+    app = create_app(runtime.settings, runtime)
+
+    client = TestClient(app)
+    for path, domain in (
+        ("/api/proactive/cron", "cron"),
+        ("/api/proactive/breakbeat", "breakbeat"),
+        ("/api/proactive/memory", "dream"),
+        ("/api/proactive/skills", "skill"),
+        ("/api/proactive/incidents", "incident"),
+    ):
+        response = client.get(path)
+
+        assert response.status_code == 200
+        assert response.json()["domain"] == domain
+        assert {"data", "runtime", "proactive_revision", "owner"} <= response.json().keys()
+    client.close()
+
+
+def test_http_disabled_mode_actions_clean_snapshots_and_return_updated_snapshot(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    runtime.settings.proactive.enabled = False
+    store = ProactiveStore(tmp_path)
+    _seed_snapshots(store)
+    _create_draft(SimpleNamespace(runtime=runtime))
+    app = create_app(runtime.settings, runtime)
+
+    client = TestClient(app)
+    requests = (
+        ("delete", "/api/proactive/cron/cron-1", "cron"),
+        ("post", "/api/proactive/breakbeat/breakbeat-1/complete", "breakbeat"),
+        ("delete", "/api/proactive/breakbeat/breakbeat-1", "breakbeat"),
+        ("delete", "/api/proactive/skills/drafts/web-review", "skill"),
+        ("post", "/api/proactive/incidents/cron:failed/resolve", "incident"),
+        ("delete", "/api/proactive/incidents/cron:failed", "incident"),
+    )
+    for method, path, domain in requests:
+        response = getattr(client, method)(path)
+
+        assert response.status_code == 200
+        assert response.json()["domain"] == domain
+        assert {"data", "runtime", "proactive_revision", "owner"} <= response.json().keys()
+    client.close()
+
+    assert store.read_json("incidents.json", {})["incidents"] == []
+
+
+def test_http_owner_conflict_and_missing_action_keep_snapshots_unchanged(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    runtime.settings.proactive.enabled = True
+    store = ProactiveStore(tmp_path)
+    _seed_snapshots(store)
+    app = create_app(runtime.settings, runtime)
+    ownership = app.state.proactive_ownership
+    ownership._path.parent.mkdir(parents=True, exist_ok=True)
+    ownership._path.write_text(
+        '{"owner_id":"other-host","owner_kind":"cli","owner_pid":1}',
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    assert client.delete("/api/proactive/cron/cron-1").status_code == 409
+    client.close()
+
+    ownership._path.unlink()
+    runtime.settings.proactive.enabled = False
+    client = TestClient(app)
+    assert client.delete("/api/proactive/cron/missing").status_code == 404
+    client.close()
+
+    assert store.read_json("cron.json", {})["jobs"][0]["id"] == "cron-1"
 
 
 def test_snapshot_domain_rejects_unknown_domain(tmp_path: Path) -> None:
