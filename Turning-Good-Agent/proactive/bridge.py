@@ -135,7 +135,10 @@ class CliProactiveBridge:
         self._revision += 1
         payload["proactive_revision"] = self._revision
         payload["owner"] = owner.to_dict()
-        if not await self._deliver(payload) and snapshot_domain is not None:
+        if await self._deliver(payload):
+            if snapshot_domain is not None:
+                self._pending_snapshots.pop(snapshot_domain, None)
+        elif snapshot_domain is not None:
             self._pending_snapshots[snapshot_domain] = payload
 
     async def _deliver(self, payload: dict[str, object]) -> bool:

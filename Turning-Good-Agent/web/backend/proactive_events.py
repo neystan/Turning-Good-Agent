@@ -41,6 +41,9 @@ class ProactiveEventHub:
         self._lock = asyncio.Lock()
         self._last_bridge_payload: dict[str, object] | None = None
         self._bridge_snapshots: dict[str, dict[str, object]] = {}
+        self._bridge_owner_id: str | None = None
+        self._bridge_source_revision = 0
+        self._bridge_rebased = False
 
     async def subscribe(self) -> asyncio.Queue[dict[str, object]]:
         queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
@@ -110,14 +113,28 @@ class ProactiveEventHub:
     async def accept_bridge_event(self, payload: dict[str, object]) -> None:
         """接收本机 CLI 所有者转发的完整事件，不接受公网或旧事件。"""
         self._validate_bridge_payload(payload)
-        if self._last_bridge_payload == payload:
+        source_payload = copy.deepcopy(payload)
+        if self._last_bridge_payload == source_payload:
             return
         revision = payload["proactive_revision"]
         assert isinstance(revision, int)
-        if revision <= self._controller.proactive_revision:
+        owner = payload["owner"]
+        assert isinstance(owner, dict)
+        owner_id = owner["owner_id"]
+        assert isinstance(owner_id, str)
+        if owner_id != self._bridge_owner_id:
+            self._bridge_owner_id = owner_id
+            self._bridge_source_revision = 0
+            self._bridge_rebased = self._controller.proactive_revision > 0
+        if revision <= self._bridge_source_revision:
             raise ValueError("bridge revision 必须严格递增")
-        self._controller.advance_revision(revision)
-        self._last_bridge_payload = copy.deepcopy(payload)
+        self._bridge_source_revision = revision
+        if self._bridge_rebased:
+            payload = copy.deepcopy(payload)
+            payload["proactive_revision"] = self._controller.bump_revision()
+        else:
+            self._controller.advance_revision(revision)
+        self._last_bridge_payload = source_payload
         if payload["type"] == "snapshot":
             self._bridge_snapshots[str(payload["domain"])] = copy.deepcopy(payload)
         await self._broadcast(payload)
