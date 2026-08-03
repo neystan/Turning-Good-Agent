@@ -93,6 +93,25 @@ export type EditableControlConfig = {
   memory: { compact_token_threshold: number; recent_window_token_limit: number };
   sessions: { retention_days: number };
   skills: { max_loaded_skills_per_turn: number; max_skill_tokens: number; max_loaded_skill_tokens_per_turn: number };
+  proactive: {
+    enabled: boolean;
+    timezone: string;
+    review_provider: string | null;
+    review_api_key_configured: boolean;
+    review_base_url: string | null;
+    review_model: string | null;
+    background_max_concurrency: number;
+    breakbeat_refresh_minutes: number;
+    dream_refresh_hours: number;
+    review_window_token_limit: number;
+    profile_total_token_limit: number;
+    user_profile_token_limit: number;
+    soul_profile_token_limit: number;
+    skill_observation_turn_interval: number;
+    skill_observation_token_limit: number;
+    skill_evolution_batch_token_limit: number;
+    skill_evolution_batches_per_kind: number;
+  };
 };
 
 export type ConfigApplyRequest = {
@@ -102,6 +121,7 @@ export type ConfigApplyRequest = {
     memory?: Partial<EditableControlConfig["memory"]>;
     sessions?: Partial<EditableControlConfig["sessions"]>;
     skills?: Partial<EditableControlConfig["skills"]>;
+    proactive?: Omit<Partial<EditableControlConfig["proactive"]>, "review_api_key_configured"> & { review_api_key?: string; clear_review_api_key?: boolean };
   };
   approval_required_tools?: { add: string[]; remove: string[] };
 };

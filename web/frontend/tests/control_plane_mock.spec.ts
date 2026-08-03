@@ -26,6 +26,25 @@ function controlConfig(state: "active" | "pending" | "applying" | "failed" = "ac
     memory: { compact_token_threshold: 200000, recent_window_token_limit: 20000 },
     sessions: { retention_days: 7 },
     skills: { max_loaded_skills_per_turn: 3, max_skill_tokens: 8000, max_loaded_skill_tokens_per_turn: 16000 },
+    proactive: {
+      enabled: true,
+      timezone: "Asia/Shanghai",
+      review_provider: null,
+      review_api_key_configured: false,
+      review_base_url: null,
+      review_model: null,
+      background_max_concurrency: 4,
+      breakbeat_refresh_minutes: 60,
+      dream_refresh_hours: 24,
+      review_window_token_limit: 100000,
+      profile_total_token_limit: 16000,
+      user_profile_token_limit: 12000,
+      soul_profile_token_limit: 4000,
+      skill_observation_turn_interval: 10,
+      skill_observation_token_limit: 160,
+      skill_evolution_batch_token_limit: 100000,
+      skill_evolution_batches_per_kind: 3,
+    },
     tool_permissions: { auto_approve_tools: false, approval_required_tools: ["exec"] },
   };
   return {
@@ -137,6 +156,32 @@ test("settings tests only editable LLM fields and uses text inputs with switches
   expect(testedChanges).not.toHaveProperty("api_key_configured");
   expect(testedChanges).toMatchObject({ base_url: "https://api.example.test/v1", streaming_enabled: false });
   await expect(page.getByRole("status")).toContainText("连接成功，42 ms");
+});
+
+test("settings applies proactive fields and keeps the review API key redacted", async ({ page }) => {
+  let proactiveChanges: Record<string, unknown> | null = null;
+  await page.route("**/api/control/config", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(controlConfig()) });
+  });
+  await page.route("**/api/control/tools", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(toolCatalog()) });
+  });
+  await page.route("**/api/control/config/apply", async (route) => {
+    proactiveChanges = (route.request().postDataJSON() as { changes: { proactive: Record<string, unknown> } }).changes.proactive;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(controlConfig()) });
+  });
+
+  await page.goto(`${baseUrl}/#settings`);
+  await expect(page.getByLabel("启用主动能力")).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByLabel("替换审阅 API Key")).toHaveValue("");
+  await page.getByLabel("主动能力时区").fill("America/New_York");
+  await page.getByLabel("替换审阅 API Key").fill("review-secret");
+  await page.getByRole("button", { name: "应用配置" }).click();
+
+  await expect.poll(() => proactiveChanges).toMatchObject({
+    timezone: "America/New_York",
+    review_api_key: "review-secret",
+  });
 });
 
 test("settings switches convey their state without visible on or off labels", async ({ page }) => {

@@ -36,6 +36,22 @@ const fields: FieldDefinition[] = [
   { group: "skills", field: "max_loaded_skills_per_turn", label: "每轮最大加载 Skill 数", type: "number" },
   { group: "skills", field: "max_skill_tokens", label: "单个 Skill 最大 Token", type: "number" },
   { group: "skills", field: "max_loaded_skill_tokens_per_turn", label: "每轮 Skill 最大 Token", type: "number" },
+  { group: "proactive", field: "enabled", label: "启用主动能力", type: "switch" },
+  { group: "proactive", field: "timezone", label: "主动能力时区", type: "text" },
+  { group: "proactive", field: "review_provider", label: "审阅模型 Provider", type: "text" },
+  { group: "proactive", field: "review_base_url", label: "审阅模型服务地址", type: "text" },
+  { group: "proactive", field: "review_model", label: "审阅模型标识", type: "text" },
+  { group: "proactive", field: "background_max_concurrency", label: "后台最大并发数", type: "number" },
+  { group: "proactive", field: "breakbeat_refresh_minutes", label: "Breakbeat 刷新间隔（分钟）", type: "number" },
+  { group: "proactive", field: "dream_refresh_hours", label: "Dream 刷新间隔（小时）", type: "number" },
+  { group: "proactive", field: "review_window_token_limit", label: "审阅窗口 Token 上限", type: "number" },
+  { group: "proactive", field: "profile_total_token_limit", label: "长期画像总 Token 上限", type: "number" },
+  { group: "proactive", field: "user_profile_token_limit", label: "USER 画像 Token 上限", type: "number" },
+  { group: "proactive", field: "soul_profile_token_limit", label: "SOUL 画像 Token 上限", type: "number" },
+  { group: "proactive", field: "skill_observation_turn_interval", label: "Skill 观察轮次间隔", type: "number" },
+  { group: "proactive", field: "skill_observation_token_limit", label: "Skill 观察 Token 上限", type: "number" },
+  { group: "proactive", field: "skill_evolution_batch_token_limit", label: "Skill 演进批次 Token 上限", type: "number" },
+  { group: "proactive", field: "skill_evolution_batches_per_kind", label: "每类 Skill 演进批次数", type: "number" },
 ];
 
 const groups: Array<{ title: string; key: FieldGroup }> = [
@@ -44,6 +60,7 @@ const groups: Array<{ title: string; key: FieldGroup }> = [
   { title: "记忆、会话与 Skill", key: "memory" },
   { title: "记忆、会话与 Skill", key: "sessions" },
   { title: "记忆、会话与 Skill", key: "skills" },
+  { title: "主动能力", key: "proactive" },
 ];
 
 function cloneConfig(config: EditableControlConfig): EditableControlConfig {
@@ -52,7 +69,7 @@ function cloneConfig(config: EditableControlConfig): EditableControlConfig {
 
 function changesFor(baseline: EditableControlConfig, draft: EditableControlConfig): ConfigApplyRequest["changes"] {
   const changes: ConfigApplyRequest["changes"] = {};
-  for (const group of ["llm", "runtime", "memory", "sessions", "skills"] as const) {
+  for (const group of ["llm", "runtime", "memory", "sessions", "skills", "proactive"] as const) {
     const changed = Object.fromEntries(Object.entries(draft[group]).filter(([key, value]) => baseline[group][key as never] !== value));
     if (Object.keys(changed).length) Object.assign(changes, { [group]: changed });
   }
@@ -64,6 +81,8 @@ export function ConfigEditor({ config, catalog, onApplied, onUnavailable }: Conf
   const [draft, setDraft] = useState(() => cloneConfig(config.desired));
   const [apiKey, setApiKey] = useState("");
   const [clearApiKey, setClearApiKey] = useState(false);
+  const [reviewApiKey, setReviewApiKey] = useState("");
+  const [clearReviewApiKey, setClearReviewApiKey] = useState(false);
   const [selectedTools, setSelectedTools] = useState(() => new Set([...(catalog?.tools.filter((tool) => tool.approval_required).map((tool) => tool.name) || []), ...(catalog?.unavailable_approval_required || [])]));
   const [baselineTools, setBaselineTools] = useState(() => new Set([...(catalog?.tools.filter((tool) => tool.approval_required).map((tool) => tool.name) || []), ...(catalog?.unavailable_approval_required || [])]));
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -73,7 +92,7 @@ export function ConfigEditor({ config, catalog, onApplied, onUnavailable }: Conf
   const requestVersion = useRef(0);
   const pollTimer = useRef<number | null>(null);
 
-  const hasChanges = Object.keys(changesFor(baseline, draft)).length > 0 || Boolean(apiKey) || clearApiKey || !sameSet(baselineTools, selectedTools);
+  const hasChanges = Object.keys(changesFor(baseline, draft)).length > 0 || Boolean(apiKey) || clearApiKey || Boolean(reviewApiKey) || clearReviewApiKey || !sameSet(baselineTools, selectedTools);
 
   useEffect(() => {
     const timer = pollTimer.current;
@@ -97,6 +116,8 @@ export function ConfigEditor({ config, catalog, onApplied, onUnavailable }: Conf
       setDraft(cloneConfig(next.desired));
       setApiKey("");
       setClearApiKey(false);
+      setReviewApiKey("");
+      setClearReviewApiKey(false);
       setBaselineTools(new Set(selectedTools));
       onApplied(next);
     }
@@ -120,7 +141,9 @@ export function ConfigEditor({ config, catalog, onApplied, onUnavailable }: Conf
   };
 
   const updateField = (definition: FieldDefinition, value: string | boolean) => {
-    setDraft((previous) => ({ ...previous, [definition.group]: { ...previous[definition.group], [definition.field]: definition.type === "number" ? Number(value) : value } }));
+    const isOptionalReviewField = definition.group === "proactive" && ["review_provider", "review_base_url", "review_model"].includes(definition.field);
+    const nextValue = definition.type === "number" ? Number(value) : isOptionalReviewField && value === "" ? null : value;
+    setDraft((previous) => ({ ...previous, [definition.group]: { ...previous[definition.group], [definition.field]: nextValue } }));
   };
 
   const apply = async () => {
@@ -131,6 +154,7 @@ export function ConfigEditor({ config, catalog, onApplied, onUnavailable }: Conf
     try {
       const changes = changesFor(baseline, draft);
       if (apiKey || clearApiKey) changes.llm = { ...(changes.llm || {}), ...(apiKey ? { api_key: apiKey } : {}), ...(clearApiKey ? { clear_api_key: true } : {}) };
+      if (reviewApiKey || clearReviewApiKey) changes.proactive = { ...(changes.proactive || {}), ...(reviewApiKey ? { review_api_key: reviewApiKey } : {}), ...(clearReviewApiKey ? { clear_review_api_key: true } : {}) };
       const add = [...selectedTools].filter((name) => !baselineTools.has(name));
       const remove = [...baselineTools].filter((name) => !selectedTools.has(name));
       const response = await api.applyControlConfig({ changes, approval_required_tools: { add, remove } });
@@ -183,7 +207,7 @@ export function ConfigEditor({ config, catalog, onApplied, onUnavailable }: Conf
 
   return <div className="settings-editor">
     <ScrollArea className="settings-editor-scroll"><div className="settings-groups">
-      {groups.map((group, index) => (index === 0 || groups[index - 1].title !== group.title) && <section className="settings-group" key={group.key}><h3>{group.title}</h3>{groups.filter((item) => item.title === group.title).flatMap((item) => fieldsFor(item.key))}{group.key === "llm" && <><div className="settings-field"><span>替换 API Key</span><input aria-label="替换 API Key" type="password" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setClearApiKey(false); }} /></div><div className="settings-field settings-clear-api-key"><span>清除已配置 API Key</span><ToggleSwitch label="清除 API Key" checked={clearApiKey} onCheckedChange={(next) => { setClearApiKey(next); setApiKey(""); }} /></div></>}</section>)}
+      {groups.map((group, index) => (index === 0 || groups[index - 1].title !== group.title) && <section className="settings-group" key={group.key}><h3>{group.title}</h3>{groups.filter((item) => item.title === group.title).flatMap((item) => fieldsFor(item.key))}{group.key === "llm" && <><div className="settings-field"><span>替换 API Key</span><input aria-label="替换 API Key" type="password" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setClearApiKey(false); }} /></div><div className="settings-field settings-clear-api-key"><span>清除已配置 API Key</span><ToggleSwitch label="清除 API Key" checked={clearApiKey} onCheckedChange={(next) => { setClearApiKey(next); setApiKey(""); }} /></div></>}{group.key === "proactive" && <><div className="settings-field"><span>替换审阅 API Key</span><input aria-label="替换审阅 API Key" type="password" value={reviewApiKey} onChange={(event) => { setReviewApiKey(event.target.value); setClearReviewApiKey(false); }} /></div><div className="settings-field settings-clear-api-key"><span>清除已配置审阅 API Key</span><ToggleSwitch label="清除审阅 API Key" checked={clearReviewApiKey} onCheckedChange={(next) => { setClearReviewApiKey(next); setReviewApiKey(""); }} /></div></>}</section>)}
       <ToolPermissionEditor catalog={catalog} selectedNames={selectedTools} onChange={setSelectedTools} />
     </div></ScrollArea>
     <footer className="settings-apply-bar" data-state={state.state} data-dirty={hasChanges}><span className="settings-apply-status">{applyStatus}</span>{state.state === "active" && !hasChanges && <span className="settings-apply-revision" title={state.active_revision}>revision {shortRevision}</span>}{testResult && <span className="settings-test-result" role="status">{testResult}</span>}<button type="button" onClick={() => void testLlm()} disabled={isApplying}>测试连接</button><button type="button" onClick={() => void apply()} disabled={!hasChanges || isApplying}>{isApplying ? "正在应用…" : "应用配置"}</button></footer>

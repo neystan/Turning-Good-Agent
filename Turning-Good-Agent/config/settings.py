@@ -298,18 +298,15 @@ def _load_skills_settings(payload: object) -> SkillsSettings:
 
 
 def _load_proactive_settings(payload: object) -> ProactiveSettings:
-    """解析 Phase 7 主动能力配置，跨字段规则留给共享 validator。"""
+    """解析 Phase 7 主动能力配置，全部字段规则留给共享 validator。"""
     if not isinstance(payload, dict):
         raise ValueError("proactive 必须是 object")
     settings = ProactiveSettings()
-    settings.enabled = _proactive_boolean(payload, "enabled", settings.enabled)
+    settings.enabled = _proactive_value(payload, "enabled", settings.enabled)
     if "timezone" in payload:
-        value = payload["timezone"]
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError("proactive.timezone 必须是非空字符串")
-        settings.timezone = value.strip()
+        settings.timezone = payload["timezone"]
     for key in ("review_provider", "review_api_key", "review_base_url", "review_model"):
-        setattr(settings, key, _proactive_optional_string(payload, key))
+        setattr(settings, key, _proactive_value(payload, key, None))
     for key in (
         "background_max_concurrency",
         "breakbeat_refresh_minutes",
@@ -323,38 +320,13 @@ def _load_proactive_settings(payload: object) -> ProactiveSettings:
         "skill_evolution_batch_token_limit",
         "skill_evolution_batches_per_kind",
     ):
-        setattr(settings, key, _proactive_positive_integer(payload, key, getattr(settings, key)))
+        setattr(settings, key, _proactive_value(payload, key, getattr(settings, key)))
     return settings
 
 
-def _proactive_boolean(payload: dict[str, object], name: str, default: bool) -> bool:
-    """读取不允许隐式转换的主动布尔配置。"""
-    if name not in payload:
-        return default
-    value = payload[name]
-    if type(value) is not bool:
-        raise ValueError(f"proactive.{name} 必须是布尔值")
-    return value
-
-
-def _proactive_positive_integer(payload: dict[str, object], name: str, default: int) -> int:
-    """读取不允许 bool 或字符串的主动正整数配置。"""
-    if name not in payload:
-        return default
-    value = payload[name]
-    if type(value) is not int or value <= 0:
-        raise ValueError(f"proactive.{name} 必须是正整数")
-    return value
-
-
-def _proactive_optional_string(payload: dict[str, object], name: str) -> str | None:
-    """读取主动模型的可选非空字符串配置。"""
-    value = payload.get(name)
-    if value is None:
-        return None
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"proactive.{name} 必须是非空字符串或 null")
-    return value.strip()
+def _proactive_value(payload: dict[str, object], name: str, default: object) -> object:
+    """保留原始主动配置值，由共享 validator 给出字段级错误。"""
+    return payload.get(name, default)
 
 
 def _load_mcp_server(name: str, payload: object) -> McpServerSettings:

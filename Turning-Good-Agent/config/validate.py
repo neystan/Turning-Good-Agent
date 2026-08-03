@@ -43,17 +43,17 @@ def validate_settings(
     _positive(errors, "llm.timeout_seconds", settings.llm.timeout_seconds)
     _non_negative(errors, "llm.max_retries", settings.llm.max_retries)
     _non_negative(errors, "llm.retry_delay_seconds", settings.llm.retry_delay_seconds)
-    _positive(errors, "proactive.background_max_concurrency", settings.proactive.background_max_concurrency)
-    _positive(errors, "proactive.breakbeat_refresh_minutes", settings.proactive.breakbeat_refresh_minutes)
-    _positive(errors, "proactive.dream_refresh_hours", settings.proactive.dream_refresh_hours)
-    _positive(errors, "proactive.review_window_token_limit", settings.proactive.review_window_token_limit)
-    _positive(errors, "proactive.profile_total_token_limit", settings.proactive.profile_total_token_limit)
-    _positive(errors, "proactive.user_profile_token_limit", settings.proactive.user_profile_token_limit)
-    _positive(errors, "proactive.soul_profile_token_limit", settings.proactive.soul_profile_token_limit)
-    _positive(errors, "proactive.skill_observation_turn_interval", settings.proactive.skill_observation_turn_interval)
-    _positive(errors, "proactive.skill_observation_token_limit", settings.proactive.skill_observation_token_limit)
-    _positive(errors, "proactive.skill_evolution_batch_token_limit", settings.proactive.skill_evolution_batch_token_limit)
-    _positive(errors, "proactive.skill_evolution_batches_per_kind", settings.proactive.skill_evolution_batches_per_kind)
+    _positive_integer(errors, "proactive.background_max_concurrency", settings.proactive.background_max_concurrency)
+    _positive_integer(errors, "proactive.breakbeat_refresh_minutes", settings.proactive.breakbeat_refresh_minutes)
+    _positive_integer(errors, "proactive.dream_refresh_hours", settings.proactive.dream_refresh_hours)
+    _positive_integer(errors, "proactive.review_window_token_limit", settings.proactive.review_window_token_limit)
+    _positive_integer(errors, "proactive.profile_total_token_limit", settings.proactive.profile_total_token_limit)
+    _positive_integer(errors, "proactive.user_profile_token_limit", settings.proactive.user_profile_token_limit)
+    _positive_integer(errors, "proactive.soul_profile_token_limit", settings.proactive.soul_profile_token_limit)
+    _positive_integer(errors, "proactive.skill_observation_turn_interval", settings.proactive.skill_observation_turn_interval)
+    _positive_integer(errors, "proactive.skill_observation_token_limit", settings.proactive.skill_observation_token_limit)
+    _positive_integer(errors, "proactive.skill_evolution_batch_token_limit", settings.proactive.skill_evolution_batch_token_limit)
+    _positive_integer(errors, "proactive.skill_evolution_batches_per_kind", settings.proactive.skill_evolution_batches_per_kind)
 
     if settings.memory.recent_window_token_limit > settings.memory.compact_token_threshold:
         errors["memory.recent_window_token_limit"] = "不能大于 compact_token_threshold"
@@ -85,6 +85,12 @@ def _non_negative(errors: dict[str, str], field: str, value: object) -> None:
     """校验非负配置项。"""
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
         errors[field] = "不能小于 0"
+
+
+def _positive_integer(errors: dict[str, str], field: str, value: object) -> None:
+    """校验正整数配置项。"""
+    if type(value) is not int or value <= 0:
+        errors[field] = "必须是正整数"
 
 
 def _validate_approval_names(
@@ -130,11 +136,16 @@ def _validate_proactive_settings(errors: dict[str, str], settings: Settings) -> 
         errors["proactive.review_configuration"] = "provider、api_key、base_url、model 必须同时配置"
     elif all(configured_review_fields) and proactive.review_provider != "openai-compatible":
         errors["proactive.review_provider"] = "仅支持 openai-compatible"
-    fixed_limits = {
-        "proactive.profile_total_token_limit": (proactive.profile_total_token_limit, 16_000),
-        "proactive.user_profile_token_limit": (proactive.user_profile_token_limit, 12_000),
-        "proactive.soul_profile_token_limit": (proactive.soul_profile_token_limit, 4_000),
-    }
-    for field, (actual, expected) in fixed_limits.items():
-        if actual != expected:
-            errors[field] = f"第一版固定为 {expected}"
+    profile_limits = (
+        proactive.profile_total_token_limit,
+        proactive.user_profile_token_limit,
+        proactive.soul_profile_token_limit,
+    )
+    if all(type(value) is int and value > 0 for value in profile_limits):
+        total, user, soul = profile_limits
+        if total < max(user, soul):
+            errors["proactive.profile_total_token_limit"] = "不能小于 USER 或 SOUL 画像配额"
+        elif total > user + soul:
+            errors["proactive.profile_total_token_limit"] = "不能大于 USER 与 SOUL 画像配额之和"
+        elif isinstance(settings.runtime.max_context_tokens, (int, float)) and total > settings.runtime.max_context_tokens:
+            errors["proactive.profile_total_token_limit"] = "不能大于 runtime.max_context_tokens"

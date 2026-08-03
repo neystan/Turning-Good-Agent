@@ -11,6 +11,7 @@ from typing import Callable, Mapping
 
 from ...config.settings import Settings
 from ...config.validate import SettingsValidationError, validate_settings
+from ...memory.long_term import ProfileMemory, ProfileMemoryLimitError
 
 
 _EDITABLE_FIELDS: dict[str, frozenset[str]] = {
@@ -41,6 +42,28 @@ _EDITABLE_FIELDS: dict[str, frozenset[str]] = {
     "sessions": frozenset({"retention_days"}),
     "skills": frozenset(
         {"max_loaded_skills_per_turn", "max_skill_tokens", "max_loaded_skill_tokens_per_turn"}
+    ),
+    "proactive": frozenset(
+        {
+            "enabled",
+            "timezone",
+            "review_provider",
+            "review_api_key",
+            "clear_review_api_key",
+            "review_base_url",
+            "review_model",
+            "background_max_concurrency",
+            "breakbeat_refresh_minutes",
+            "dream_refresh_hours",
+            "review_window_token_limit",
+            "profile_total_token_limit",
+            "user_profile_token_limit",
+            "soul_profile_token_limit",
+            "skill_observation_turn_interval",
+            "skill_observation_token_limit",
+            "skill_evolution_batch_token_limit",
+            "skill_evolution_batches_per_kind",
+        }
     ),
 }
 
@@ -116,7 +139,10 @@ class WebConfigControlService:
             for field_name, value in values.items():
                 if field_name not in allowed:
                     raise ConfigValidationError({f"{group}.{field_name}": "不支持修改"})
-                if group == "llm" and field_name == "clear_api_key":
+                if (group, field_name) in {
+                    ("llm", "clear_api_key"),
+                    ("proactive", "clear_review_api_key"),
+                }:
                     continue
                 target[field_name] = value
 
@@ -131,6 +157,20 @@ class WebConfigControlService:
             llm.pop("api_key", None)
         if isinstance(candidate.get("llm"), dict):
             candidate["llm"].pop("clear_api_key", None)
+
+        proactive_changes = request.changes.get("proactive", {})
+        if not isinstance(proactive_changes, dict):
+            proactive_changes = {}
+        if "review_api_key" in proactive_changes and "clear_review_api_key" in proactive_changes:
+            raise ConfigValidationError({"proactive.review_api_key": "不能同时替换和清除 API Key"})
+        if "review_api_key" in proactive_changes and not str(proactive_changes["review_api_key"]):
+            raise ConfigValidationError({"proactive.review_api_key": "不能为空；请使用 clear_review_api_key 明确清除"})
+        if proactive_changes.get("clear_review_api_key") is True:
+            proactive = candidate.setdefault("proactive", {})
+            assert isinstance(proactive, dict)
+            proactive.pop("review_api_key", None)
+        if isinstance(candidate.get("proactive"), dict):
+            candidate["proactive"].pop("clear_review_api_key", None)
 
         changes = request.approval_required_tools
         if set(changes.add) & set(changes.remove):
@@ -167,7 +207,6 @@ class WebConfigControlService:
                 available_tool_names=self.native_tool_names | self._live_tool_names(),
                 unavailable_approval_names=self._unavailable_approval_names(),
             )
-            return settings
         except SettingsValidationError as exc:
             raise ConfigValidationError(exc.field_errors) from exc
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -175,6 +214,26 @@ class WebConfigControlService:
         finally:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
+        self._validate_existing_profiles(settings)
+        return settings
+
+    @staticmethod
+    def _validate_existing_profiles(settings: Settings) -> None:
+        """拒绝会截断既有长期画像的配额下调。"""
+        try:
+            ProfileMemory(settings.data_dir, settings.proactive).read()
+        except ProfileMemoryLimitError as exc:
+            message = str(exc)
+            if message.startswith("USER.md"):
+                field = "proactive.user_profile_token_limit"
+                detail = "现有 USER.md 超过新的画像配额"
+            elif message.startswith("SOUL.md"):
+                field = "proactive.soul_profile_token_limit"
+                detail = "现有 SOUL.md 超过新的画像配额"
+            else:
+                field = "proactive.profile_total_token_limit"
+                detail = "现有长期记忆超过新的总画像配额"
+            raise ConfigValidationError({field: detail}) from exc
 
     def _read_raw(self) -> dict[str, object]:
         if not self.config_path.exists():
@@ -231,5 +290,24 @@ class WebConfigControlService:
                 "max_loaded_skills_per_turn": settings.skills.max_loaded_skills_per_turn,
                 "max_skill_tokens": settings.skills.max_skill_tokens,
                 "max_loaded_skill_tokens_per_turn": settings.skills.max_loaded_skill_tokens_per_turn,
+            },
+            "proactive": {
+                "enabled": settings.proactive.enabled,
+                "timezone": settings.proactive.timezone,
+                "review_provider": settings.proactive.review_provider,
+                "review_api_key_configured": bool(settings.proactive.review_api_key),
+                "review_base_url": settings.proactive.review_base_url,
+                "review_model": settings.proactive.review_model,
+                "background_max_concurrency": settings.proactive.background_max_concurrency,
+                "breakbeat_refresh_minutes": settings.proactive.breakbeat_refresh_minutes,
+                "dream_refresh_hours": settings.proactive.dream_refresh_hours,
+                "review_window_token_limit": settings.proactive.review_window_token_limit,
+                "profile_total_token_limit": settings.proactive.profile_total_token_limit,
+                "user_profile_token_limit": settings.proactive.user_profile_token_limit,
+                "soul_profile_token_limit": settings.proactive.soul_profile_token_limit,
+                "skill_observation_turn_interval": settings.proactive.skill_observation_turn_interval,
+                "skill_observation_token_limit": settings.proactive.skill_observation_token_limit,
+                "skill_evolution_batch_token_limit": settings.proactive.skill_evolution_batch_token_limit,
+                "skill_evolution_batches_per_kind": settings.proactive.skill_evolution_batches_per_kind,
             },
         }
