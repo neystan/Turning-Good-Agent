@@ -167,6 +167,7 @@ class ProactiveService:
         self._dream_task: asyncio.Task[None] | None = None
         self._skill_evolution_task: asyncio.Task[None] | None = None
         self._mcp_listener: Callable[[Any], None] | None = None
+        self._installed_tools: list[Any] = []
         runtime.proactive.register(self)
 
     def _review_loop(self) -> AgentLoop:
@@ -200,7 +201,7 @@ class ProactiveService:
         return self.cron.is_idle and not self._background_tasks
 
     def install_tools(self) -> None:
-        """仅在 CLI Runtime 上注册主动能力 Tool。"""
+        """将本服务拥有的交互式主动 Tool 注册到当前 Runtime。"""
         registry = self.runtime.agent_loop.tools
         tools = [
             CreateCronTool(self.cron),
@@ -228,6 +229,14 @@ class ProactiveService:
         for tool in tools:
             if not registry.has(tool.name):
                 registry.register(tool)
+                self._installed_tools.append(tool)
+
+    def uninstall_tools(self) -> None:
+        """仅移除仍由本服务注册的主动 Tool。"""
+        registry = self.runtime.agent_loop.tools
+        for tool in self._installed_tools:
+            registry.unregister(tool)
+        self._installed_tools.clear()
 
     async def start(self) -> None:
         """恢复 durable 状态并启动未来触发，不补跑错过时间。"""

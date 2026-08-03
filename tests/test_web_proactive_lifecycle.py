@@ -5,6 +5,8 @@ import importlib
 from pathlib import Path
 from types import SimpleNamespace
 
+from fastapi.testclient import TestClient
+
 
 lifecycle_module = importlib.import_module("Turning-Good-Agent.web.backend.proactive_lifecycle")
 ownership_module = importlib.import_module("Turning-Good-Agent.web.backend.proactive_ownership")
@@ -13,10 +15,34 @@ delivery_module = importlib.import_module("Turning-Good-Agent.proactive.delivery
 service_module = importlib.import_module("Turning-Good-Agent.proactive.service")
 manager_module = importlib.import_module("Turning-Good-Agent.proactive.manager")
 memory_module = importlib.import_module("Turning-Good-Agent.memory.long_term")
+settings_module = importlib.import_module("Turning-Good-Agent.config.settings")
 tools_module = importlib.import_module("Turning-Good-Agent.tools.registry")
 bus_module = importlib.import_module("Turning-Good-Agent.bus.queue")
 supervisor_module = importlib.import_module("Turning-Good-Agent.web.backend.runtime_supervisor")
 control_module = importlib.import_module("Turning-Good-Agent.web.backend.proactive_control")
+app_module = importlib.import_module("Turning-Good-Agent.web.backend.app")
+skills_module = importlib.import_module("Turning-Good-Agent.skills.manager")
+
+
+ProactiveService = service_module.ProactiveService
+Settings = settings_module.Settings
+SkillManager = skills_module.SkillManager
+
+PROACTIVE_TOOL_NAMES = {
+    "create_cron",
+    "list_crons",
+    "delete_cron",
+    "run_breakbeat",
+    "list_breakbeat",
+    "complete_breakbeat",
+    "delete_breakbeat",
+    "run_dream",
+    "read_profile_memory",
+    "run_skill_evolution",
+    "list_skill_drafts",
+    "delete_skill_draft",
+    "list_incidents",
+}
 
 
 class FakeRuntime:
@@ -47,6 +73,8 @@ class EmptyLoop:
 
 
 class FakeMcp:
+    statuses: dict[str, object] = {}
+
     def add_status_listener(self, listener) -> None:
         del listener
 
@@ -55,7 +83,14 @@ class FakeMcp:
 
 
 class FakeService:
-    def __init__(self, *, fail_start: bool = False, events: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        name: str = "service",
+        fail_start: bool = False,
+        events: list[str] | None = None,
+    ) -> None:
+        self.name = name
         self.fail_start = fail_start
         self.events = events if events is not None else []
         self.start_calls = 0
@@ -63,16 +98,37 @@ class FakeService:
 
     async def start(self) -> None:
         self.start_calls += 1
-        self.events.append("service.start")
+        self.events.append(f"{self.name}.start")
         if self.fail_start:
             raise RuntimeError("proactive start failed")
 
     async def stop(self) -> None:
         self.stop_calls += 1
-        self.events.append("service.stop")
+        self.events.append(f"{self.name}.stop")
 
     def install_tools(self) -> None:
-        self.events.append("service.install_tools")
+        self.events.append(f"{self.name}.install_tools")
+
+    def uninstall_tools(self) -> None:
+        self.events.append(f"{self.name}.uninstall_tools")
+
+
+class NamedTool:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+def test_registry_unregistration_requires_tool_identity() -> None:
+    registry = tools_module.ToolRegistry()
+    installed = NamedTool("run_breakbeat")
+    replacement = NamedTool("run_breakbeat")
+    registry.register(installed)
+    registry.register(replacement)
+
+    assert registry.unregister(installed) is False
+    assert registry.get("run_breakbeat") is replacement
+    assert registry.unregister(replacement) is True
+    assert not registry.has("run_breakbeat")
 
 
 class IdleAwareFakeService(FakeService):
@@ -139,7 +195,92 @@ async def _web_owner_starts_service_and_stops_before_releasing_lease(tmp_path: P
     assert bindings[-1] == (runtime, service)
 
     await lifecycle.stop()
+    assert events.index("service.install_tools") < events.index("service.start")
+    assert events.index("service.uninstall_tools") < events.index("service.stop")
     assert events.index("service.stop") < events.index("lease.release")
+
+
+def test_web_lifecycle_exposes_real_proactive_tools_only_while_writable(tmp_path: Path) -> None:
+    asyncio.run(_web_lifecycle_exposes_real_proactive_tools_only_while_writable(tmp_path))
+
+
+async def _web_lifecycle_exposes_real_proactive_tools_only_while_writable(tmp_path: Path) -> None:
+    def runtime_at(root: Path) -> SimpleNamespace:
+        settings = Settings(data_dir=root)
+        return SimpleNamespace(
+            settings=settings,
+            agent_loop=EmptyLoop(),
+            sessions=EmptySessions(),
+            profile_memory=memory_module.ProfileMemory(root, settings.proactive),
+            mcp=FakeMcp(),
+            proactive=manager_module.ProactiveManager(),
+            is_globally_idle=lambda: True,
+        )
+
+    def create_service(runtime: object) -> ProactiveService:
+        return ProactiveService(runtime, bus_module.AsyncMessageBus(), target_channel="web")
+
+    owner_runtime = runtime_at(tmp_path / "owner")
+    owner = lifecycle_module.WebProactiveLifecycle(
+        owner_runtime,
+        FakeLease(writable=True),
+        service_factory=create_service,
+        bind_runtime=lambda *_: None,
+        poll_seconds=60,
+    )
+    await owner.start()
+    assert PROACTIVE_TOOL_NAMES <= set(owner_runtime.agent_loop.tools.tool_names)
+    await owner.stop()
+    assert not (PROACTIVE_TOOL_NAMES & set(owner_runtime.agent_loop.tools.tool_names))
+
+    readonly_runtime = runtime_at(tmp_path / "readonly")
+    readonly = lifecycle_module.WebProactiveLifecycle(
+        readonly_runtime,
+        FakeLease(writable=False),
+        service_factory=create_service,
+        bind_runtime=lambda *_: None,
+        poll_seconds=0.001,
+    )
+    await readonly.start()
+    assert not (PROACTIVE_TOOL_NAMES & set(readonly_runtime.agent_loop.tools.tool_names))
+    readonly._ownership.writable = True
+    await _wait_for(lambda: PROACTIVE_TOOL_NAMES <= set(readonly_runtime.agent_loop.tools.tool_names))
+    await readonly.stop()
+    assert not (PROACTIVE_TOOL_NAMES & set(readonly_runtime.agent_loop.tools.tool_names))
+
+
+def test_writable_fastapi_lifespan_exposes_proactive_tools_in_catalog(tmp_path: Path) -> None:
+    async def noop() -> None:
+        return None
+
+    settings = Settings(data_dir=tmp_path)
+    settings.tool_permissions.approval_required_tools = []
+    settings.local_config_path = tmp_path / "settings.local.json"
+    settings.local_config_path.write_text(
+        '{"data_dir":".","tool_permissions":{"approval_required_tools":[]}}',
+        encoding="utf-8",
+    )
+    runtime = SimpleNamespace(
+        settings=settings,
+        agent_loop=EmptyLoop(),
+        sessions=EmptySessions(),
+        profile_memory=memory_module.ProfileMemory(tmp_path, settings.proactive),
+        mcp=FakeMcp(),
+        proactive=manager_module.ProactiveManager(),
+        skills=SkillManager(tmp_path / ".skills", settings.skills),
+        channel_router=SimpleNamespace(register=lambda *_: None),
+        is_globally_idle=lambda: True,
+        start=noop,
+        close=noop,
+    )
+    app = app_module.create_app(settings, runtime)
+
+    with TestClient(app) as client:
+        response = client.get("/api/control/tools")
+        assert response.status_code == 200
+        assert {"run_breakbeat", "create_cron"} <= {item["name"] for item in response.json()["tools"]}
+
+    assert not (PROACTIVE_TOOL_NAMES & set(runtime.agent_loop.tools.tool_names))
 
 
 def test_readonly_or_disabled_web_never_starts_scheduler(tmp_path: Path) -> None:
@@ -337,11 +478,12 @@ def test_failed_runtime_replacement_retains_old_proactive_binding(tmp_path: Path
 
 
 async def _failed_runtime_replacement_retains_old_proactive_binding(tmp_path: Path) -> None:
+    events: list[str] = []
     old_runtime = FakeRuntime(tmp_path)
     replacement = FakeRuntime(tmp_path)
-    lease = FakeLease(writable=True)
-    old_service = FakeService()
-    failed_service = FakeService(fail_start=True)
+    lease = FakeLease(writable=True, events=events)
+    old_service = FakeService(name="old", events=events)
+    failed_service = FakeService(name="candidate", fail_start=True, events=events)
     bindings: list[tuple[object, object | None]] = []
     services = iter((old_service, failed_service))
     lifecycle = lifecycle_module.WebProactiveLifecycle(
@@ -367,6 +509,10 @@ async def _failed_runtime_replacement_retains_old_proactive_binding(tmp_path: Pa
     assert lifecycle.service is old_service
     assert old_service.stop_calls == 1
     assert old_service.start_calls == 2
+    assert events.index("old.uninstall_tools") < events.index("old.stop")
+    assert events.index("candidate.install_tools") < events.index("candidate.start")
+    assert events.index("candidate.uninstall_tools") < events.index("candidate.stop")
+    assert events.index("old.install_tools", 1) < events.index("old.start", 2)
     assert bindings[-1] == (old_runtime, old_service)
     assert replacement.close_calls == 1
     await lifecycle.stop()
@@ -384,8 +530,8 @@ async def _successful_replacement_stops_old_scheduler_before_starting_new(tmp_pa
     events: list[str] = []
     old_runtime = FakeRuntime(tmp_path)
     replacement = FakeRuntime(tmp_path)
-    old_service = FakeService(events=events)
-    replacement_service = FakeService(events=events)
+    old_service = FakeService(name="old", events=events)
+    replacement_service = FakeService(name="replacement", events=events)
     services = iter((old_service, replacement_service))
     bindings: list[tuple[object, object | None]] = []
     lifecycle = lifecycle_module.WebProactiveLifecycle(
@@ -409,7 +555,9 @@ async def _successful_replacement_stops_old_scheduler_before_starting_new(tmp_pa
     assert supervisor.current_runtime is replacement
     assert lifecycle.service is replacement_service
     assert bindings[-1] == (replacement, replacement_service)
-    assert events.index("service.stop") < events.index("service.start", 1)
+    assert events.index("old.uninstall_tools") < events.index("old.stop")
+    assert events.index("replacement.install_tools") < events.index("replacement.start")
+    assert events.index("old.stop") < events.index("replacement.start")
     await lifecycle.stop()
 
 

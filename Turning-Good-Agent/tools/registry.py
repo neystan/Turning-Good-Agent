@@ -17,6 +17,15 @@ class ToolRegistry:
         self._schemas_cache = None
         self._openai_tools_cache = None
 
+    def unregister(self, tool: BaseTool) -> bool:
+        """仅在当前注册对象相同时移除工具。"""
+        if self._tools.get(tool.name) is not tool:
+            return False
+        del self._tools[tool.name]
+        self._schemas_cache = None
+        self._openai_tools_cache = None
+        return True
+
     def unregister_prefix(self, prefix: str) -> list[str]:
         """移除指定前缀的工具并使 schema 缓存失效。"""
         removed = [name for name in self._tools if name.startswith(prefix)]

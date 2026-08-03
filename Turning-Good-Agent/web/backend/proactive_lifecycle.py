@@ -88,15 +88,19 @@ class WebProactiveLifecycle:
                 return
             if old_service is not None:
                 await self._drain_service()
+                old_service.uninstall_tools()
                 await old_service.stop()
             candidate: Any | None = None
             try:
                 candidate = self._service_factory(replacement)
+                candidate.install_tools()
                 await candidate.start()
             except Exception:
                 if candidate is not None:
+                    candidate.uninstall_tools()
                     await candidate.stop()
                 if old_service is not None:
+                    old_service.install_tools()
                     await old_service.start()
                 raise
             self._runtime = replacement
@@ -141,8 +145,10 @@ class WebProactiveLifecycle:
             return
         candidate = self._service_factory(self._runtime)
         try:
+            candidate.install_tools()
             await candidate.start()
         except Exception:
+            candidate.uninstall_tools()
             await candidate.stop()
             await self._ownership.release_owner()
             raise
@@ -151,6 +157,7 @@ class WebProactiveLifecycle:
 
     async def _stop_service(self) -> None:
         if self._service is not None:
+            self._service.uninstall_tools()
             await self._service.stop()
             self._service = None
 
