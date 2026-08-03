@@ -166,7 +166,10 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
         return HTTPException(422, str(exc))
 
     def proactive_snapshot(domain: str) -> dict[str, object]:
-        return snapshot_payload(proactive_control.snapshot_domain(domain), ownership.state())
+        try:
+            return snapshot_payload(proactive_control.snapshot_domain(domain), ownership.state())
+        except ValueError as exc:
+            raise proactive_error(exc) from exc
 
     @app.get("/api/proactive")
     async def get_proactive_snapshot() -> dict[str, object]:
@@ -197,7 +200,10 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
         return proactive_snapshot("incident")
 
     async def proactive_action(domain: str, action: Any, *args: str) -> dict[str, object]:
-        if proactive_control.runtime.settings.proactive.enabled and not ownership.state().writable:
+        owner = ownership.state()
+        if not owner.writable and (
+            proactive_control.runtime.settings.proactive.enabled or owner.owner_id is not None
+        ):
             raise HTTPException(409, "主动能力由另一个 Host 持有，当前为只读")
         try:
             await action(*args)

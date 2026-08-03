@@ -112,7 +112,10 @@ class WebProactiveControlService:
                 payload["jobs"] = [item for item in jobs if item.get("id") != identifier]
                 self.store.write_json("cron.json", payload)
             else:
-                await cron.delete_job(identifier)
+                try:
+                    await cron.delete_job(identifier)
+                except ValueError as exc:
+                    self._raise_live_missing("cron.json", "jobs", "id", identifier, "Cron Job", exc)
             return self._changed("cron", identifier, "delete")
 
     async def complete_breakbeat(self, identifier: str) -> ProactiveNoticeTarget:
@@ -127,7 +130,10 @@ class WebProactiveControlService:
                 item["updated_at"] = utc_now_iso()
                 self.store.write_json("breakbeat.json", payload)
             else:
-                await breakbeat.complete_item(identifier, strict=True)
+                try:
+                    await breakbeat.complete_item(identifier, strict=True)
+                except ValueError as exc:
+                    self._raise_live_breakbeat_completion(identifier, exc)
             return self._changed("breakbeat", identifier, "complete")
 
     async def delete_breakbeat(self, identifier: str) -> ProactiveNoticeTarget:
@@ -140,7 +146,10 @@ class WebProactiveControlService:
                 payload["items"] = [item for item in items if item.get("id") != identifier]
                 self.store.write_json("breakbeat.json", payload)
             else:
-                await breakbeat.delete_item(identifier)
+                try:
+                    await breakbeat.delete_item(identifier)
+                except ValueError as exc:
+                    self._raise_live_missing("breakbeat.json", "items", "id", identifier, "Breakbeat", exc)
             return self._changed("breakbeat", identifier, "delete")
 
     async def delete_draft(self, name: str) -> ProactiveNoticeTarget:
@@ -176,7 +185,10 @@ class WebProactiveControlService:
                 )
                 self.store.write_json("incidents.json", payload)
             else:
-                await incidents.resolve_by_fingerprint(fingerprint)
+                try:
+                    await incidents.resolve_by_fingerprint(fingerprint)
+                except ValueError as exc:
+                    self._raise_live_incident_resolution(fingerprint, exc)
             return self._changed("incident", fingerprint, "resolve")
 
     async def delete_incident(self, fingerprint: str) -> ProactiveNoticeTarget:
@@ -191,7 +203,15 @@ class WebProactiveControlService:
                 ]
                 self.store.write_json("incidents.json", payload)
             else:
-                await incidents.delete_by_fingerprint(fingerprint)
+                try:
+                    removed = await incidents.delete_by_fingerprint(fingerprint)
+                except ValueError as exc:
+                    self._raise_live_missing(
+                        "incidents.json", "incidents", "fingerprint", fingerprint, "Incident", exc
+                    )
+                else:
+                    if removed == 0:
+                        raise ProactiveNotFoundError(f"Incident 不存在：{fingerprint}")
             return self._changed("incident", fingerprint, "delete")
 
     def _domain_data(self, domain: ProactiveDomain) -> dict[str, Any]:
@@ -338,6 +358,56 @@ class WebProactiveControlService:
             if item.get(field) == value:
                 return item
         raise ProactiveNotFoundError(f"{label} 不存在：{value}")
+
+    def _raise_live_missing(
+        self,
+        snapshot_name: str,
+        collection: str,
+        field: str,
+        value: str,
+        label: str,
+        cause: ValueError,
+    ) -> None:
+        payload = self._read(snapshot_name, self._snapshot_default(snapshot_name))
+        if not any(item.get(field) == value for item in self._items(payload, collection)):
+            raise ProactiveNotFoundError(f"{label} 不存在：{value}") from cause
+        raise cause
+
+    def _raise_live_breakbeat_completion(self, identifier: str, cause: ValueError) -> None:
+        payload = self._read("breakbeat.json", self._breakbeat_default())
+        item = next(
+            (candidate for candidate in self._items(payload, "items") if candidate.get("id") == identifier),
+            None,
+        )
+        if item is None:
+            raise ProactiveNotFoundError(f"Breakbeat 不存在：{identifier}") from cause
+        if item.get("status") == "completed":
+            raise ProactiveConflictError(f"Breakbeat 已完成：{identifier}") from cause
+        raise cause
+
+    def _raise_live_incident_resolution(self, fingerprint: str, cause: ValueError) -> None:
+        payload = self._read("incidents.json", {"incidents": []})
+        item = next(
+            (
+                candidate
+                for candidate in self._items(payload, "incidents")
+                if candidate.get("fingerprint") == fingerprint
+            ),
+            None,
+        )
+        if item is None:
+            raise ProactiveNotFoundError(f"Incident 不存在：{fingerprint}") from cause
+        if item.get("state") == "resolved":
+            raise ProactiveConflictError(f"Incident 已解决：{fingerprint}") from cause
+        raise cause
+
+    def _snapshot_default(self, snapshot_name: str) -> dict[str, Any]:
+        defaults = {
+            "cron.json": {"jobs": [], "usage": self._usage()},
+            "breakbeat.json": self._breakbeat_default(),
+            "incidents.json": {"incidents": []},
+        }
+        return defaults[snapshot_name]
 
     @staticmethod
     def _iso_value(value: object) -> str | None:
