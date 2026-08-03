@@ -420,7 +420,7 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
                 await websocket.send_json(payload)
             while True:
                 await websocket.send_json(await queue.get())
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, RuntimeError):
             return
         finally:
             await proactive_events.unsubscribe(queue)

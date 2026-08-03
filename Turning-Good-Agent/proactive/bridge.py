@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -12,6 +13,9 @@ from .store import ProactiveStore
 
 
 _LOOPBACK_HOST = "127.0.0.1"
+_BRIDGE_HOST_ENV = "TGA_PROACTIVE_BRIDGE_HOST"
+_BRIDGE_BIND_HOST_ENV = "TGA_PROACTIVE_BRIDGE_BIND_HOST"
+_BRIDGE_ALLOW_NON_LOOPBACK_ENV = "TGA_PROACTIVE_BRIDGE_ALLOW_NON_LOOPBACK"
 _PORT_START = 41000
 _PORT_COUNT = 2000
 _MAX_MESSAGE_BYTES = 1_048_576
@@ -27,9 +31,10 @@ class ProactiveBridgePublisher:
 
     def __init__(self, data_dir: Path) -> None:
         self._port = proactive_bridge_port(data_dir)
+        self._host = os.getenv(_BRIDGE_HOST_ENV, _LOOPBACK_HOST)
 
     async def publish(self, payload: dict[str, object]) -> None:
-        reader, writer = await asyncio.open_connection(_LOOPBACK_HOST, self._port)
+        reader, writer = await asyncio.open_connection(self._host, self._port)
         try:
             writer.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n")
             await writer.drain()
@@ -51,11 +56,13 @@ class ProactiveBridgeListener:
     ) -> None:
         self._port = proactive_bridge_port(data_dir)
         self._receiver = receiver
+        self._bind_host = os.getenv(_BRIDGE_BIND_HOST_ENV, _LOOPBACK_HOST)
+        self._allow_non_loopback = os.getenv(_BRIDGE_ALLOW_NON_LOOPBACK_ENV) == "1"
         self._server: asyncio.AbstractServer | None = None
 
     async def start(self) -> None:
         if self._server is None:
-            self._server = await asyncio.start_server(self._handle, _LOOPBACK_HOST, self._port)
+            self._server = await asyncio.start_server(self._handle, self._bind_host, self._port)
 
     async def stop(self) -> None:
         if self._server is not None:
@@ -66,7 +73,9 @@ class ProactiveBridgeListener:
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
         try:
-            if not isinstance(peer, tuple) or peer[0] not in {_LOOPBACK_HOST, "::1"}:
+            if not self._allow_non_loopback and (
+                not isinstance(peer, tuple) or peer[0] not in {_LOOPBACK_HOST, "::1"}
+            ):
                 raise ValueError("bridge 仅接受 loopback 连接")
             line = await reader.readline()
             if not line or len(line) > _MAX_MESSAGE_BYTES:
