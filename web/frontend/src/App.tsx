@@ -518,7 +518,7 @@ export function App() {
     <a className="skip-link" href="#main-content">跳到主动能力</a>
     {sidebar}
     {mobileMenu && <button className="scrim" aria-label="关闭会话栏" onClick={() => setMobileMenu(false)} />}
-    <ProactiveWorkspace domain={proactiveDomain} snapshots={proactiveState.snapshots} owner={proactiveState.owner} connection={proactiveState.connection} onSelectDomain={openProactive} onReturnToChat={returnToChat} />
+    <ProactiveWorkspace domain={proactiveDomain} snapshots={proactiveState.snapshots} owner={proactiveState.owner} connection={proactiveState.connection} onSelectDomain={openProactive} onReturnToChat={returnToChat} onSnapshot={receiveProactiveSnapshot} onOpenSession={(id) => navigate(id)} />
     <SessionSearchDialog open={searchOpen} sessions={[...sessions, ...archived]} currentId={sessionId} onClose={() => setSearchOpen(false)} onSelect={navigate} />
     <NoticeRegion notices={notices} onDismiss={dismissNotice} onNavigate={navigateProactiveNotice} />
   </div>;

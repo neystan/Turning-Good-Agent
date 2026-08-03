@@ -9,6 +9,7 @@ from ...proactive import dream as dream_module
 from ...proactive import skill_evolution as skill_module
 from ...proactive.store import ProactiveStore
 from ...proactive.types import CronJob, Incident, UsageTotals, utc_now_iso
+from ...sessions.token_counter import count_content_tokens
 
 ProactiveDomain = Literal["cron", "breakbeat", "dream", "skill", "incident"]
 _DOMAINS = ("cron", "breakbeat", "dream", "skill", "incident")
@@ -222,7 +223,24 @@ class WebProactiveControlService:
         if domain == "dream":
             data = self._read("dream.json", {"cursors": {}, "next_run_at": None, "usage": self._usage()})
             memory = self.runtime.profile_memory.read()
-            return {**data, "memory": {"user": memory.user, "soul": memory.soul}}
+            user_tokens = count_content_tokens(memory.user)
+            soul_tokens = count_content_tokens(memory.soul)
+            settings = self.runtime.settings.proactive
+            return {
+                **data,
+                "memory": {"user": memory.user, "soul": memory.soul},
+                "memory_tokens": {
+                    "user_tokens": user_tokens,
+                    "soul_tokens": soul_tokens,
+                    "total_tokens": user_tokens + soul_tokens,
+                },
+                "profile_limits": {
+                    "user_profile_token_limit": settings.user_profile_token_limit,
+                    "soul_profile_token_limit": settings.soul_profile_token_limit,
+                    "profile_total_token_limit": settings.profile_total_token_limit,
+                },
+                "timezone": settings.timezone,
+            }
         if domain == "skill":
             data = self._read("skill.json", {"observations": [], "next_run_at": None, "usage": self._usage()})
             return {**data, "drafts": self._draft_views()}

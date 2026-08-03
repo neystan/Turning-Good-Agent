@@ -42,7 +42,27 @@
 
 .proactive-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 
+.proactive-card-grid-single { grid-template-columns: minmax(0, 1fr); }
+
+.proactive-domain-page { display: grid; gap: 18px; }
+
+.proactive-domain-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 18px; border-radius: var(--radius-panel); padding: 16px 18px; background: var(--surface-raised); }
+
+.proactive-summary-facts { display: flex; flex-wrap: wrap; gap: 14px 24px; margin: 0; }
+
+.proactive-summary-facts div { display: grid; gap: 3px; }
+
+.proactive-summary-facts dt, .proactive-usage dt { color: var(--muted); font-size: .6875rem; }
+
+.proactive-summary-facts dd, .proactive-usage dd { margin: 0; font-size: .8125rem; overflow-wrap: anywhere; }
+
+.proactive-usage { display: grid; grid-template-columns: repeat(4, auto); gap: 16px; margin: 0; }
+
+.proactive-usage div { display: grid; gap: 3px; text-align: right; }
+
 .proactive-card { min-height: 148px; display: grid; align-content: start; gap: 18px; border-radius: var(--radius-panel); padding: 20px; background: var(--surface); box-shadow: 0 8px 22px color-mix(in srgb, var(--shadow) 28%, transparent); }
+
+.proactive-card.is-completed, .proactive-card.is-resolved { background: color-mix(in srgb, var(--surface) 78%, var(--workspace-surface)); }
 
 .proactive-card header { display: grid; gap: 5px; }
 
@@ -50,7 +70,7 @@
 
 .proactive-card header p { color: var(--muted); font-size: .75rem; }
 
-.proactive-card-content { min-width: 0; }
+.proactive-card-content { min-width: 0; display: grid; align-content: start; gap: 16px; }
 
 .proactive-facts { display: grid; gap: 12px; margin: 0; }
 
@@ -62,10 +82,65 @@
 
 .proactive-document { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); font-size: .875rem; line-height: 1.6; }
 
+.proactive-primary-content { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .9375rem; line-height: 1.65; }
+
+.proactive-card-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+
+.proactive-card-actions button, .proactive-source-link, .proactive-filter button { min-height: 34px; border: 0; border-radius: var(--radius-control); padding: 0 11px; background: var(--surface-hover); color: var(--text); font: inherit; font-size: .75rem; cursor: pointer; }
+
+.proactive-card-actions button:hover, .proactive-card-actions button:focus-visible, .proactive-source-link:hover, .proactive-source-link:focus-visible, .proactive-filter button:hover, .proactive-filter button:focus-visible { outline: 0; background: color-mix(in srgb, var(--surface-hover) 74%, var(--text)); }
+
+.proactive-card-actions button:active, .proactive-source-link:active, .proactive-filter button:active { transform: translateY(1px); }
+
+.proactive-card-actions button:disabled { cursor: not-allowed; opacity: .46; transform: none; }
+
+.proactive-card-actions .proactive-danger-action { background: color-mix(in srgb, var(--danger) 18%, var(--surface-hover)); color: var(--danger); }
+
+.proactive-source-link { justify-self: start; max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+
+.proactive-action-error { border-radius: var(--radius-control); padding: 10px 12px; background: color-mix(in srgb, var(--danger) 14%, var(--surface-raised)); color: var(--danger); font-size: .8125rem; line-height: 1.5; overflow-wrap: anywhere; }
+
+.proactive-empty { border-radius: var(--radius-panel); padding: 28px; background: var(--surface); color: var(--muted); text-align: center; }
+
+.proactive-token-readout { justify-self: start; border-radius: var(--radius-round); padding: 6px 10px; background: var(--surface-raised); color: var(--muted); font: .75rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+.proactive-id-list { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.proactive-id-list code { border-radius: var(--radius-control); padding: 4px 7px; background: var(--surface-raised); font-size: .75rem; }
+
+.proactive-markdown { min-width: 0; font-size: .875rem; line-height: 1.65; overflow-wrap: anywhere; }
+
+.proactive-markdown > :first-child { margin-top: 0; }
+
+.proactive-markdown > :last-child { margin-bottom: 0; }
+
+.proactive-markdown pre { max-width: 100%; overflow-x: auto; border-radius: var(--radius-control); padding: 12px; background: var(--surface-raised); }
+
+.proactive-markdown code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+.proactive-history { display: grid; gap: 10px; }
+
+.proactive-history h4 { margin: 0; font-size: .8125rem; }
+
+.proactive-history ol { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+
+.proactive-history li { display: grid; gap: 6px; border-radius: var(--radius-control); padding: 10px 12px; background: var(--surface-raised); }
+
+.proactive-history li div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; color: var(--muted); font-size: .6875rem; }
+
+.proactive-history li p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8125rem; line-height: 1.5; }
+
+.proactive-filter { display: flex; gap: 6px; }
+
+.proactive-filter button[aria-pressed="true"] { background: var(--text); color: var(--surface); }
+
 @media (max-width: 760px) {
   .proactive-header { grid-template-columns: auto minmax(0, 1fr); padding: 14px 16px; }
   .proactive-owner { display: none; }
   .proactive-tabs { padding: 8px 12px; }
   .proactive-scroll-viewport { padding: 24px 16px 40px; }
   .proactive-card-grid { grid-template-columns: 1fr; }
+  .proactive-domain-summary { grid-template-columns: 1fr; }
+  .proactive-usage { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .proactive-usage div { text-align: left; }
 }

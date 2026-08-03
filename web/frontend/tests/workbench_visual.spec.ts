@@ -105,3 +105,80 @@ test("long composer input expands upward without moving its action baseline", as
   expect(after!.y).toBeCloseTo(before!.y, 0);
   expect(after!.height).toBe(36);
 });
+
+test("proactive card walls stay natural-height, two-column, token-themed, and narrow-safe", async ({ page }, testInfo) => {
+  const owner = { mode: "owner", writable: true, owner_id: "web-owner", owner_kind: "web", owner_pid: 42 };
+  const usage = { calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+  const empty = (domain: "breakbeat" | "dream" | "skill" | "incident") => ({
+    type: "snapshot",
+    domain,
+    data: domain === "breakbeat" ? { items: [], cursors: {}, next_run_at: null, usage }
+      : domain === "dream" ? { cursors: {}, next_run_at: null, usage, memory: { user: "", soul: "" }, memory_tokens: { user_tokens: 0, soul_tokens: 0, total_tokens: 0 }, profile_limits: { user_profile_token_limit: 12000, soul_profile_token_limit: 4000, profile_total_token_limit: 16000 }, timezone: "Asia/Shanghai" }
+        : domain === "skill" ? { observations: [], drafts: [], next_run_at: null, usage }
+          : { incidents: [] },
+    runtime: { running: false, next_run_at: null, entity_states: {} },
+    proactive_revision: 1,
+    owner,
+  });
+  const longPrompt = Array.from({ length: 28 }, (_, index) => `完整 Prompt 第 ${index + 1} 行`).join("\n");
+  const cron = {
+    type: "snapshot",
+    domain: "cron",
+    data: { jobs: [
+      { id: "visual-a", cron: "0 9 * * *", created_at: "2026-08-01T08:00:00+08:00", prompt: longPrompt, recurring: true, delivery_channels: ["cli"], updated_at: "2026-08-02T08:00:00+08:00", next_run_at: "2026-08-03T09:00:00+08:00" },
+      { id: "visual-b", cron: null, created_at: "2026-08-01T08:00:00+08:00", prompt: "短 Prompt", recurring: false, delivery_channels: ["web"], updated_at: "2026-08-02T08:00:00+08:00", next_run_at: "2026-08-04T09:00:00+08:00" },
+    ], usage },
+    runtime: { running: false, next_run_at: "2026-08-03T09:00:00+08:00", entity_states: { "visual-a": "idle", "visual-b": "idle" } },
+    proactive_revision: 1,
+    owner,
+  };
+  await page.addInitScript((snapshots) => {
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = 1;
+      onopen: ((event: Event) => void) | null = null;
+      onmessage: ((event: MessageEvent<string>) => void) | null = null;
+      onclose: ((event: CloseEvent) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      constructor(readonly url: string) {
+        queueMicrotask(() => {
+          this.onopen?.(new Event("open"));
+          if (url.includes("/ws/proactive")) snapshots.forEach((payload) => this.onmessage?.({ data: JSON.stringify(payload) } as MessageEvent<string>));
+        });
+      }
+      send() {}
+      close() {}
+    }
+    Object.assign(window, { WebSocket: FakeWebSocket });
+  }, [cron, empty("breakbeat"), empty("dream"), empty("skill"), empty("incident")]);
+  await page.route(/\/api\/sessions\?archived=(?:false|true)$/, (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/api/settings/ui", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ auto_approve_tools: false }) }));
+
+  await page.goto(`${baseUrl}/#proactive/cron`);
+  const desktop = await page.locator('.proactive-card-grid').evaluate((grid) => {
+    const cards = [...grid.children] as HTMLElement[];
+    return {
+      columns: new Set(cards.map((card) => Math.round(card.getBoundingClientRect().x))).size,
+      firstHeight: cards[0].getBoundingClientRect().height,
+      firstScrollHeight: cards[0].scrollHeight,
+      backgroundImages: cards.map((card) => getComputedStyle(card).backgroundImage),
+      borderWidths: cards.map((card) => getComputedStyle(card).borderTopWidth),
+    };
+  });
+  expect(desktop.columns).toBe(2);
+  expect(desktop.firstHeight).toBe(desktop.firstScrollHeight);
+  expect(desktop.firstHeight).toBeGreaterThan(500);
+  expect(desktop.backgroundImages).toEqual(["none", "none"]);
+  expect(desktop.borderWidths).toEqual(["0px", "0px"]);
+  await testInfo.attach("proactive-dark-desktop", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+
+  await page.evaluate(() => localStorage.setItem("tga-theme", "light"));
+  await page.reload();
+  await expect(page.locator('[data-theme="light"]')).toHaveCount(1);
+  await page.setViewportSize({ width: 740, height: 760 });
+  const narrowColumns = await page.locator('.proactive-card-grid').evaluate((grid) => new Set([...grid.children].map((card) => Math.round((card as HTMLElement).getBoundingClientRect().x))).size);
+  expect(narrowColumns).toBe(1);
+  await page.locator(".proactive-scroll-viewport").evaluate((viewport) => { viewport.scrollTop = viewport.scrollHeight; });
+  await expect(page.getByRole("button", { name: "删除 Cron visual-b" })).toBeVisible();
+  await testInfo.attach("proactive-light-narrow", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+});

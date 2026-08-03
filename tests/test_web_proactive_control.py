@@ -293,6 +293,32 @@ def test_snapshot_all_separates_persisted_data_runtime_and_shared_revision(tmp_p
     assert snapshots["incident"].data["incidents"][0]["state"] == "open"
 
 
+def test_dream_snapshot_exposes_canonical_profile_budget_and_timezone(tmp_path: Path) -> None:
+    service, store = _service(tmp_path)
+    _seed_snapshots(store)
+    service.runtime.settings.proactive.timezone = "America/New_York"
+    service.runtime.settings.proactive.user_profile_token_limit = 17
+    service.runtime.settings.proactive.soul_profile_token_limit = 11
+    service.runtime.settings.proactive.profile_total_token_limit = 23
+    service.runtime.profile_memory.write(
+        memory_module.ProfileMemorySnapshot(user="hello world", soul="be precise")
+    )
+
+    data = service.snapshot_domain("dream").data
+
+    assert data["timezone"] == "America/New_York"
+    assert data["memory_tokens"] == {
+        "user_tokens": 2,
+        "soul_tokens": 2,
+        "total_tokens": 4,
+    }
+    assert data["profile_limits"] == {
+        "user_profile_token_limit": 17,
+        "soul_profile_token_limit": 11,
+        "profile_total_token_limit": 23,
+    }
+
+
 def test_direct_actions_update_only_their_snapshot_and_increment_revision(tmp_path: Path) -> None:
     service, store = _service(tmp_path)
     _seed_snapshots(store)

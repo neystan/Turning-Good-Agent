@@ -41,6 +41,92 @@ export type ProactiveRuntime = {
   entity_states: Record<string, string>;
 };
 
+export type ProactiveUsage = {
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+};
+
+export type CronJob = {
+  id: string;
+  cron: string | null;
+  created_at: string;
+  prompt: string;
+  recurring: boolean;
+  delivery_channels: string[];
+  updated_at: string;
+  next_run_at: string | null;
+};
+
+export type CronSnapshotData = { jobs: CronJob[]; usage: ProactiveUsage };
+
+export type BreakbeatItem = {
+  id: string;
+  todo: string;
+  deadline: string | null;
+  source_session_id: string;
+  status: "in_progress" | "completed";
+  created_at: string;
+  updated_at: string;
+};
+
+export type BreakbeatSnapshotData = {
+  items: BreakbeatItem[];
+  next_run_at: string | null;
+  usage: ProactiveUsage;
+};
+
+export type DreamSnapshotData = {
+  next_run_at: string | null;
+  usage: ProactiveUsage;
+  memory: { user: string; soul: string };
+  memory_tokens: { user_tokens: number; soul_tokens: number; total_tokens: number };
+  profile_limits: {
+    user_profile_token_limit: number;
+    soul_profile_token_limit: number;
+    profile_total_token_limit: number;
+  };
+  timezone: string;
+};
+
+export type SkillObservation = {
+  id: string;
+  created_at: string;
+  kind: "workflow" | "tool_procedure" | "failure_recovery" | "interaction_protocol";
+  observation: string;
+  source_session_id: string;
+  source_message_ids: string[];
+};
+
+export type SkillDraft = { name: string; description: string; body: string };
+export type SkillSnapshotData = {
+  observations: SkillObservation[];
+  drafts: SkillDraft[];
+  next_run_at: string | null;
+  usage: ProactiveUsage;
+};
+
+export type IncidentHistoryItem = {
+  state: "open" | "resolved";
+  occurred_at: string;
+  message: string;
+};
+
+export type ProactiveIncident = {
+  id: string;
+  fingerprint: string;
+  source: string;
+  state: "open" | "resolved";
+  first_detected_at: string;
+  last_detected_at: string;
+  occurrence_count: number;
+  message: string;
+  history: IncidentHistoryItem[];
+};
+
+export type IncidentSnapshotData = { incidents: ProactiveIncident[] };
+
 export type ProactiveSnapshot = {
   type?: "snapshot";
   domain: ProactiveWireDomain;

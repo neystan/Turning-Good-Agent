@@ -2,6 +2,11 @@ import { ArrowLeft, BellRing, BrainCircuit, CalendarClock, CircleAlert, Gauge, W
 
 import { ScrollArea } from "./ScrollArea";
 import { ProactiveCard } from "./ProactiveCard";
+import { ProactiveBreakbeatPage } from "./ProactiveBreakbeatPage";
+import { ProactiveCronPage } from "./ProactiveCronPage";
+import { ProactiveIncidentsPage } from "./ProactiveIncidentsPage";
+import { ProactiveMemoryPage } from "./ProactiveMemoryPage";
+import { ProactiveSkillsPage } from "./ProactiveSkillsPage";
 import type { ProactiveDomain, ProactiveOwner, ProactiveSnapshot, ProactiveState } from "../proactive_types";
 
 type ProactiveWorkspaceProps = {
@@ -11,6 +16,8 @@ type ProactiveWorkspaceProps = {
   connection: ProactiveState["connection"];
   onSelectDomain: (domain: ProactiveDomain) => void;
   onReturnToChat: () => void;
+  onSnapshot: (snapshot: ProactiveSnapshot) => void;
+  onOpenSession: (sessionId: string) => void;
 };
 
 const panels: Array<{ domain: ProactiveDomain; label: string; description: string; icon: typeof CalendarClock }> = [
@@ -22,10 +29,11 @@ const panels: Array<{ domain: ProactiveDomain; label: string; description: strin
 ];
 
 /** 渲染独立于聊天历史的主动能力工作面外壳。 */
-export function ProactiveWorkspace({ domain, snapshots, owner, connection, onSelectDomain, onReturnToChat }: ProactiveWorkspaceProps) {
+export function ProactiveWorkspace({ domain, snapshots, owner, connection, onSelectDomain, onReturnToChat, onSnapshot, onOpenSession }: ProactiveWorkspaceProps) {
   const panel = panels.find((item) => item.domain === domain) || panels[0];
   const snapshot = snapshots[domain];
   const ownerLabel = ownershipLabel(owner, connection);
+  const timezone = typeof snapshots.memory?.data.timezone === "string" ? snapshots.memory.data.timezone : null;
 
   return <main className="proactive-workspace" id="main-content">
     <header className="proactive-header">
@@ -52,29 +60,25 @@ export function ProactiveWorkspace({ domain, snapshots, owner, connection, onSel
           </div>
           <span className={`proactive-runtime ${snapshot?.runtime.running ? "is-running" : ""}`}><Gauge size={15} />{runtimeLabel(snapshot)}</span>
         </header>
-        {snapshot ? <SnapshotPreview domain={domain} snapshot={snapshot} /> : <ProactiveCard title="正在同步主动状态"><p className="proactive-muted">连接建立后会收到该领域的完整最新快照。</p></ProactiveCard>}
+        {snapshot ? <DomainPage domain={domain} snapshot={snapshot} writable={Boolean(owner?.writable)} timezone={timezone} onSnapshot={onSnapshot} onOpenSession={onOpenSession} /> : <ProactiveCard card="loading" title="正在同步主动状态"><p className="proactive-muted">连接建立后会收到该领域的完整最新快照。</p></ProactiveCard>}
       </section>
     </ScrollArea>
   </main>;
 }
 
-/** Task 7 只呈现快照入口；完整领域记录与操作由后续卡片任务负责。 */
-function SnapshotPreview({ domain, snapshot }: { domain: ProactiveDomain; snapshot: ProactiveSnapshot }) {
-  const memory = snapshot.data.memory;
-  const memoryView = memory && typeof memory === "object" ? memory as { user?: unknown; soul?: unknown } : null;
-
-  return <div className="proactive-card-grid">
-    <ProactiveCard title="当前快照" subtitle={`Revision ${snapshot.proactive_revision}`}>
-      <dl className="proactive-facts">
-        <div><dt>实时状态</dt><dd>{runtimeLabel(snapshot)}</dd></div>
-        <div><dt>下次计划</dt><dd>{snapshot.runtime.next_run_at || value(snapshot.data.next_run_at) || "暂无计划"}</dd></div>
-      </dl>
-    </ProactiveCard>
-    {domain === "memory" && <>
-      <ProactiveCard title="USER.md" subtitle="长期用户画像"><p className="proactive-document">{value(memoryView?.user) || "暂无稳定用户画像。"}</p></ProactiveCard>
-      <ProactiveCard title="SOUL.md" subtitle="长期协作原则"><p className="proactive-document">{value(memoryView?.soul) || "暂无稳定协作原则。"}</p></ProactiveCard>
-    </>}
-  </div>;
+function DomainPage({ domain, snapshot, writable, timezone, onSnapshot, onOpenSession }: {
+  domain: ProactiveDomain;
+  snapshot: ProactiveSnapshot;
+  writable: boolean;
+  timezone: string | null;
+  onSnapshot: (snapshot: ProactiveSnapshot) => void;
+  onOpenSession: (sessionId: string) => void;
+}) {
+  if (domain === "cron") return <ProactiveCronPage snapshot={snapshot} writable={writable} timezone={timezone} onSnapshot={onSnapshot} />;
+  if (domain === "breakbeat") return <ProactiveBreakbeatPage snapshot={snapshot} writable={writable} onSnapshot={onSnapshot} onOpenSession={onOpenSession} />;
+  if (domain === "memory") return <ProactiveMemoryPage snapshot={snapshot} />;
+  if (domain === "skills") return <ProactiveSkillsPage snapshot={snapshot} writable={writable} onSnapshot={onSnapshot} onOpenSession={onOpenSession} />;
+  return <ProactiveIncidentsPage snapshot={snapshot} writable={writable} onSnapshot={onSnapshot} />;
 }
 
 function runtimeLabel(snapshot: ProactiveSnapshot | undefined): string {
@@ -88,8 +92,4 @@ function ownershipLabel(owner: ProactiveOwner | null, connection: ProactiveState
   if (connection !== "connected") return "正在连接";
   if (!owner?.writable) return owner?.owner_id ? "只读：由其他 Host 持有" : "已停用";
   return "本机所有者";
-}
-
-function value(input: unknown): string | null {
-  return typeof input === "string" && input.trim() ? input : null;
 }
