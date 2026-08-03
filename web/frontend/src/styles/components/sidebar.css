@@ -191,6 +191,38 @@
   color: var(--text);
 }
 
+.sidebar-workspaces { display: grid; gap: 2px; padding: 6px 10px 10px; }
+
+.sidebar-proactive,
+.sidebar-settings { width: 100%; min-height: 40px; display: inline-flex; align-items: center; gap: 8px; margin: 0; border: 0; border-radius: var(--radius-control); padding: 0 10px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: .875rem; text-align: left; }
+
+.sidebar-proactive:hover,
+.sidebar-proactive:focus-visible,
+.sidebar-settings:hover,
+.sidebar-settings:focus-visible { background: var(--surface-hover); color: var(--text); }
+
+.sidebar-health { min-width: 0; display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--muted); font-size: .6875rem; white-space: nowrap; }
+
+.sidebar-health i { width: 7px; height: 7px; flex: 0 0 7px; border-radius: var(--radius-round); background: var(--muted); }
+
+.sidebar-health[data-state="idle"] { color: var(--success); }
+.sidebar-health[data-state="idle"] i { background: var(--success); }
+.sidebar-health[data-state="active"] { color: var(--accent); }
+.sidebar-health[data-state="active"] i { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.sidebar-health[data-state="incident"] { color: var(--danger); }
+.sidebar-health[data-state="incident"] i { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 16%, transparent); }
+.sidebar-health[data-state="readonly"] { color: var(--muted); }
+.sidebar-health[data-state="readonly"] i,
+.sidebar-health[data-state="unavailable"] i { background: var(--muted); }
+
+.app-shell.is-sidebar-collapsed .sidebar-workspaces { padding-inline: 10px; }
+.app-shell.is-sidebar-collapsed .sidebar-proactive,
+.app-shell.is-sidebar-collapsed .sidebar-settings { justify-content: center; padding-inline: 0; }
+.app-shell.is-sidebar-collapsed .sidebar-proactive > span:not(.sidebar-health),
+.app-shell.is-sidebar-collapsed .sidebar-settings > span,
+.app-shell.is-sidebar-collapsed .sidebar-health > span { display: none; }
+.app-shell.is-sidebar-collapsed .sidebar-health { margin-left: 0; }
+
 .session-select {
   color: var(--muted);
   font-size: .875rem;

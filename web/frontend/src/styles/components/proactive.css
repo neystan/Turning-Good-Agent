@@ -1,0 +1,71 @@
+.proactive-workspace { min-width: 0; height: 100dvh; display: grid; grid-template-rows: auto auto minmax(0, 1fr); background: var(--workspace-surface); color: var(--text); }
+
+.proactive-header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 22px clamp(20px, 4vw, 56px) 18px; background: var(--surface); box-shadow: 0 7px 16px color-mix(in srgb, var(--shadow) 28%, transparent); }
+
+.proactive-header h1, .proactive-header p, .proactive-panel h2, .proactive-card h3, .proactive-card p { margin: 0; }
+
+.proactive-header h1 { margin-top: 2px; font-size: 1.25rem; letter-spacing: -.025em; }
+
+.proactive-header p, .proactive-muted { margin-top: 5px; color: var(--muted); font-size: .875rem; line-height: 1.5; }
+
+.proactive-kicker { color: var(--accent); font: .6875rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; }
+
+.proactive-return, .proactive-tabs button { border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
+
+.proactive-return { min-height: 36px; display: inline-flex; align-items: center; gap: 7px; padding: 0 10px; }
+
+.proactive-return:hover, .proactive-return:focus-visible, .proactive-tabs button:hover, .proactive-tabs button:focus-visible { background: var(--surface-hover); color: var(--text); }
+
+.proactive-owner { min-height: 28px; display: inline-flex; align-items: center; border-radius: var(--radius-round); padding: 0 10px; background: var(--surface-raised); color: var(--muted); font-size: .75rem; white-space: nowrap; }
+
+.proactive-owner.is-owner { color: var(--success); }
+
+.proactive-tabs { display: flex; gap: 4px; overflow-x: auto; padding: 10px clamp(20px, 4vw, 56px); background: var(--surface); }
+
+.proactive-tabs button { min-height: 36px; display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; padding: 0 10px; font-size: .8125rem; white-space: nowrap; }
+
+.proactive-tabs button[aria-selected="true"] { background: var(--surface-hover); color: var(--text); font-weight: 650; }
+
+.proactive-scroll { min-height: 0; }
+
+.proactive-scroll-viewport { padding: clamp(24px, 4vw, 48px) clamp(20px, 4vw, 56px) 56px; }
+
+.proactive-panel { width: min(100%, 1040px); margin: 0 auto; }
+
+.proactive-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+
+.proactive-panel-heading h2 { margin-top: 4px; font-size: 1.125rem; letter-spacing: -.02em; }
+
+.proactive-runtime { min-height: 30px; display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius-round); padding: 0 10px; background: var(--surface); color: var(--muted); font-size: .75rem; white-space: nowrap; }
+
+.proactive-runtime.is-running { color: var(--accent); }
+
+.proactive-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+
+.proactive-card { min-height: 148px; display: grid; align-content: start; gap: 18px; border-radius: var(--radius-panel); padding: 20px; background: var(--surface); box-shadow: 0 8px 22px color-mix(in srgb, var(--shadow) 28%, transparent); }
+
+.proactive-card header { display: grid; gap: 5px; }
+
+.proactive-card h3 { font-size: .9375rem; letter-spacing: -.015em; }
+
+.proactive-card header p { color: var(--muted); font-size: .75rem; }
+
+.proactive-card-content { min-width: 0; }
+
+.proactive-facts { display: grid; gap: 12px; margin: 0; }
+
+.proactive-facts div { display: grid; gap: 3px; }
+
+.proactive-facts dt { color: var(--muted); font-size: .75rem; }
+
+.proactive-facts dd { margin: 0; overflow-wrap: anywhere; font-size: .875rem; }
+
+.proactive-document { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); font-size: .875rem; line-height: 1.6; }
+
+@media (max-width: 760px) {
+  .proactive-header { grid-template-columns: auto minmax(0, 1fr); padding: 14px 16px; }
+  .proactive-owner { display: none; }
+  .proactive-tabs { padding: 8px 12px; }
+  .proactive-scroll-viewport { padding: 24px 16px 40px; }
+  .proactive-card-grid { grid-template-columns: 1fr; }
+}

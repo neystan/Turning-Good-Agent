@@ -167,3 +167,17 @@
   background: var(--danger);
   color: #fff;
 }
+
+/* 应用内通知使用单一浮面，行动入口与关闭动作保持明确分工。 */
+.notice { align-items: stretch; min-width: min(21rem, calc(100vw - 40px)); border: 0; padding: 8px 8px 8px 14px; background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
+
+.notice-content { min-width: 0; flex: 1; display: grid; gap: 3px; align-content: center; border: 0; padding: 2px 0; background: transparent; color: var(--text); font: inherit; text-align: left; }
+
+button.notice-content { cursor: pointer; }
+
+button.notice-content:hover,
+button.notice-content:focus-visible { border-radius: var(--radius-control); background: var(--surface-hover); box-shadow: none; }
+
+.notice-content strong { overflow: hidden; font-size: .8125rem; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+
+.notice-content span { color: var(--muted); font-size: .75rem; }

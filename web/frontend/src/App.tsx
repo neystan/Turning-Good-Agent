@@ -5,6 +5,7 @@ import { api } from "./api";
 import { ChatTimeline } from "./components/ChatTimeline";
 import { Composer } from "./components/Composer";
 import { NoticeRegion } from "./components/NoticeRegion";
+import { ProactiveWorkspace } from "./components/ProactiveWorkspace";
 import { SessionInspector } from "./components/SessionInspector";
 import { SessionSearchDialog } from "./components/SessionSearchDialog";
 import { SessionSidebar } from "./components/SessionSidebar";
@@ -13,11 +14,16 @@ import { ActivityCluster } from "./components/ActivityCluster";
 import { SessionHistoryLoader } from "./state/history_loader";
 import { applySessionAction, createSessionState } from "./state/session_state";
 import { SessionSocketClient } from "./state/socket_client";
+import { ProactiveSocket } from "./state/proactive_socket";
 import { readSessionCache, shouldWriteSessionCache, writeSessionCache } from "./state/session_cache";
 import { createTextSegment, serializeComposerContent } from "./state/composer_segments";
+import { proactiveRouteFromHash, routeDomain, routeDomainForWire } from "./proactive_types";
 import type { ChatMessage, CommandEntry, ComposerSegment, ConnectionState, ContextWindow, Observability, Session, SessionContextReadModel, TaskEvent, ToolCallPage } from "./types";
+import type { Notice } from "./components/NoticeRegion";
+import type { ProactiveDomain, ProactiveNotice, ProactiveSnapshot, ProactiveState } from "./proactive_types";
 
 type SocketMessage = Partial<TaskEvent> & { type: string; client_action_id?: string; message?: string; session_id?: string; request_id?: string };
+type ProactiveHealth = { state: "idle" | "active" | "incident" | "readonly" | "unavailable"; label: string };
 
 const emptyStateStarters = [
   "整理需求，生成可执行的任务清单",
@@ -46,14 +52,17 @@ export function App() {
   const [contextWindow, setContextWindow] = useState<ContextWindow | null>(null);
   const [autoApprove, setAutoApprove] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(() => window.location.hash === "#settings");
+  const [proactiveDomain, setProactiveDomain] = useState<ProactiveDomain | null>(() => proactiveRouteFromHash());
   const [theme, setTheme] = useState<"dark" | "light">(() => localStorage.getItem("tga-theme") === "light" ? "light" : "dark");
   const [mobileMenu, setMobileMenu] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
-  const [notices, setNotices] = useState<{ id: string; message: string }[]>([]);
+  const [notices, setNotices] = useState<Notice[]>([]);
+  const [proactiveState, setProactiveState] = useState<ProactiveState>({ snapshots: {}, owner: null, connection: "connecting" });
   const [restoreFocusVersion, setRestoreFocusVersion] = useState(0);
   const socketRef = useRef<SessionSocketClient | null>(null);
+  const proactiveSocketRef = useRef<ProactiveSocket | null>(null);
   const sessionIdRef = useRef<string | null>(sessionId);
   const historyLoader = useRef(new SessionHistoryLoader());
   const preserveNextSession = useRef(false);
@@ -100,6 +109,32 @@ export function App() {
     setNotices((items) => items.some((item) => item.message === message) ? items : [...items, { id: notice, message }]);
   }, []);
 
+  /** 接受某个领域的完整快照；较旧领域 revision 不得覆盖当前页面。 */
+  const receiveProactiveSnapshot = useCallback((snapshot: ProactiveSnapshot) => {
+    const domain = routeDomainForWire(snapshot.domain);
+    if (!domain) return;
+    setProactiveState((state) => {
+      const current = state.snapshots[domain];
+      if (current && current.proactive_revision > snapshot.proactive_revision) return state;
+      return {
+        ...state,
+        owner: snapshot.owner,
+        snapshots: { ...state.snapshots, [domain]: snapshot },
+      };
+    });
+  }, []);
+
+  /** Web 主动通知仅保留在当前 App 内存中，不影响聊天消息。 */
+  const receiveProactiveNotice = useCallback((notice: ProactiveNotice) => {
+    setProactiveState((state) => ({ ...state, owner: notice.owner }));
+    setNotices((items) => items.some((item) => item.id === notice.id) ? items : [...items, {
+      id: notice.id,
+      title: notice.title,
+      message: notice.message,
+      target: notice.target,
+    }]);
+  }, []);
+
   /** 删除指定提示。 */
   const dismissNotice = useCallback((noticeId: string) => {
     setNotices((items) => items.filter((item) => item.id !== noticeId));
@@ -110,7 +145,25 @@ export function App() {
     preserveNextSession.current = preserve;
     window.history.pushState({}, "", id ? `/sessions/${encodeURIComponent(id)}` : "/");
     setSessionId(id);
+    setSettingsOpen(false);
+    setProactiveDomain(null);
     setMobileMenu(false);
+  }, []);
+
+  /** 打开可深链接的主动领域页面，不复用聊天会话连接。 */
+  const openProactive = useCallback((domain: ProactiveDomain = "cron") => {
+    const target = routeDomain(domain);
+    if (window.location.hash !== target) window.location.hash = target.slice(1);
+    setSettingsOpen(false);
+    setProactiveDomain(domain);
+    setMobileMenu(false);
+  }, []);
+
+  /** 从主动工作面回到当前会话路径。 */
+  const returnToChat = useCallback(() => {
+    window.history.replaceState({}, "", window.location.pathname);
+    setSettingsOpen(false);
+    setProactiveDomain(null);
   }, []);
 
   /** 处理 WebSocket 事件与动作确认。 */
@@ -218,9 +271,12 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const syncSettingsView = () => setSettingsOpen(window.location.hash === "#settings");
-    window.addEventListener("hashchange", syncSettingsView);
-    return () => window.removeEventListener("hashchange", syncSettingsView);
+    const syncWorkspaceView = () => {
+      setSettingsOpen(window.location.hash === "#settings");
+      setProactiveDomain(proactiveRouteFromHash());
+    };
+    window.addEventListener("hashchange", syncWorkspaceView);
+    return () => window.removeEventListener("hashchange", syncWorkspaceView);
   }, []);
 
   useEffect(() => {
@@ -247,6 +303,24 @@ export function App() {
       socket.close();
     };
   }, []);
+
+  /** 主动状态使用独立 App 生命周期连接，与会话 WebSocket 完全分离。 */
+  useEffect(() => {
+    const socket = new ProactiveSocket({
+      onSnapshot: receiveProactiveSnapshot,
+      onNotice: receiveProactiveNotice,
+      onConnection: (nextConnection) => setProactiveState((state) => ({ ...state, connection: nextConnection })),
+    });
+    proactiveSocketRef.current = socket;
+    socket.connect();
+    const reconnect = () => socket.reconnect();
+    window.addEventListener("online", reconnect);
+    return () => {
+      window.removeEventListener("online", reconnect);
+      socket.close();
+      if (proactiveSocketRef.current === socket) proactiveSocketRef.current = null;
+    };
+  }, [receiveProactiveNotice, receiveProactiveSnapshot]);
 
   /** 仅在 WebSocket 已连接时发送普通消息或运行中 guidance。 */
   const send = useCallback((contentOverride?: string, retryActionId?: string) => {
@@ -416,6 +490,15 @@ export function App() {
 
   const current = useMemo(() => [...sessions, ...archived].find((item) => item.id === sessionId), [archived, sessionId, sessions]);
   const currentTurnCount = Object.values(sessionState.turns).reduce((count, turn) => count + turn.events.length, 0);
+  const proactiveHealth = proactiveHealthFor(proactiveState);
+
+  /** 点击主动通知仅切换工作面，并从内存通知队列移除该项。 */
+  const navigateProactiveNotice = useCallback((notice: Notice) => {
+    dismissNotice(notice.id);
+    const target = notice.target && !notice.target.startsWith("#") ? `#${notice.target}` : notice.target;
+    const domain = target ? proactiveRouteFromHash(target) : null;
+    if (domain) openProactive(domain);
+  }, [dismissNotice, openProactive]);
 
   /** 恢复归档会话后请求 Composer 聚焦输入框。 */
   const restoreSession = async () => {
@@ -424,11 +507,25 @@ export function App() {
     setRestoreFocusVersion((version) => version + 1);
   };
 
-  if (settingsOpen) return <SettingsWorkspace onReturnToChat={() => { window.history.replaceState({}, "", window.location.pathname); setSettingsOpen(false); }} />;
+  const sidebar = <SessionSidebar active={sessions} archived={archived} currentId={sessionId} mobileOpen={mobileMenu} collapsed={sidebarCollapsed} onCollapseChange={setSidebarCollapsed} onCloseMobile={() => setMobileMenu(false)} onNew={() => navigate(null)} onOpenSearch={() => setSearchOpen(true)} onOpenSettings={() => { window.location.hash = "settings"; }} onOpenProactive={() => openProactive()} proactiveHealth={proactiveHealth} onSelect={navigate} onUpdate={updateSession} onDelete={deleteSession} onError={addNotice} />;
+
+  if (settingsOpen) return <>
+    <SettingsWorkspace onReturnToChat={returnToChat} />
+    <NoticeRegion notices={notices} onDismiss={dismissNotice} onNavigate={navigateProactiveNotice} />
+  </>;
+
+  if (proactiveDomain) return <div className={`app-shell ${sidebarCollapsed ? "is-sidebar-collapsed" : ""}`}>
+    <a className="skip-link" href="#main-content">跳到主动能力</a>
+    {sidebar}
+    {mobileMenu && <button className="scrim" aria-label="关闭会话栏" onClick={() => setMobileMenu(false)} />}
+    <ProactiveWorkspace domain={proactiveDomain} snapshots={proactiveState.snapshots} owner={proactiveState.owner} connection={proactiveState.connection} onSelectDomain={openProactive} onReturnToChat={returnToChat} />
+    <SessionSearchDialog open={searchOpen} sessions={[...sessions, ...archived]} currentId={sessionId} onClose={() => setSearchOpen(false)} onSelect={navigate} />
+    <NoticeRegion notices={notices} onDismiss={dismissNotice} onNavigate={navigateProactiveNotice} />
+  </div>;
 
   return <div className={`app-shell ${sidebarCollapsed ? "is-sidebar-collapsed" : ""}`}>
     <a className="skip-link" href="#main-content">跳到对话</a>
-    <SessionSidebar active={sessions} archived={archived} currentId={sessionId} mobileOpen={mobileMenu} collapsed={sidebarCollapsed} onCollapseChange={setSidebarCollapsed} onCloseMobile={() => setMobileMenu(false)} onNew={() => navigate(null)} onOpenSearch={() => setSearchOpen(true)} onOpenSettings={() => { window.location.hash = "settings"; }} onSelect={navigate} onUpdate={updateSession} onDelete={deleteSession} onError={addNotice} />
+    {sidebar}
     {mobileMenu && <button className="scrim" aria-label="关闭会话栏" onClick={() => setMobileMenu(false)} />}
     <main id="main-content" className={`conversation ${inspectorOpen ? "is-inspector-open" : ""} ${inspectorClosing ? "is-inspector-closing" : ""}`}>
       <header className="topbar">
@@ -443,7 +540,7 @@ export function App() {
       <InspectorLayer open={inspectorOpen} closing={inspectorClosing} data={inspector} control={controlInspection} onClose={closeInspector} />
     </main>
     <SessionSearchDialog open={searchOpen} sessions={[...sessions, ...archived]} currentId={sessionId} onClose={() => setSearchOpen(false)} onSelect={navigate} />
-    <NoticeRegion notices={notices} onDismiss={dismissNotice} />
+    <NoticeRegion notices={notices} onDismiss={dismissNotice} onNavigate={navigateProactiveNotice} />
     </div>;
 }
 
@@ -456,4 +553,23 @@ function InspectorLayer({ open, closing, data, control, onClose }: { open: boole
 /** 将连接状态转换为紧凑的用户可见文本。 */
 function connectionLabel(state: ConnectionState): string {
   return { connecting: "正在连接", connected: "已连接", reconnecting: "正在重连", disconnected: "已断开" }[state];
+}
+
+/** 将主动领域的独立快照折叠为侧栏可读的全局健康状态。 */
+function proactiveHealthFor(state: ProactiveState): ProactiveHealth {
+  if (state.connection !== "connected") return { state: "unavailable", label: "连接中" };
+  if (!state.owner?.writable) {
+    return state.owner?.owner_id
+      ? { state: "readonly", label: "只读" }
+      : { state: "unavailable", label: "已停用" };
+  }
+  const incidents = state.snapshots.incidents?.data.incidents;
+  if (Array.isArray(incidents) && incidents.some((item) => Boolean(item) && typeof item === "object" && (item as { state?: unknown }).state === "open")) {
+    return { state: "incident", label: "存在异常" };
+  }
+  const running = Object.values(state.snapshots).some((snapshot) => {
+    if (!snapshot) return false;
+    return snapshot.runtime.running || Object.values(snapshot.runtime.entity_states).some((status) => status === "queued" || status === "running");
+  });
+  return running ? { state: "active", label: "运行中" } : { state: "idle", label: "空闲" };
 }
