@@ -255,6 +255,55 @@ def test_proactive_websocket_unsubscribes_when_client_has_already_closed(tmp_pat
     assert app.state.proactive_events._queues == set()
 
 
+def test_proactive_websocket_reraises_unrelated_runtime_errors(tmp_path: Path) -> None:
+    class BrokenWebSocket:
+        async def accept(self) -> None:
+            return None
+
+        async def send_json(self, payload: dict[str, object]) -> None:
+            del payload
+            raise RuntimeError("snapshot serialization failed")
+
+    async def run() -> None:
+        app = _web_app(tmp_path)
+        endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", None) == "/ws/proactive")
+
+        with pytest.raises(RuntimeError, match="snapshot serialization failed"):
+            await endpoint(BrokenWebSocket())
+
+        assert app.state.proactive_events._queues == set()
+
+    asyncio.run(run())
+
+
+def test_proactive_websocket_unsubscribes_on_quiet_client_disconnect(tmp_path: Path) -> None:
+    class QuietlyClosedWebSocket:
+        def __init__(self) -> None:
+            self.sent = 0
+
+        async def accept(self) -> None:
+            return None
+
+        async def send_json(self, payload: dict[str, object]) -> None:
+            del payload
+            self.sent += 1
+
+        async def receive(self) -> dict[str, object]:
+            return {"type": "websocket.disconnect", "code": 1000}
+
+    async def run() -> None:
+        app = _web_app(tmp_path)
+        endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", None) == "/ws/proactive")
+        websocket = QuietlyClosedWebSocket()
+
+        await asyncio.wait_for(endpoint(websocket), timeout=0.1)
+
+        assert websocket.sent == 5
+        assert app.state.proactive_events._queues == set()
+
+    asyncio.run(run())
+
+
 def test_cli_bridge_callback_publishes_complete_snapshot(tmp_path: Path) -> None:
     async def run() -> None:
         bridge_module = importlib.import_module("Turning-Good-Agent.proactive.bridge")

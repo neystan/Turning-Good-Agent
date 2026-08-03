@@ -415,14 +415,44 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
     async def proactive_websocket(websocket: WebSocket) -> None:
         await websocket.accept()
         queue = await proactive_events.subscribe()
+        forwarder: asyncio.Task[None] | None = None
+        disconnect_watcher: asyncio.Task[None] | None = None
+
+        async def forward_events() -> None:
+            while True:
+                await websocket.send_json(await queue.get())
+
+        async def wait_for_disconnect() -> None:
+            while True:
+                message = await websocket.receive()
+                if message["type"] == "websocket.disconnect":
+                    return
+
         try:
             for payload in proactive_events.initial_snapshots():
                 await websocket.send_json(payload)
-            while True:
-                await websocket.send_json(await queue.get())
-        except (WebSocketDisconnect, RuntimeError):
+            forwarder = asyncio.create_task(forward_events())
+            disconnect_watcher = asyncio.create_task(wait_for_disconnect())
+            done, _ = await asyncio.wait(
+                {forwarder, disconnect_watcher},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done:
+                task.result()
+        except WebSocketDisconnect:
+            return
+        except RuntimeError as exc:
+            if "after sending 'websocket.close'" not in str(exc):
+                raise
             return
         finally:
+            for task in (forwarder, disconnect_watcher):
+                if task is not None and not task.done():
+                    task.cancel()
+            await asyncio.gather(
+                *(task for task in (forwarder, disconnect_watcher) if task is not None),
+                return_exceptions=True,
+            )
             await proactive_events.unsubscribe(queue)
 
     @app.websocket("/ws")
