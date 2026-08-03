@@ -529,6 +529,51 @@ def test_http_disabled_mode_actions_clean_snapshots_and_return_updated_snapshot(
     assert store.read_json("incidents.json", {})["incidents"] == []
 
 
+def test_http_proactive_capability_matrix_covers_domain_aggregate_and_action_snapshots(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    runtime.settings.proactive.enabled = False
+    store = ProactiveStore(tmp_path)
+    _seed_snapshots(store)
+    app = create_app(runtime.settings, runtime)
+
+    client = TestClient(app)
+    domain = client.get("/api/proactive/cron")
+    aggregate = client.get("/api/proactive")
+    action = client.delete("/api/proactive/cron/cron-1")
+    client.close()
+
+    assert domain.json()["mutations_allowed"] is True
+    assert aggregate.json()["mutations_allowed"] is True
+    assert all(snapshot["mutations_allowed"] is True for snapshot in aggregate.json()["snapshots"])
+    assert action.status_code == 200
+    assert action.json()["mutations_allowed"] is True
+
+    readonly_path = tmp_path / "readonly"
+    readonly_path.mkdir()
+    runtime = _runtime(readonly_path)
+    runtime.settings.proactive.enabled = True
+    store = ProactiveStore(readonly_path)
+    _seed_snapshots(store)
+    app = create_app(runtime.settings, runtime)
+    ownership = app.state.proactive_ownership
+    ownership._path.parent.mkdir(parents=True, exist_ok=True)
+    ownership._path.write_text(
+        '{"owner_id":"cli-owner","owner_kind":"cli","owner_pid":1}',
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    readonly_domain = client.get("/api/proactive/cron")
+    readonly_aggregate = client.get("/api/proactive")
+    readonly_action = client.delete("/api/proactive/cron/cron-1")
+    client.close()
+
+    assert readonly_domain.json()["mutations_allowed"] is False
+    assert readonly_aggregate.json()["mutations_allowed"] is False
+    assert all(snapshot["mutations_allowed"] is False for snapshot in readonly_aggregate.json()["snapshots"])
+    assert readonly_action.status_code == 409
+
+
 def test_http_owner_conflict_and_missing_action_keep_snapshots_unchanged(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
     runtime.settings.proactive.enabled = True

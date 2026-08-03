@@ -36,7 +36,7 @@ from .proactive_control import (
     ProactiveNotFoundError,
     WebProactiveControlService,
 )
-from .proactive_events import ProactiveEventHub, snapshot_payload
+from .proactive_events import ProactiveEventHub, mutations_allowed, snapshot_payload
 from .proactive_ownership import ProactiveOwnershipLease
 from .proactive_lifecycle import WebProactiveLifecycle
 
@@ -172,16 +172,25 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
 
     def proactive_snapshot(domain: str) -> dict[str, object]:
         try:
-            return snapshot_payload(proactive_control.snapshot_domain(domain), ownership.state())
+            return snapshot_payload(
+                proactive_control.snapshot_domain(domain),
+                ownership.state(),
+                proactive_enabled=proactive_control.runtime.settings.proactive.enabled,
+            )
         except ValueError as exc:
             raise proactive_error(exc) from exc
 
     @app.get("/api/proactive")
     async def get_proactive_snapshot() -> dict[str, object]:
+        owner = ownership.state()
         return {
             "snapshots": proactive_events.initial_snapshots(),
-            "owner": ownership.state().to_dict(),
+            "owner": owner.to_dict(),
             "proactive_revision": proactive_control.proactive_revision,
+            "mutations_allowed": mutations_allowed(
+                owner,
+                proactive_enabled=proactive_control.runtime.settings.proactive.enabled,
+            ),
         }
 
     @app.get("/api/proactive/cron")
@@ -206,9 +215,7 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
 
     async def proactive_action(domain: str, action: Any, *args: str) -> dict[str, object]:
         owner = ownership.state()
-        if not owner.writable and (
-            proactive_control.runtime.settings.proactive.enabled or owner.owner_id is not None
-        ):
+        if not mutations_allowed(owner, proactive_enabled=proactive_control.runtime.settings.proactive.enabled):
             raise HTTPException(409, "主动能力由另一个 Host 持有，当前为只读")
         try:
             await action(*args)

@@ -15,7 +15,16 @@ _DOMAINS = frozenset({"cron", "breakbeat", "dream", "skill", "incident"})
 _NOTICE_FIELDS = frozenset({"id", "domain", "entity_id", "severity", "title", "message", "target"})
 
 
-def snapshot_payload(snapshot: ProactiveSnapshot, owner: OwnershipState) -> dict[str, object]:
+def mutations_allowed(owner: OwnershipState, *, proactive_enabled: bool) -> bool:
+    return owner.writable or (not proactive_enabled and owner.owner_id is None)
+
+
+def snapshot_payload(
+    snapshot: ProactiveSnapshot,
+    owner: OwnershipState,
+    *,
+    proactive_enabled: bool,
+) -> dict[str, object]:
     """将领域快照转换成唯一的 WebSocket/REST 传输形状。"""
     return {
         "type": "snapshot",
@@ -24,6 +33,7 @@ def snapshot_payload(snapshot: ProactiveSnapshot, owner: OwnershipState) -> dict
         "runtime": asdict(snapshot.runtime),
         "proactive_revision": snapshot.proactive_revision,
         "owner": owner.to_dict(),
+        "mutations_allowed": mutations_allowed(owner, proactive_enabled=proactive_enabled),
     }
 
 
@@ -63,7 +73,13 @@ class ProactiveEventHub:
             if cached is not None and self._bridge_owner_is_current(cached, owner):
                 snapshots.append(copy.deepcopy(cached))
             else:
-                snapshots.append(snapshot_payload(snapshot, owner))
+                snapshots.append(
+                    snapshot_payload(
+                        snapshot,
+                        owner,
+                        proactive_enabled=self._proactive_enabled(),
+                    )
+                )
         return snapshots
 
     async def publish_all(self) -> None:
@@ -80,7 +96,12 @@ class ProactiveEventHub:
         """推送完整领域快照；后台变更时递增 revision，动作结果复用既有 revision。"""
         if changed:
             self._controller.bump_revision()
-        payload = snapshot_payload(self._controller.snapshot_domain(domain), self._ownership())
+        owner = self._ownership()
+        payload = snapshot_payload(
+            self._controller.snapshot_domain(domain),
+            owner,
+            proactive_enabled=self._proactive_enabled(),
+        )
         await self._broadcast(payload)
         return payload
 
@@ -95,6 +116,7 @@ class ProactiveEventHub:
         target: str,
     ) -> dict[str, object]:
         self._controller.bump_revision()
+        owner = self._ownership()
         payload: dict[str, object] = {
             "type": "notice",
             "id": str(uuid4()),
@@ -105,7 +127,8 @@ class ProactiveEventHub:
             "message": message,
             "target": target,
             "proactive_revision": self._controller.proactive_revision,
-            "owner": self._ownership().to_dict(),
+            "owner": owner.to_dict(),
+            "mutations_allowed": mutations_allowed(owner, proactive_enabled=self._proactive_enabled()),
         }
         await self._broadcast(payload)
         return payload
@@ -135,9 +158,22 @@ class ProactiveEventHub:
         else:
             self._controller.advance_revision(revision)
         self._last_bridge_payload = source_payload
+        payload = self._project_bridge_payload(payload)
         if payload["type"] == "snapshot":
             self._bridge_snapshots[str(payload["domain"])] = copy.deepcopy(payload)
         await self._broadcast(payload)
+
+    def _project_bridge_payload(self, payload: dict[str, object]) -> dict[str, object]:
+        owner = self._ownership()
+        projected = copy.deepcopy(payload)
+        projected["owner"] = owner.to_dict()
+        projected["mutations_allowed"] = mutations_allowed(owner, proactive_enabled=self._proactive_enabled())
+        return projected
+
+    def _proactive_enabled(self) -> bool:
+        settings = getattr(self._controller.runtime, "settings", None)
+        proactive = getattr(settings, "proactive", None)
+        return bool(getattr(proactive, "enabled", False))
 
     def _validate_bridge_payload(self, payload: dict[str, object]) -> None:
         if not isinstance(payload, dict):

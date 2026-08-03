@@ -100,7 +100,7 @@ def test_bridge_event_advances_revision_without_replay(tmp_path: Path) -> None:
         await hub.accept_bridge_event(payload)
 
         assert controller.proactive_revision == 7
-        assert await queue.get() == payload
+        assert await queue.get() == _projected_bridge_payload(payload, owner)
         await hub.unsubscribe(queue)
 
     asyncio.run(run())
@@ -115,6 +115,13 @@ def _bridge_snapshot(*, revision: int = 1, owner_kind: str = "cli") -> dict[str,
         "owner": {"mode": "readonly", "owner_id": "cli-owner", "owner_kind": owner_kind, "owner_pid": 1},
         "proactive_revision": revision,
     }
+
+
+def _projected_bridge_payload(payload: dict[str, object], owner: ownership_module.OwnershipState) -> dict[str, object]:
+    projected = dict(payload)
+    projected["owner"] = owner.to_dict()
+    projected["mutations_allowed"] = False
+    return projected
 
 
 def test_bridge_rejects_foreign_malformed_and_out_of_order_events(tmp_path: Path) -> None:
@@ -144,7 +151,7 @@ def test_bridge_coalesces_only_identical_revision_payloads(tmp_path: Path) -> No
         await hub.accept_bridge_event(payload)
         await hub.accept_bridge_event(dict(payload))
 
-        assert await queue.get() == payload
+        assert await queue.get() == _projected_bridge_payload(payload, owner)
         assert queue.empty()
         await hub.unsubscribe(queue)
 
@@ -176,9 +183,9 @@ def test_loopback_bridge_delivers_snapshot_and_retains_it_for_reconnect(tmp_path
         payload["data"] = {"items": [{"id": "from-cli"}]}
         try:
             await bridge_module.ProactiveBridgePublisher(tmp_path).publish(payload)
-            assert await queue.get() == payload
+            assert await queue.get() == _projected_bridge_payload(payload, owner)
             snapshots = {snapshot["domain"]: snapshot for snapshot in hub.initial_snapshots()}
-            assert snapshots["breakbeat"] == payload
+            assert snapshots["breakbeat"] == _projected_bridge_payload(payload, owner)
         finally:
             await listener.stop()
             await hub.unsubscribe(queue)
@@ -217,6 +224,31 @@ def test_bridge_uses_explicit_docker_transport_configuration(
     assert listener._allow_non_loopback is True
 
 
+def test_docker_enabled_bridge_transfers_snapshot_between_publisher_and_listener(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TGA_PROACTIVE_BRIDGE_HOST", "127.0.0.1")
+    monkeypatch.setenv("TGA_PROACTIVE_BRIDGE_BIND_HOST", "0.0.0.0")
+    monkeypatch.setenv("TGA_PROACTIVE_BRIDGE_ALLOW_NON_LOOPBACK", "1")
+
+    async def run() -> None:
+        received: list[dict[str, object]] = []
+
+        async def receive(payload: dict[str, object]) -> None:
+            received.append(payload)
+
+        listener = bridge_module.ProactiveBridgeListener(tmp_path, receive)
+        payload = _bridge_snapshot(revision=6)
+        await listener.start()
+        try:
+            await bridge_module.ProactiveBridgePublisher(tmp_path).publish(payload)
+            assert received == [payload]
+        finally:
+            await listener.stop()
+
+    asyncio.run(run())
+
+
 def test_websocket_receives_loopback_bridge_updates_and_reconnects_with_snapshots(tmp_path: Path) -> None:
     app = _web_app(tmp_path)
     ownership = app.state.proactive_ownership
@@ -224,18 +256,115 @@ def test_websocket_receives_loopback_bridge_updates_and_reconnects_with_snapshot
     ownership._path.write_text('{"owner_id":"cli-owner","owner_kind":"cli","owner_pid":1}', encoding="utf-8")
     payload = _bridge_snapshot(revision=9)
     payload["data"] = {"items": [{"id": "from-cli"}]}
+    projected = _projected_bridge_payload(
+        payload,
+        ownership_module.OwnershipState("readonly", "cli-owner", "cli", 1),
+    )
 
     with TestClient(app) as client:
         with client.websocket_connect("/ws/proactive") as websocket:
             initial = [websocket.receive_json() for _ in range(5)]
             assert {message["domain"] for message in initial} == {"cron", "breakbeat", "dream", "skill", "incident"}
             asyncio.run(importlib.import_module("Turning-Good-Agent.proactive.bridge").ProactiveBridgePublisher(tmp_path).publish(payload))
-            assert websocket.receive_json() == payload
+            assert websocket.receive_json() == projected
         with client.websocket_connect("/ws/proactive") as websocket:
             reconnect = [websocket.receive_json() for _ in range(5)]
 
     snapshots = {message["domain"]: message for message in reconnect}
-    assert snapshots["breakbeat"] == payload
+    assert snapshots["breakbeat"] == projected
+
+
+def test_bridge_projects_source_owner_capability_for_cache_reconnect_and_notice(tmp_path: Path) -> None:
+    async def run() -> None:
+        readonly_owner = ownership_module.OwnershipState("readonly", "cli-owner", "cli", 1)
+        _, hub = _hub(tmp_path, readonly_owner)
+        queue = await hub.subscribe()
+        snapshot = _bridge_snapshot(revision=7)
+        snapshot["owner"] = {
+            "mode": "owner",
+            "writable": True,
+            "owner_id": "cli-owner",
+            "owner_kind": "cli",
+            "owner_pid": 1,
+        }
+        snapshot["data"] = {"items": [{"id": "from-cli"}]}
+        notice = {
+            "type": "notice",
+            "id": "notice-1",
+            "domain": "breakbeat",
+            "entity_id": "breakbeat-1",
+            "severity": "info",
+            "title": "Breakbeat updated",
+            "message": "from CLI",
+            "target": "#proactive/breakbeat",
+            "owner": snapshot["owner"],
+            "proactive_revision": 8,
+        }
+
+        await hub.accept_bridge_event(snapshot)
+        projected_snapshot = await queue.get()
+        await hub.accept_bridge_event(notice)
+        projected_notice = await queue.get()
+        reconnect = {payload["domain"]: payload for payload in hub.initial_snapshots()}
+
+        assert projected_snapshot["data"] == {"items": [{"id": "from-cli"}]}
+        assert projected_snapshot["runtime"] == {"running": False, "next_run_at": None, "entity_states": {}}
+        assert projected_snapshot["proactive_revision"] == 7
+        assert projected_snapshot["owner"] == readonly_owner.to_dict()
+        assert projected_snapshot["mutations_allowed"] is False
+        assert reconnect["breakbeat"] == projected_snapshot
+        assert projected_notice["id"] == "notice-1"
+        assert projected_notice["domain"] == "breakbeat"
+        assert projected_notice["entity_id"] == "breakbeat-1"
+        assert projected_notice["severity"] == "info"
+        assert projected_notice["title"] == "Breakbeat updated"
+        assert projected_notice["message"] == "from CLI"
+        assert projected_notice["target"] == "#proactive/breakbeat"
+        assert projected_notice["proactive_revision"] == 8
+        assert projected_notice["owner"] == readonly_owner.to_dict()
+        assert projected_notice["mutations_allowed"] is False
+        await hub.unsubscribe(queue)
+
+    asyncio.run(run())
+
+
+def test_connected_websocket_receives_five_web_owned_snapshots_after_cli_lease_release(tmp_path: Path) -> None:
+    class Service:
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+    async def acquire_cli_owner() -> object:
+        owner = ownership_module.ProactiveOwnershipLease(tmp_path, owner_kind="cli", owner_id="cli-owner")
+        assert (await owner.acquire_owner()).writable is True
+        if owner._heartbeat_task is not None:
+            owner._heartbeat_task.cancel()
+            await asyncio.gather(owner._heartbeat_task, return_exceptions=True)
+            owner._heartbeat_task = None
+        return owner
+
+    cli_owner = asyncio.run(acquire_cli_owner())
+    app = _web_app(tmp_path)
+    app.state.proactive_control.runtime.settings.proactive.enabled = True
+    app.state.proactive_lifecycle._service_factory = lambda _: Service()
+    try:
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws/proactive") as websocket:
+                initial = [websocket.receive_json() for _ in range(5)]
+                assert {message["domain"] for message in initial} == {"cron", "breakbeat", "dream", "skill", "incident"}
+                assert {message["owner"]["owner_kind"] for message in initial} == {"cli"}
+
+                asyncio.run(cli_owner.release_owner())
+                takeover = [websocket.receive_json() for _ in range(5)]
+
+        assert {message["domain"] for message in takeover} == {"cron", "breakbeat", "dream", "skill", "incident"}
+        assert {message["owner"]["owner_kind"] for message in takeover} == {"web"}
+        assert all(message["owner"]["writable"] is True for message in takeover)
+        assert all(message["mutations_allowed"] is True for message in takeover)
+    finally:
+        asyncio.run(cli_owner.release_owner())
 
 
 def test_proactive_websocket_unsubscribes_when_client_has_already_closed(tmp_path: Path) -> None:
