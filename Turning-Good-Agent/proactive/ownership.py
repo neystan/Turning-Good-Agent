@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 import json
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+import threading
 from uuid import uuid4
+
+
+_PROCESS_LOCKS: dict[str, threading.RLock] = {}
+_PROCESS_LOCKS_GUARD = threading.Lock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +48,7 @@ class ProactiveOwnershipLease:
         heartbeat_seconds: float = 1.0,
     ) -> None:
         self._path = data_dir / "proactive" / ".owner.json"
+        self._lock_path = data_dir / "proactive" / ".owner.lock"
         self._owner_kind = owner_kind
         self._owner_id = owner_id or str(uuid4())
         self._heartbeat_seconds = heartbeat_seconds
@@ -57,25 +64,32 @@ class ProactiveOwnershipLease:
         if self._acquired:
             return self._state_for_self()
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        payload = self._record()
-        try:
-            descriptor = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            current = self._read_record()
-            if current is not None and self._stale(current) and self._remove_stale_record(current):
-                return await self.acquire_owner()
-            return self._state_for_record(current)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-                json.dump(payload, handle, ensure_ascii=False)
-                handle.flush()
-                os.fsync(handle.fileno())
-        except BaseException:
-            self._path.unlink(missing_ok=True)
-            raise
-        self._acquired = True
-        self._heartbeat_task = asyncio.create_task(self._heartbeat(), name="proactive-owner-heartbeat")
-        return self._state_for_self()
+        while True:
+            with self._exclusive_mutation():
+                if self._acquired:
+                    return self._state_for_self()
+                try:
+                    descriptor = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                except FileExistsError:
+                    current = self._read_record()
+                    if current is None or not self._stale(current):
+                        return self._state_for_record(current)
+                    try:
+                        self._path.unlink()
+                    except FileNotFoundError:
+                        continue
+                    continue
+                try:
+                    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+                        json.dump(self._record(), handle, ensure_ascii=False)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                except BaseException:
+                    self._path.unlink(missing_ok=True)
+                    raise
+                self._acquired = True
+                self._heartbeat_task = asyncio.create_task(self._heartbeat(), name="proactive-owner-heartbeat")
+                return self._state_for_self()
 
     async def try_takeover(self) -> OwnershipState:
         """在另一 Host 已退出后重新尝试取得租约。"""
@@ -89,9 +103,10 @@ class ProactiveOwnershipLease:
             self._heartbeat_task = None
         if not self._acquired:
             return
-        current = self._read_record()
-        if current is not None and current.get("owner_id") == self._owner_id:
-            self._path.unlink(missing_ok=True)
+        with self._exclusive_mutation():
+            current = self._read_record()
+            if current is not None and current.get("owner_id") == self._owner_id:
+                self._path.unlink(missing_ok=True)
         self._acquired = False
 
     def state(self) -> OwnershipState:
@@ -103,13 +118,14 @@ class ProactiveOwnershipLease:
     async def _heartbeat(self) -> None:
         while self._acquired:
             await asyncio.sleep(self._heartbeat_seconds)
-            current = self._read_record()
-            if current is None:
-                continue
-            if current.get("owner_id") != self._owner_id:
-                self._acquired = False
-                return
-            self._write_record(self._record())
+            with self._exclusive_mutation():
+                if not self._acquired:
+                    return
+                current = self._read_record()
+                if current is None or current.get("owner_id") != self._owner_id:
+                    self._acquired = False
+                    return
+                self._write_record(self._record())
 
     def _record(self) -> dict[str, object]:
         return {
@@ -154,16 +170,25 @@ class ProactiveOwnershipLease:
             return False
         return False
 
-    def _remove_stale_record(self, expected: dict[str, object]) -> bool:
-        """仅在记录未变化时删除死进程租约，缩小竞争窗口。"""
-        current = self._read_record()
-        if current != expected:
-            return False
-        try:
-            self._path.unlink()
-        except FileNotFoundError:
-            return False
-        return True
+    @contextmanager
+    def _exclusive_mutation(self):
+        key = str(self._lock_path.resolve())
+        with _PROCESS_LOCKS_GUARD:
+            process_lock = _PROCESS_LOCKS.setdefault(key, threading.RLock())
+        with process_lock:
+            self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._lock_path.open("a+b") as handle:
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"0")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                handle.seek(0)
+                _lock_file(handle)
+                try:
+                    yield
+                finally:
+                    _unlock_file(handle)
 
     def _state_for_self(self) -> OwnershipState:
         return OwnershipState("owner", self._owner_id, self._owner_kind, os.getpid())
@@ -197,3 +222,26 @@ def _windows_pid_alive(pid: int) -> bool:
         return exit_code.value == still_active
     finally:
         kernel32.CloseHandle(handle)
+
+
+def _lock_file(handle) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        return
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+
+
+def _unlock_file(handle) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -8,6 +9,9 @@ from ..bus.messages import InboundMessage
 from ..bus.queue import AsyncMessageBus
 from .ownership import OwnershipState, ProactiveOwnershipLease
 from .service import ProactiveService
+
+
+logger = logging.getLogger(__name__)
 
 
 class CliProactiveLifecycle:
@@ -68,8 +72,13 @@ class CliProactiveLifecycle:
     async def _monitor(self) -> None:
         while self._started:
             await asyncio.sleep(self._poll_seconds)
-            async with self._lock:
-                await self._reconcile()
+            try:
+                async with self._lock:
+                    await self._reconcile()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("主动服务接管失败，将在下一轮重试")
 
     async def _reconcile(self) -> None:
         if not self._enabled():

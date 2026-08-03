@@ -86,12 +86,18 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
             on_domain_change=publish_domain_change,
         )
 
+    async def notify_proactive_idle() -> None:
+        supervisor = supervisor_holder.get("supervisor")
+        if supervisor is not None:
+            await supervisor.notify_idle()
+
     proactive_lifecycle = WebProactiveLifecycle(
         runtime,
         ownership,
         service_factory=create_proactive_service,
         bind_runtime=proactive_control.replace_runtime,
         publish_state=proactive_events.publish_all,
+        notify_idle=notify_proactive_idle,
     )
 
     def live_tool_names() -> set[str]:
@@ -120,7 +126,7 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
     supervisor = RuntimeSupervisor(
         runtime,
         runtime_factory=create_replacement_runtime,
-        idle_probe=coordinator.is_globally_idle,
+        idle_probe=lambda: coordinator.is_globally_idle() and proactive_lifecycle.is_idle(),
         active_revision=initial_config.revision,
         on_prepare=coordinator.register_runtime,
         on_activate=proactive_lifecycle.activate_replacement,

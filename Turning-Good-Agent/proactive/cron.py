@@ -159,6 +159,11 @@ class CronManager:
             return "queued"
         return "active"
 
+    @property
+    def is_idle(self) -> bool:
+        """报告当前没有排队或运行中的 Cron Job。"""
+        return not self._tasks
+
     async def delete_job(self, job_id: str) -> CronJob:
         """取消执行并硬删除 Cron 及其关联主动记录。"""
         async with self._lock:

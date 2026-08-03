@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from .proactive_ownership import OwnershipState, ProactiveOwnershipLease
+
+
+logger = logging.getLogger(__name__)
 
 
 class WebProactiveLifecycle:
@@ -18,6 +22,7 @@ class WebProactiveLifecycle:
         service_factory: Callable[[Any], Any],
         bind_runtime: Callable[[Any, Any | None], None],
         publish_state: Callable[[], Awaitable[None]] | None = None,
+        notify_idle: Callable[[], Awaitable[None]] | None = None,
         poll_seconds: float = 1.0,
     ) -> None:
         self._runtime = runtime
@@ -25,6 +30,7 @@ class WebProactiveLifecycle:
         self._service_factory = service_factory
         self._bind_runtime = bind_runtime
         self._publish_state = publish_state
+        self._notify_idle_callback = notify_idle
         self._poll_seconds = poll_seconds
         self._service: Any | None = None
         self._monitor_task: asyncio.Task[None] | None = None
@@ -34,6 +40,14 @@ class WebProactiveLifecycle:
     @property
     def service(self) -> Any | None:
         return self._service
+
+    def is_idle(self) -> bool:
+        """报告主动后台工作是否已到达可替换的安全空闲点。"""
+        service = self._service
+        if service is None:
+            return True
+        state = getattr(service, "is_idle", True)
+        return bool(state() if callable(state) else state)
 
     async def start(self) -> OwnershipState:
         """仅在启用且获得租约后启动 Scheduler；只读 Host 保留聊天能力。"""
@@ -61,6 +75,7 @@ class WebProactiveLifecycle:
         async with self._lock:
             old_service = self._service
             if not self._enabled(replacement):
+                await self._drain_service()
                 await self._stop_service()
                 await self._ownership.release_owner()
                 self._runtime = replacement
@@ -72,6 +87,7 @@ class WebProactiveLifecycle:
                 self._bind_runtime(replacement, None)
                 return
             if old_service is not None:
+                await self._drain_service()
                 await old_service.stop()
             candidate: Any | None = None
             try:
@@ -91,9 +107,15 @@ class WebProactiveLifecycle:
     async def _monitor(self) -> None:
         while self._started:
             await asyncio.sleep(self._poll_seconds)
-            async with self._lock:
-                await self._reconcile_current_runtime()
+            try:
+                async with self._lock:
+                    await self._reconcile_current_runtime()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("主动服务接管失败，将在下一轮重试")
             await self._publish()
+            await self._notify_idle()
 
     async def _reconcile_current_runtime(self) -> None:
         if not self._enabled(self._runtime):
@@ -128,9 +150,20 @@ class WebProactiveLifecycle:
             await self._service.stop()
             self._service = None
 
+    async def _drain_service(self) -> None:
+        if self._service is None:
+            return
+        drain = getattr(self._service, "drain_for_replacement", None)
+        if callable(drain):
+            await drain()
+
     async def _publish(self) -> None:
         if self._publish_state is not None:
             await self._publish_state()
+
+    async def _notify_idle(self) -> None:
+        if self._notify_idle_callback is not None:
+            await self._notify_idle_callback()
 
     @staticmethod
     def _enabled(runtime: Any) -> bool:

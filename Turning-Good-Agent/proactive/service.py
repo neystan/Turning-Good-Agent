@@ -159,6 +159,7 @@ class ProactiveService:
             schedule_changed=self._wake_scheduler,
         )
         self._running = False
+        self._accepting_work = False
         self._scheduler_task: asyncio.Task[None] | None = None
         self._delivery_task: asyncio.Task[None] | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
@@ -192,6 +193,11 @@ class ProactiveService:
     def running(self) -> bool:
         """返回同进程调度器是否已启动。"""
         return self._running
+
+    @property
+    def is_idle(self) -> bool:
+        """报告可安全替换 Runtime 的主动能力空闲点。"""
+        return self.cron.is_idle and not self._background_tasks
 
     def install_tools(self) -> None:
         """仅在 CLI Runtime 上注册主动能力 Tool。"""
@@ -228,6 +234,7 @@ class ProactiveService:
         if self._running or not self.runtime.settings.proactive.enabled:
             return
         self._running = True
+        self._accepting_work = True
         now = datetime.now(UTC)
         self.breakbeat.initialize_schedule(now)
         self.dream.initialize_schedule(now)
@@ -240,6 +247,7 @@ class ProactiveService:
     async def stop(self) -> None:
         """停止调度、取消尚未结束的后台工作并保留已有 durable 结果。"""
         self._running = False
+        self._accepting_work = False
         self._remove_mcp_listener()
         for task in (self._scheduler_task, self._delivery_task):
             if task is not None:
@@ -260,9 +268,17 @@ class ProactiveService:
         self._skill_evolution_task = None
         await self.cron.close()
 
+    async def drain_for_replacement(self) -> None:
+        """停止接收新工作，并等待当前后台能力到达安全空闲点。"""
+        self._accepting_work = False
+        self._wake_scheduler()
+        await self.cron.wait_for_jobs()
+        while self._background_tasks:
+            await asyncio.gather(*tuple(self._background_tasks), return_exceptions=True)
+
     async def handle(self, event: str, payload: dict[str, object]) -> None:
         """接收 SAVE 后的轻量事实，不延长前台回复路径。"""
-        if event != CONVERSATION_COMPLETED or not self._running:
+        if event != CONVERSATION_COMPLETED or not self._running or not self._accepting_work:
             return
         session_id = payload.get("session_id")
         if isinstance(session_id, str) and session_id:
@@ -278,6 +294,9 @@ class ProactiveService:
         """等待最早 deadline 或显式计划变更，不做每秒全量扫描。"""
         while self._running:
             self._schedule_event.clear()
+            if not self._accepting_work:
+                await self._schedule_event.wait()
+                continue
             now = datetime.now(UTC)
             try:
                 if await self.cron.run_due(now):

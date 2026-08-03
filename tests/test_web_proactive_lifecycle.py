@@ -75,6 +75,21 @@ class FakeService:
         self.events.append("service.install_tools")
 
 
+class IdleAwareFakeService(FakeService):
+    def __init__(self, *, idle: bool, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.idle = idle
+        self.drain_calls = 0
+
+    @property
+    def is_idle(self) -> bool:
+        return self.idle
+
+    async def drain_for_replacement(self) -> None:
+        self.drain_calls += 1
+        self.idle = True
+
+
 class FakeLease:
     def __init__(self, *, writable: bool, events: list[str] | None = None) -> None:
         self.writable = writable
@@ -375,6 +390,76 @@ async def _disabled_or_lost_owner_replacement_stops_old_scheduler(tmp_path: Path
     assert service.stop_calls == 1
     assert lease.release_calls == 1
     assert events.index("service.stop") < events.index("lease.release")
+    await lifecycle.stop()
+
+
+def test_runtime_reload_stays_pending_until_proactive_service_is_idle(tmp_path: Path) -> None:
+    asyncio.run(_runtime_reload_stays_pending_until_proactive_service_is_idle(tmp_path))
+
+
+async def _runtime_reload_stays_pending_until_proactive_service_is_idle(tmp_path: Path) -> None:
+    old_runtime = FakeRuntime(tmp_path)
+    replacement = FakeRuntime(tmp_path)
+    old_service = IdleAwareFakeService(idle=False)
+    replacement_service = IdleAwareFakeService(idle=True)
+    services = iter((old_service, replacement_service))
+    lifecycle = lifecycle_module.WebProactiveLifecycle(
+        old_runtime,
+        FakeLease(writable=True),
+        service_factory=lambda _: next(services),
+        bind_runtime=lambda *_: None,
+        poll_seconds=60,
+    )
+    await lifecycle.start()
+    supervisor = supervisor_module.RuntimeSupervisor(
+        old_runtime,
+        runtime_factory=lambda: _return(replacement),
+        idle_probe=lifecycle.is_idle,
+        active_revision="old",
+        on_activate=lifecycle.activate_replacement,
+    )
+
+    await supervisor.request_reload("new")
+
+    assert supervisor.status().state == "pending"
+    assert old_service.stop_calls == 0
+    assert old_service.drain_calls == 0
+
+    old_service.idle = True
+    await supervisor.notify_idle()
+
+    assert supervisor.current_runtime is replacement
+    assert old_service.drain_calls == 1
+    assert old_service.stop_calls == 1
+    await lifecycle.stop()
+
+
+def test_takeover_monitor_retries_after_transient_service_start_failure(tmp_path: Path) -> None:
+    asyncio.run(_takeover_monitor_retries_after_transient_service_start_failure(tmp_path))
+
+
+async def _takeover_monitor_retries_after_transient_service_start_failure(tmp_path: Path) -> None:
+    class RetriableLease(FakeLease):
+        async def release_owner(self) -> None:
+            self.release_calls += 1
+            self.events.append("lease.release")
+
+    lease = RetriableLease(writable=False)
+    services = [FakeService(fail_start=True), FakeService()]
+    lifecycle = lifecycle_module.WebProactiveLifecycle(
+        FakeRuntime(tmp_path),
+        lease,
+        service_factory=lambda _: services.pop(0),
+        bind_runtime=lambda *_: None,
+        poll_seconds=0.001,
+    )
+    await lifecycle.start()
+    lease.writable = True
+
+    await _wait_for(lambda: lifecycle.service is not None)
+
+    assert lifecycle.service is not None
+    assert lifecycle.service.start_calls == 1
     await lifecycle.stop()
 
 
