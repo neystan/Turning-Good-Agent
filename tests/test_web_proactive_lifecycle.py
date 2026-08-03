@@ -212,6 +212,53 @@ async def _takeover_starts_scheduler_only_after_lease_becomes_writable(tmp_path:
     assert created[0].start_calls == 1
 
 
+def test_monitor_publishes_only_on_ownership_transition(tmp_path: Path) -> None:
+    asyncio.run(_monitor_publishes_only_on_ownership_transition(tmp_path))
+
+
+async def _monitor_publishes_only_on_ownership_transition(tmp_path: Path) -> None:
+    lease = FakeLease(writable=False)
+    created: list[FakeService] = []
+    publish_calls = 0
+    monitor_cycles = 0
+
+    def factory(_: object) -> FakeService:
+        service = FakeService()
+        created.append(service)
+        return service
+
+    async def publish_state() -> None:
+        nonlocal publish_calls
+        publish_calls += 1
+
+    async def notify_idle() -> None:
+        nonlocal monitor_cycles
+        monitor_cycles += 1
+
+    lifecycle = lifecycle_module.WebProactiveLifecycle(
+        FakeRuntime(tmp_path),
+        lease,
+        service_factory=factory,
+        bind_runtime=lambda *_: None,
+        publish_state=publish_state,
+        notify_idle=notify_idle,
+        poll_seconds=0.001,
+    )
+    await lifecycle.start()
+    assert publish_calls == 1
+
+    await _wait_for(lambda: monitor_cycles >= 3)
+    assert publish_calls == 1
+
+    lease.writable = True
+    await _wait_for(lambda: bool(created))
+    await _wait_for(lambda: monitor_cycles >= 4)
+    assert publish_calls == 2
+
+    await lifecycle.stop()
+    assert publish_calls == 3
+
+
 def test_disabled_web_monitors_and_reconciles_bidirectional_enabled_state(tmp_path: Path) -> None:
     asyncio.run(_disabled_web_monitors_and_reconciles_bidirectional_enabled_state(tmp_path))
 

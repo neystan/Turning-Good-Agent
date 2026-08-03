@@ -109,12 +109,16 @@ class WebProactiveLifecycle:
             await asyncio.sleep(self._poll_seconds)
             try:
                 async with self._lock:
+                    previous_state = self._publication_state()
                     await self._reconcile_current_runtime()
+                    state_changed = previous_state != self._publication_state()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("主动服务接管失败，将在下一轮重试")
-            await self._publish()
+                state_changed = False
+            if state_changed:
+                await self._publish()
             await self._notify_idle()
 
     async def _reconcile_current_runtime(self) -> None:
@@ -164,6 +168,10 @@ class WebProactiveLifecycle:
     async def _notify_idle(self) -> None:
         if self._notify_idle_callback is not None:
             await self._notify_idle_callback()
+
+    def _publication_state(self) -> tuple[bool, OwnershipState, int | None]:
+        service_id = id(self._service) if self._service is not None else None
+        return self._enabled(self._runtime), self._ownership.state(), service_id
 
     @staticmethod
     def _enabled(runtime: Any) -> bool:
