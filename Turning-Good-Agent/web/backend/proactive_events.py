@@ -40,6 +40,7 @@ class ProactiveEventHub:
         self._queues: set[asyncio.Queue[dict[str, object]]] = set()
         self._lock = asyncio.Lock()
         self._last_bridge_payload: dict[str, object] | None = None
+        self._bridge_snapshots: dict[str, dict[str, object]] = {}
 
     async def subscribe(self) -> asyncio.Queue[dict[str, object]]:
         queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
@@ -53,7 +54,14 @@ class ProactiveEventHub:
 
     def initial_snapshots(self) -> list[dict[str, object]]:
         owner = self._ownership()
-        return [snapshot_payload(snapshot, owner) for snapshot in self._controller.snapshot_all().values()]
+        snapshots = []
+        for domain, snapshot in self._controller.snapshot_all().items():
+            cached = self._bridge_snapshots.get(domain)
+            if cached is not None and self._bridge_owner_is_current(cached, owner):
+                snapshots.append(copy.deepcopy(cached))
+            else:
+                snapshots.append(snapshot_payload(snapshot, owner))
+        return snapshots
 
     async def publish_all(self) -> None:
         """广播当前完整快照，用于所有权变化和重连校正。"""
@@ -110,6 +118,8 @@ class ProactiveEventHub:
             raise ValueError("bridge revision 必须严格递增")
         self._controller.advance_revision(revision)
         self._last_bridge_payload = copy.deepcopy(payload)
+        if payload["type"] == "snapshot":
+            self._bridge_snapshots[str(payload["domain"])] = copy.deepcopy(payload)
         await self._broadcast(payload)
 
     def _validate_bridge_payload(self, payload: dict[str, object]) -> None:
@@ -140,6 +150,15 @@ class ProactiveEventHub:
             raise ValueError("bridge notice 缺少通知字段")
         if any(not isinstance(payload[field], str) or not payload[field] for field in _NOTICE_FIELDS):
             raise ValueError("bridge notice 字段无效")
+
+    @staticmethod
+    def _bridge_owner_is_current(payload: dict[str, object], owner: OwnershipState) -> bool:
+        bridge_owner = payload.get("owner")
+        return (
+            owner.owner_kind == "cli"
+            and isinstance(bridge_owner, dict)
+            and bridge_owner.get("owner_id") == owner.owner_id
+        )
 
     async def _broadcast(self, payload: dict[str, object]) -> None:
         async with self._lock:

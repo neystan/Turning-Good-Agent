@@ -15,6 +15,7 @@ from ...bus.queue import AsyncMessageBus
 from ...config.settings import Settings
 from ...llm.factory import build_llm
 from ...proactive.delivery import WebDeliverySink
+from ...proactive.bridge import ProactiveBridgeListener
 from ...proactive.service import ProactiveService
 from ...runtime.runtime import AgentRuntime
 from ...sessions.types import MessageRecord, Session, ToolCallRecord
@@ -54,6 +55,7 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
     ownership = ProactiveOwnershipLease(settings.data_dir, owner_kind="web")
     proactive_control = WebProactiveControlService(runtime)
     proactive_events = ProactiveEventHub(proactive_control, ownership.state)
+    proactive_bridge = ProactiveBridgeListener(settings.data_dir, proactive_events.accept_bridge_event)
 
     async def publish_web_notice(**notice: str) -> None:
         domain = str(notice["domain"])
@@ -137,17 +139,19 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         """统一管理 Runtime 和 Web 调度器生命周期。"""
-        await supervisor.start()
-        coordinator.register_runtime(runtime)
-        await runtime.start()
-        await coordinator.start()
-        await proactive_lifecycle.start()
+        await proactive_bridge.start()
         try:
+            await supervisor.start()
+            coordinator.register_runtime(runtime)
+            await runtime.start()
+            await coordinator.start()
+            await proactive_lifecycle.start()
             yield
         finally:
             await proactive_lifecycle.stop()
             await coordinator.close()
             await supervisor.close()
+            await proactive_bridge.stop()
 
     app = FastAPI(title="Turning Good Agent", lifespan=lifespan)
     app.state.coordinator = coordinator
@@ -155,6 +159,7 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
     app.state.config_control = config_control
     app.state.proactive_control = proactive_control
     app.state.proactive_events = proactive_events
+    app.state.proactive_bridge = proactive_bridge
     app.state.proactive_ownership = ownership
     app.state.proactive_lifecycle = proactive_lifecycle
 

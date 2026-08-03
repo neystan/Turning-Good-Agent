@@ -7,6 +7,9 @@ from typing import Any
 
 from ..bus.messages import InboundMessage
 from ..bus.queue import AsyncMessageBus
+from .bridge import CliBridgeDeliverySink, CliProactiveBridge
+from .delivery import DeliveryGate
+from .store import ProactiveStore
 from .ownership import OwnershipState, ProactiveOwnershipLease
 from .service import ProactiveService
 
@@ -38,6 +41,7 @@ class CliProactiveLifecycle:
         self._service_factory = service_factory or self._create_service
         self._poll_seconds = poll_seconds
         self._service: ProactiveService | None = None
+        self._bridge = CliProactiveBridge(runtime, self._ownership.state, lambda: self._service)
         self._monitor_task: asyncio.Task[None] | None = None
         self._started = False
         self._lock = asyncio.Lock()
@@ -88,6 +92,8 @@ class CliProactiveLifecycle:
         if self._service is not None:
             if not self._ownership.state().writable:
                 await self._stop_service()
+            else:
+                await self._bridge.retry_snapshots()
             return
         state = await self._ownership.try_takeover()
         if not state.writable:
@@ -101,6 +107,7 @@ class CliProactiveLifecycle:
             await self._ownership.release_owner()
             raise
         self._service = service
+        await self._publish_bridge_all()
 
     async def _stop_service(self) -> None:
         if self._service is not None:
@@ -108,13 +115,25 @@ class CliProactiveLifecycle:
             self._service = None
 
     def _create_service(self, runtime: Any) -> ProactiveService:
+        delivery = DeliveryGate(
+            ProactiveStore(runtime.settings.data_dir),
+            self._bus,
+            idle_probe=runtime.is_globally_idle,
+            active_session_id=self._active_session_id,
+        )
         return ProactiveService(
             runtime,
             self._bus,
             target_channel=self._target_channel,
             active_session_id=self._active_session_id,
             active_inbound_message=self._active_inbound_message,
+            delivery_sink=CliBridgeDeliverySink(delivery, self._bridge),
+            on_domain_change=self._bridge.publish_snapshot,
         )
+
+    async def _publish_bridge_all(self) -> None:
+        for domain in ("cron", "breakbeat", "dream", "skill", "incident"):
+            await self._bridge.publish_snapshot(domain)
 
     def _enabled(self) -> bool:
         return bool(self._runtime.settings.proactive.enabled)
