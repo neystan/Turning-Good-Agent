@@ -9,21 +9,25 @@ type ActionEntry = { pending: boolean; error: ActionFailure | null };
 
 export function useProactiveActions(onSnapshot: (snapshot: ProactiveSnapshot) => void) {
   const [entries, setEntries] = useState<Record<string, ActionEntry>>({});
+  const [failure, setFailure] = useState<ActionFailure | null>(null);
 
   const run = async (key: string, operation: () => Promise<ProactiveSnapshot>) => {
+    setFailure(null);
     setEntries((current) => ({ ...current, [key]: { pending: true, error: null } }));
     try {
       onSnapshot(await operation());
       setEntries((current) => ({ ...current, [key]: { pending: false, error: null } }));
       return true;
     } catch (error) {
-      setEntries((current) => ({ ...current, [key]: { pending: false, error: failureFrom(error) } }));
+      const nextFailure = failureFrom(error);
+      setFailure(nextFailure);
+      setEntries((current) => ({ ...current, [key]: { pending: false, error: nextFailure } }));
       return false;
     }
   };
 
   const entry = (key: string): ActionEntry => entries[key] || { pending: false, error: null };
-  return { entry, run };
+  return { entry, failure, run };
 }
 
 export function ProactiveActionError({ failure }: { failure: ActionFailure | null }) {
@@ -33,12 +37,13 @@ export function ProactiveActionError({ failure }: { failure: ActionFailure | nul
   </p>;
 }
 
-export function ProactiveDeleteDialog({ open, title, description, confirmLabel, pending, onOpenChange, onConfirm }: {
+export function ProactiveDeleteDialog({ open, title, description, confirmLabel, pending, disabled, onOpenChange, onConfirm }: {
   open: boolean;
   title: string;
   description: string;
   confirmLabel: string;
   pending: boolean;
+  disabled: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
 }) {
@@ -50,7 +55,7 @@ export function ProactiveDeleteDialog({ open, title, description, confirmLabel, 
         <AlertDialog.Description>{description}</AlertDialog.Description>
         <div className="dialog-actions">
           <AlertDialog.Cancel asChild><button disabled={pending}>取消</button></AlertDialog.Cancel>
-          <button className="danger" type="button" disabled={pending} onClick={onConfirm}>{pending ? "正在删除" : confirmLabel}</button>
+          <button className="danger" type="button" disabled={pending || disabled} onClick={onConfirm}>{pending ? "正在删除" : confirmLabel}</button>
         </div>
       </AlertDialog.Content>
     </AlertDialog.Portal>

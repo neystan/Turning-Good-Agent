@@ -20,13 +20,14 @@ export function ProactiveIncidentsPage({ snapshot, writable, onSnapshot }: {
   const incidents = data.incidents.filter((incident) => filter === "all" || incident.state === filter);
 
   const confirmDelete = async () => {
-    if (!deleting) return;
+    if (!deleting || !writable) return;
     await actions.run(`delete:${deleting}`, () => proactiveApi.deleteIncident(deleting));
     setDeleting(null);
   };
 
   return <div className="proactive-domain-page" data-proactive-page="incidents">
     <DomainSummary runtimeNextRunAt={snapshot.runtime.next_run_at} running={snapshot.runtime.running} />
+    <ProactiveActionError failure={actions.failure} />
     <div className="proactive-filter" role="group" aria-label="Incident 状态筛选">
       <button type="button" aria-label="全部 Incident" aria-pressed={filter === "all"} onClick={() => setFilter("all")}>全部</button>
       <button type="button" aria-label="open Incident" aria-pressed={filter === "open"} onClick={() => setFilter("open")}>open</button>
@@ -57,10 +58,9 @@ export function ProactiveIncidentsPage({ snapshot, writable, onSnapshot }: {
               <p>{item.message}</p>
             </li>)}</ol>
           </section>
-          <ProactiveActionError failure={failure} />
         </ProactiveCard>;
       })}
     </div>}
-    <ProactiveDeleteDialog open={Boolean(deleting)} title="删除 Incident？" description={`将永久删除 Incident“${deleting || ""}”及其历史，无法恢复。`} confirmLabel="确认删除 Incident" pending={deletingEntry.pending} onOpenChange={(open) => { if (!open) setDeleting(null); }} onConfirm={() => void confirmDelete()} />
+    <ProactiveDeleteDialog open={Boolean(deleting)} title="删除 Incident？" description={`将永久删除 Incident“${deleting || ""}”及其历史，无法恢复。`} confirmLabel="确认删除 Incident" pending={deletingEntry.pending} disabled={!writable} onOpenChange={(open) => { if (!open) setDeleting(null); }} onConfirm={() => void confirmDelete()} />
   </div>;
 }

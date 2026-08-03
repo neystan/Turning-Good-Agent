@@ -1,4 +1,5 @@
 import { ArrowLeft, BellRing, BrainCircuit, CalendarClock, CircleAlert, Gauge, WandSparkles } from "lucide-react";
+import type { KeyboardEvent } from "react";
 
 import { ScrollArea } from "./ScrollArea";
 import { ProactiveCard } from "./ProactiveCard";
@@ -35,6 +36,19 @@ export function ProactiveWorkspace({ domain, snapshots, owner, connection, onSel
   const ownerLabel = ownershipLabel(owner, connection);
   const timezone = typeof snapshots.memory?.data.timezone === "string" ? snapshots.memory.data.timezone : null;
 
+  const handleTabKey = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % panels.length;
+    if (event.key === "ArrowLeft") nextIndex = (index - 1 + panels.length) % panels.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = panels.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const nextDomain = panels[nextIndex].domain;
+    onSelectDomain(nextDomain);
+    document.getElementById(`proactive-tab-${nextDomain}`)?.focus();
+  };
+
   return <main className="proactive-workspace" id="main-content">
     <header className="proactive-header">
       <button className="proactive-return" type="button" onClick={onReturnToChat}><ArrowLeft size={16} />返回聊天</button>
@@ -45,14 +59,15 @@ export function ProactiveWorkspace({ domain, snapshots, owner, connection, onSel
       </div>
       <span className={`proactive-owner ${owner?.writable ? "is-owner" : ""}`}>{ownerLabel}</span>
     </header>
-    <nav className="proactive-tabs" aria-label="主动能力页面" role="tablist">
-      {panels.map((item) => {
+    <nav className="proactive-tabs" aria-label="主动能力页面" role="tablist" aria-orientation="horizontal">
+      {panels.map((item, index) => {
         const Icon = item.icon;
-        return <button key={item.domain} type="button" role="tab" aria-selected={item.domain === domain} onClick={() => onSelectDomain(item.domain)}><Icon size={16} /><span>{item.label}</span></button>;
+        const selected = item.domain === domain;
+        return <button key={item.domain} id={`proactive-tab-${item.domain}`} type="button" role="tab" aria-selected={selected} aria-controls={`proactive-panel-${item.domain}`} tabIndex={selected ? 0 : -1} onKeyDown={(event) => handleTabKey(event, index)} onClick={() => onSelectDomain(item.domain)}><Icon size={16} /><span>{item.label}</span></button>;
       })}
     </nav>
     <ScrollArea className="proactive-scroll" viewportClassName="proactive-scroll-viewport">
-      <section className="proactive-panel" data-proactive-domain={domain} data-proactive-revision={snapshot?.proactive_revision ?? 0}>
+      <section className="proactive-panel" id={`proactive-panel-${domain}`} role="tabpanel" aria-labelledby={`proactive-tab-${domain}`} tabIndex={0} data-proactive-domain={domain} data-proactive-revision={snapshot?.proactive_revision ?? 0}>
         <header className="proactive-panel-heading">
           <div>
             <span className="proactive-kicker">{panel.label}</span>

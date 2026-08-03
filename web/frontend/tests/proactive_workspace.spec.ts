@@ -111,9 +111,12 @@ test("Cron cards show complete schedules and update only from the confirmed dele
   let actionRequests = 0;
   let domainGets = 0;
   await page.route("**/api/proactive/cron/**", async (route) => {
-    if (route.request().method() === "GET") domainGets += 1;
     if (route.request().method() === "DELETE") actionRequests += 1;
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(snapshot("cron", 4, { data: { jobs: [cron.data.jobs[1]], usage: cron.data.usage } })) });
+  });
+  await page.route(/\/api\/proactive\/cron(?:\?.*)?$/, async (route) => {
+    if (route.request().method() === "GET") domainGets += 1;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(cron) });
   });
 
   await page.goto(`${baseUrl}/#proactive/cron`);
@@ -144,6 +147,48 @@ test("Cron action failures preserve card data and expose status with readable de
   await expect(page.getByRole("alert")).toContainText("该 Cron 由另一 Host 持有");
   await expect(page.locator('[data-proactive-id="cron-error"]')).toContainText("保留失败前的完整 Prompt。");
   await expect(page.locator('[data-proactive-id="cron-error"]')).toHaveAttribute("data-proactive-action-state", "error");
+});
+
+test("an open delete confirmation becomes non-mutating when ownership turns read-only", async ({ page }) => {
+  const readonlyOwner = { mode: "readonly", writable: false, owner_id: "cli-owner", owner_kind: "cli", owner_pid: 77 };
+  const cron = snapshot("cron", 2, { data: { jobs: [{ id: "ownership-cron", cron: "0 8 * * *", created_at: "2026-08-01T08:00:00+08:00", prompt: "所有权变化时不得删除。", recurring: true, delivery_channels: ["cli"], updated_at: "2026-08-01T08:00:00+08:00", next_run_at: "2026-08-04T08:00:00+08:00" }], usage: { calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 } } });
+  await installProactiveSocket(page, [cron, snapshot("breakbeat"), snapshot("dream"), snapshot("skill"), snapshot("incident")]);
+  await mockAppShell(page);
+  let deleteRequests = 0;
+  await page.route("**/api/proactive/cron/ownership-cron", async (route) => {
+    deleteRequests += 1;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(snapshot("cron", 4)) });
+  });
+
+  await page.goto(`${baseUrl}/#proactive/cron`);
+  await page.getByRole("button", { name: "删除 Cron ownership-cron" }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await page.evaluate((payload) => (window as unknown as { __tgaEmitProactive: (value: unknown) => void }).__tgaEmitProactive(payload), snapshot("cron", 3, { data: cron.data, owner: readonlyOwner }));
+
+  const confirm = page.getByRole("button", { name: "确认删除 Cron" });
+  await expect(confirm).toBeDisabled();
+  await confirm.click({ force: true });
+  expect(deleteRequests).toBe(0);
+  await expect(page.locator('[data-proactive-id="ownership-cron"]')).toBeVisible();
+});
+
+test("a stale removed delete target leaves a persistent accessible page error", async ({ page }) => {
+  const cron = snapshot("cron", 2, { data: { jobs: [{ id: "stale-cron", cron: "0 8 * * *", created_at: "2026-08-01T08:00:00+08:00", prompt: "快照移除后保留错误。", recurring: true, delivery_channels: ["cli"], updated_at: "2026-08-01T08:00:00+08:00", next_run_at: "2026-08-04T08:00:00+08:00" }], usage: { calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 } } });
+  await installProactiveSocket(page, [cron, snapshot("breakbeat"), snapshot("dream"), snapshot("skill"), snapshot("incident")]);
+  await mockAppShell(page);
+  await page.route("**/api/proactive/cron/stale-cron", (route) => route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "Cron Job 不存在：stale-cron" }) }));
+
+  await page.goto(`${baseUrl}/#proactive/cron`);
+  await page.getByRole("button", { name: "删除 Cron stale-cron" }).click();
+  await page.evaluate((payload) => (window as unknown as { __tgaEmitProactive: (value: unknown) => void }).__tgaEmitProactive(payload), snapshot("cron", 3));
+  await expect(page.locator('[data-proactive-id="stale-cron"]')).toHaveCount(0);
+  await page.getByRole("button", { name: "确认删除 Cron" }).click();
+
+  const error = page.getByRole("alert");
+  await expect(error).toContainText("404");
+  await expect(error).toContainText("Cron Job 不存在：stale-cron");
+  await page.waitForTimeout(100);
+  await expect(error).toBeVisible();
 });
 
 test("Breakbeat cards sort active work first, complete directly, and navigate to the source session", async ({ page }) => {
@@ -313,6 +358,33 @@ test("proactive workspace deep-links all five domains and retains the selected p
   await page.reload();
   await expect(page.getByRole("tab", { name: "Incidents" })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator("[data-proactive-domain]")).toHaveAttribute("data-proactive-domain", "incidents");
+});
+
+test("proactive tabs use roving focus, labeled panels, and Arrow navigation updates the hash", async ({ page }) => {
+  await installProactiveSocket(page);
+  await mockAppShell(page);
+  await page.goto(`${baseUrl}/#proactive/cron`);
+
+  const cronTab = page.getByRole("tab", { name: "Cron" });
+  const breakbeatTab = page.getByRole("tab", { name: "Breakbeat" });
+  await expect(cronTab).toHaveAttribute("id", "proactive-tab-cron");
+  await expect(cronTab).toHaveAttribute("aria-controls", "proactive-panel-cron");
+  await expect(cronTab).toHaveAttribute("tabindex", "0");
+  await expect(breakbeatTab).toHaveAttribute("tabindex", "-1");
+  const cronPanel = page.getByRole("tabpanel", { name: "Cron" });
+  await expect(cronPanel).toHaveAttribute("id", "proactive-panel-cron");
+  await expect(cronPanel).toHaveAttribute("aria-labelledby", "proactive-tab-cron");
+
+  await cronTab.focus();
+  await cronTab.press("ArrowRight");
+  await expect(breakbeatTab).toBeFocused();
+  await expect(breakbeatTab).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/#proactive\/breakbeat$/);
+  await expect(page.getByRole("tabpanel", { name: "Breakbeat" })).toHaveAttribute("aria-labelledby", "proactive-tab-breakbeat");
+
+  await breakbeatTab.press("ArrowLeft");
+  await expect(cronTab).toBeFocused();
+  await expect(page).toHaveURL(/#proactive\/cron$/);
 });
 
 test("proactive socket receives complete snapshots, maps wire domains, and remains app-lifetime", async ({ page }) => {

@@ -17,13 +17,14 @@ export function ProactiveCronPage({ snapshot, writable, timezone, onSnapshot }: 
   const deletingEntry = deleting ? actions.entry(`delete:${deleting}`) : actions.entry("");
 
   const confirmDelete = async () => {
-    if (!deleting) return;
+    if (!deleting || !writable) return;
     await actions.run(`delete:${deleting}`, () => proactiveApi.deleteCron(deleting));
     setDeleting(null);
   };
 
   return <div className="proactive-domain-page" data-proactive-page="cron">
     <DomainSummary runtimeNextRunAt={snapshot.runtime.next_run_at} running={snapshot.runtime.running} usage={data.usage} timezone={timezone} />
+    <ProactiveActionError failure={actions.failure} />
     {data.jobs.length === 0 ? <EmptyRecords>暂无 Cron。</EmptyRecords> : <div className="proactive-card-grid">
       {data.jobs.map((job) => {
         const state = snapshot.runtime.entity_states[job.id] || "idle";
@@ -39,11 +40,10 @@ export function ProactiveCronPage({ snapshot, writable, timezone, onSnapshot }: 
             <div><dt>创建时间</dt><dd>{job.created_at}</dd></div>
             <div><dt>更新时间</dt><dd>{job.updated_at}</dd></div>
           </dl>
-          <ProactiveActionError failure={entry.error} />
         </ProactiveCard>;
       })}
     </div>}
-    <ProactiveDeleteDialog open={Boolean(deleting)} title="删除 Cron？" description={`将永久删除 Cron“${deleting || ""}”，无法恢复。`} confirmLabel="确认删除 Cron" pending={deletingEntry.pending} onOpenChange={(open) => { if (!open) setDeleting(null); }} onConfirm={() => void confirmDelete()} />
+    <ProactiveDeleteDialog open={Boolean(deleting)} title="删除 Cron？" description={`将永久删除 Cron“${deleting || ""}”，无法恢复。`} confirmLabel="确认删除 Cron" pending={deletingEntry.pending} disabled={!writable} onOpenChange={(open) => { if (!open) setDeleting(null); }} onConfirm={() => void confirmDelete()} />
   </div>;
 }
 
