@@ -329,12 +329,20 @@ def test_bridge_projects_source_owner_capability_for_cache_reconnect_and_notice(
 
 
 def test_connected_websocket_receives_five_web_owned_snapshots_after_cli_lease_release(tmp_path: Path) -> None:
+    events: list[str] = []
+
     class Service:
+        def install_tools(self) -> None:
+            events.append("install_tools")
+
         async def start(self) -> None:
-            return None
+            events.append("start")
+
+        def uninstall_tools(self) -> None:
+            events.append("uninstall_tools")
 
         async def stop(self) -> None:
-            return None
+            events.append("stop")
 
     async def acquire_cli_owner() -> object:
         owner = ownership_module.ProactiveOwnershipLease(tmp_path, owner_kind="cli", owner_id="cli-owner")
@@ -365,6 +373,8 @@ def test_connected_websocket_receives_five_web_owned_snapshots_after_cli_lease_r
         assert all(message["mutations_allowed"] is True for message in takeover)
     finally:
         asyncio.run(cli_owner.release_owner())
+
+    assert events == ["install_tools", "start", "uninstall_tools", "stop"]
 
 
 def test_proactive_websocket_unsubscribes_when_client_has_already_closed(tmp_path: Path) -> None:
