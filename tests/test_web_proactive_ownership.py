@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
+import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import threading
 
@@ -46,6 +48,57 @@ def test_stale_owner_record_can_be_taken_over(tmp_path: Path) -> None:
         assert state.mode == "owner"
         assert state.owner_id == "web"
         await lease.release_owner()
+
+    asyncio.run(run())
+
+
+def test_expired_remote_heartbeat_allows_takeover_despite_live_pid_collision(tmp_path: Path) -> None:
+    async def run() -> None:
+        path = tmp_path / "proactive" / ".owner.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "owner_id": "cli-container",
+                    "owner_kind": "cli",
+                    "owner_pid": os.getpid(),
+                    "heartbeat_at": (datetime.now(UTC) - timedelta(seconds=31)).isoformat(),
+                }
+            ),
+            encoding="utf-8",
+        )
+        lease = ProactiveOwnershipLease(tmp_path, owner_kind="web", owner_id="web-container")
+
+        state = await lease.try_takeover()
+
+        assert state.writable is True
+        assert state.owner_id == "web-container"
+        await lease.release_owner()
+
+    asyncio.run(run())
+
+
+def test_fresh_remote_heartbeat_remains_readonly_despite_live_pid_collision(tmp_path: Path) -> None:
+    async def run() -> None:
+        path = tmp_path / "proactive" / ".owner.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "owner_id": "cli-container",
+                    "owner_kind": "cli",
+                    "owner_pid": os.getpid(),
+                    "heartbeat_at": datetime.now(UTC).isoformat(),
+                }
+            ),
+            encoding="utf-8",
+        )
+        lease = ProactiveOwnershipLease(tmp_path, owner_kind="web", owner_id="web-container")
+
+        state = await lease.try_takeover()
+
+        assert state.writable is False
+        assert state.owner_id == "cli-container"
 
     asyncio.run(run())
 

@@ -13,6 +13,17 @@ from uuid import uuid4
 
 _PROCESS_LOCKS: dict[str, threading.RLock] = {}
 _PROCESS_LOCKS_GUARD = threading.Lock()
+_LEASE_EXPIRY_SECONDS = 30.0
+
+
+def _parse_heartbeat(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +170,9 @@ class ProactiveOwnershipLease:
         owner_id = record.get("owner_id")
         pid = record.get("owner_pid")
         if not isinstance(owner_id, str) or not isinstance(pid, int):
+            return True
+        heartbeat = _parse_heartbeat(record.get("heartbeat_at"))
+        if heartbeat is not None and (datetime.now(UTC) - heartbeat).total_seconds() >= _LEASE_EXPIRY_SECONDS:
             return True
         if os.name == "nt":
             return not _windows_pid_alive(pid)
