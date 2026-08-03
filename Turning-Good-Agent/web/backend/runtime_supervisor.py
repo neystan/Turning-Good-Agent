@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Generic, TypeVar
 import inspect
+from typing import Awaitable, Callable, Generic, TypeVar
 
 
 RuntimeT = TypeVar("RuntimeT")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,16 +101,12 @@ class RuntimeSupervisor(Generic[RuntimeT]):
                 activated = True
                 self._active_revision = self._desired_revision
                 self._state = "active"
-                close = getattr(previous, "close", None)
-                if callable(close):
-                    await close()
+                await _close_previous_after_commit(previous)
             except Exception as exc:
                 self._state = "failed"
                 self._last_apply_error = str(exc)
                 if replacement is not None and not activated:
-                    close = getattr(replacement, "close", None)
-                    if callable(close):
-                        await close()
+                    await _close_failed_candidate(replacement)
             finally:
                 self._ready.set()
 
@@ -116,3 +114,23 @@ class RuntimeSupervisor(Generic[RuntimeT]):
 async def _await_if_needed(value: object) -> None:
     if inspect.isawaitable(value):
         await value
+
+
+async def _close_previous_after_commit(runtime: object) -> None:
+    close = getattr(runtime, "close", None)
+    if not callable(close):
+        return
+    try:
+        await close()
+    except Exception:
+        logger.exception("Runtime 替换已提交，但关闭旧 Runtime 失败")
+
+
+async def _close_failed_candidate(runtime: object) -> None:
+    close = getattr(runtime, "close", None)
+    if not callable(close):
+        return
+    try:
+        await close()
+    except Exception:
+        logger.exception("Runtime 替换失败，候选 Runtime 清理失败")

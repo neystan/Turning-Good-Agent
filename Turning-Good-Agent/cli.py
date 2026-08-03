@@ -11,7 +11,7 @@ from .bus.queue import AsyncMessageBus
 from .channels.cli import CliChannelAdapter
 from .config.settings import Settings
 from .llm.factory import OPENAI_COMPATIBLE_PROVIDER, build_llm
-from .proactive.service import ProactiveService
+from .proactive.cli_lifecycle import CliProactiveLifecycle
 from .runtime.runtime import AgentRuntime
 
 
@@ -168,27 +168,20 @@ async def chat(
         ),
     )
     dispatcher = CliBusDispatcher(bus, runtime)
-    proactive = (
-        ProactiveService(
-            runtime,
-            bus,
-            target_channel=settings.channel,
-            active_session_id=lambda: active_session_id,
-            active_inbound_message=lambda: active_inbound_message,
-        )
-        if settings.proactive.enabled
-        else None
+    proactive_lifecycle = CliProactiveLifecycle(
+        runtime,
+        bus,
+        target_channel=settings.channel,
+        active_session_id=lambda: active_session_id,
+        active_inbound_message=lambda: active_inbound_message,
     )
-    if proactive is not None:
-        proactive.install_tools()
     renderer = asyncio.create_task(
         _render_cli_outbound(bus, interactive=interactive_terminal),
         name="cli-outbound-renderer",
     )
     await dispatcher.start()
     await runtime.start()
-    if proactive is not None:
-        await proactive.start()
+    await proactive_lifecycle.start()
     await bus.publish_outbound(OutboundMessage.new(active_session_id, settings.channel, "Turning Good Agent。输入 /exit 退出。"))
 
     async def read_content() -> str:
@@ -227,8 +220,7 @@ async def chat(
             with patch_stdout(raw=True):
                 await run_input_loop()
     finally:
-        if proactive is not None:
-            await proactive.stop()
+        await proactive_lifecycle.stop()
         await dispatcher.close()
         renderer.cancel()
         with suppress(asyncio.CancelledError):

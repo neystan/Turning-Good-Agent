@@ -38,11 +38,9 @@ class WebProactiveLifecycle:
     async def start(self) -> OwnershipState:
         """仅在启用且获得租约后启动 Scheduler；只读 Host 保留聊天能力。"""
         self._started = True
-        if self._enabled(self._runtime):
-            await self._ensure_owner_service()
-            self._monitor_task = asyncio.create_task(self._monitor(), name="web-proactive-takeover")
-        else:
-            self._bind_runtime(self._runtime, None)
+        async with self._lock:
+            await self._reconcile_current_runtime()
+        self._monitor_task = asyncio.create_task(self._monitor(), name="web-proactive-takeover")
         await self._publish()
         return self._ownership.state()
 
@@ -61,11 +59,16 @@ class WebProactiveLifecycle:
     async def activate_replacement(self, replacement: Any) -> None:
         """在候选服务可启动前保留旧绑定；失败则重启旧服务并抛出。"""
         async with self._lock:
-            old_runtime = self._runtime
             old_service = self._service
-            if not self._enabled(replacement) or not self._ownership.state().writable:
+            if not self._enabled(replacement):
+                await self._stop_service()
+                await self._ownership.release_owner()
                 self._runtime = replacement
-                self._service = None
+                self._bind_runtime(replacement, None)
+                return
+            if not self._ownership.state().writable:
+                await self._stop_service()
+                self._runtime = replacement
                 self._bind_runtime(replacement, None)
                 return
             if old_service is not None:
@@ -83,19 +86,27 @@ class WebProactiveLifecycle:
             self._runtime = replacement
             self._service = candidate
             self._bind_runtime(replacement, candidate)
-            del old_runtime
         await self._publish()
 
     async def _monitor(self) -> None:
         while self._started:
             await asyncio.sleep(self._poll_seconds)
             async with self._lock:
-                if self._service is not None and not self._ownership.state().writable:
-                    await self._stop_service()
-                    self._bind_runtime(self._runtime, None)
-                elif self._service is None:
-                    await self._ensure_owner_service()
+                await self._reconcile_current_runtime()
             await self._publish()
+
+    async def _reconcile_current_runtime(self) -> None:
+        if not self._enabled(self._runtime):
+            await self._stop_service()
+            await self._ownership.release_owner()
+            self._bind_runtime(self._runtime, None)
+            return
+        if self._service is not None:
+            if not self._ownership.state().writable:
+                await self._stop_service()
+                self._bind_runtime(self._runtime, None)
+            return
+        await self._ensure_owner_service()
 
     async def _ensure_owner_service(self) -> None:
         state = await self._ownership.try_takeover()
@@ -123,4 +134,6 @@ class WebProactiveLifecycle:
 
     @staticmethod
     def _enabled(runtime: Any) -> bool:
-        return bool(getattr(getattr(runtime, "settings", None).proactive, "enabled", False))
+        settings = getattr(runtime, "settings", None)
+        proactive = getattr(settings, "proactive", None)
+        return bool(getattr(proactive, "enabled", False))

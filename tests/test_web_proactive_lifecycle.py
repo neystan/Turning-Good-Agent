@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 lifecycle_module = importlib.import_module("Turning-Good-Agent.web.backend.proactive_lifecycle")
 ownership_module = importlib.import_module("Turning-Good-Agent.web.backend.proactive_ownership")
+cli_lifecycle_module = importlib.import_module("Turning-Good-Agent.proactive.cli_lifecycle")
 delivery_module = importlib.import_module("Turning-Good-Agent.proactive.delivery")
 service_module = importlib.import_module("Turning-Good-Agent.proactive.service")
 manager_module = importlib.import_module("Turning-Good-Agent.proactive.manager")
@@ -69,6 +70,9 @@ class FakeService:
     async def stop(self) -> None:
         self.stop_calls += 1
         self.events.append("service.stop")
+
+    def install_tools(self) -> None:
+        self.events.append("service.install_tools")
 
 
 class FakeLease:
@@ -193,6 +197,79 @@ async def _takeover_starts_scheduler_only_after_lease_becomes_writable(tmp_path:
     assert created[0].start_calls == 1
 
 
+def test_disabled_web_monitors_and_reconciles_bidirectional_enabled_state(tmp_path: Path) -> None:
+    asyncio.run(_disabled_web_monitors_and_reconciles_bidirectional_enabled_state(tmp_path))
+
+
+async def _disabled_web_monitors_and_reconciles_bidirectional_enabled_state(tmp_path: Path) -> None:
+    runtime = FakeRuntime(tmp_path, enabled=False)
+    lease = ownership_module.ProactiveOwnershipLease(tmp_path, owner_kind="web", heartbeat_seconds=60)
+    created: list[FakeService] = []
+
+    def factory(_: object) -> FakeService:
+        service = FakeService()
+        created.append(service)
+        return service
+
+    lifecycle = lifecycle_module.WebProactiveLifecycle(
+        runtime,
+        lease,
+        service_factory=factory,
+        bind_runtime=lambda *_: None,
+        poll_seconds=0.001,
+    )
+    await lifecycle.start()
+    assert not created
+    assert lease.state().writable is False
+
+    runtime.settings.proactive.enabled = True
+    await _wait_for(lambda: bool(created))
+    assert created[0].start_calls == 1
+    assert lease.state().writable is True
+
+    runtime.settings.proactive.enabled = False
+    await _wait_for(lambda: created[0].stop_calls == 1 and not lease.state().writable)
+    assert lease.state().writable is False
+    await lifecycle.stop()
+
+
+def test_cli_readonly_host_automatically_takes_over_real_lease(tmp_path: Path) -> None:
+    asyncio.run(_cli_readonly_host_automatically_takes_over_real_lease(tmp_path))
+
+
+async def _cli_readonly_host_automatically_takes_over_real_lease(tmp_path: Path) -> None:
+    web_owner = ownership_module.ProactiveOwnershipLease(tmp_path, owner_kind="web", heartbeat_seconds=60)
+    assert (await web_owner.acquire_owner()).writable is True
+    runtime = FakeRuntime(tmp_path)
+    cli_lease = ownership_module.ProactiveOwnershipLease(tmp_path, owner_kind="cli", heartbeat_seconds=60)
+    created: list[FakeService] = []
+
+    def factory(_: object) -> FakeService:
+        service = FakeService()
+        created.append(service)
+        return service
+
+    lifecycle = cli_lifecycle_module.CliProactiveLifecycle(
+        runtime,
+        bus_module.AsyncMessageBus(),
+        target_channel="cli",
+        active_session_id=lambda: "cli-session",
+        active_inbound_message=lambda: None,
+        ownership=cli_lease,
+        service_factory=factory,
+        poll_seconds=0.001,
+    )
+    assert (await lifecycle.start()).writable is False
+    assert not created
+
+    await web_owner.release_owner()
+    await _wait_for(lambda: bool(created))
+    assert created[0].start_calls == 1
+    assert cli_lease.state().writable is True
+    await lifecycle.stop()
+    assert cli_lease.state().writable is False
+
+
 def test_failed_runtime_replacement_retains_old_proactive_binding(tmp_path: Path) -> None:
     asyncio.run(_failed_runtime_replacement_retains_old_proactive_binding(tmp_path))
 
@@ -271,6 +348,33 @@ async def _successful_replacement_stops_old_scheduler_before_starting_new(tmp_pa
     assert lifecycle.service is replacement_service
     assert bindings[-1] == (replacement, replacement_service)
     assert events.index("service.stop") < events.index("service.start", 1)
+    await lifecycle.stop()
+
+
+def test_disabled_or_lost_owner_replacement_stops_old_scheduler(tmp_path: Path) -> None:
+    asyncio.run(_disabled_or_lost_owner_replacement_stops_old_scheduler(tmp_path))
+
+
+async def _disabled_or_lost_owner_replacement_stops_old_scheduler(tmp_path: Path) -> None:
+    events: list[str] = []
+    old_runtime = FakeRuntime(tmp_path)
+    disabled_runtime = FakeRuntime(tmp_path, enabled=False)
+    lease = FakeLease(writable=True, events=events)
+    service = FakeService(events=events)
+    lifecycle = lifecycle_module.WebProactiveLifecycle(
+        old_runtime,
+        lease,
+        service_factory=lambda _: service,
+        bind_runtime=lambda *_: None,
+        poll_seconds=60,
+    )
+    await lifecycle.start()
+    await lifecycle.activate_replacement(disabled_runtime)
+
+    assert lifecycle.service is None
+    assert service.stop_calls == 1
+    assert lease.release_calls == 1
+    assert events.index("service.stop") < events.index("lease.release")
     await lifecycle.stop()
 
 
@@ -359,3 +463,11 @@ async def _web_service_uses_memory_only_delivery_sink(tmp_path: Path) -> None:
     assert not (tmp_path / "proactive" / "pending_deliveries.json").exists()
     assert notices[0]["domain"] == "dream"
     await service.stop()
+
+
+async def _wait_for(predicate, *, attempts: int = 100) -> None:
+    for _ in range(attempts):
+        if predicate():
+            return
+        await asyncio.sleep(0.002)
+    assert predicate()
