@@ -69,7 +69,7 @@ class ToolCallRunner:
                 call,
                 None,
                 None,
-                blocked_reason="后台执行不允许调用该工具",
+                blocked_reason="当前 Channel 不允许调用该工具",
             )
         tool, args, validation_error = self.tools.prepare_call(call.name, call.args)
         return PreparedToolCall(ToolCall(call.id, call.name, args), tool, validation_error)
@@ -116,7 +116,7 @@ class ToolCallRunner:
                 call,
                 self._error_record(
                     call,
-                    f"工具 {call.name} 被后台策略阻止：{prepared.blocked_reason}",
+                    f"工具 {call.name} 被当前 Channel 策略阻止：{prepared.blocked_reason}",
                     prepared.blocked_reason,
                 ),
             )

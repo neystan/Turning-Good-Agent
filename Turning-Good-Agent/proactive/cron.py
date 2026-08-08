@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 from ..tools.base import ToolResult
+from ..runtime.turn_context import current_route
 from .executor import ProactiveExecutionResult
 from .scheduler import next_cron_fire, next_job_fire, next_run_at_after_delay, validate_cron
 from .store import ProactiveStore
@@ -58,6 +59,7 @@ class CronManager:
         notification_publisher: CronNotificationPublisher,
         proactive_settings: Any,
         *,
+        principal_id: str | None = None,
         incidents: CronIncidentReporter | None = None,
         clock: Callable[[], datetime] | None = None,
         schedule_changed: Callable[[], None] | None = None,
@@ -69,6 +71,7 @@ class CronManager:
         self._executor = executor
         self._notification_publisher = notification_publisher
         self._timezone = ZoneInfo(str(proactive_settings.timezone))
+        self._principal_id = principal_id
         self._incidents = incidents
         self._clock = clock or (lambda: datetime.now(UTC))
         self._schedule_changed = schedule_changed
@@ -317,11 +320,16 @@ class CronManager:
         if result.success:
             if job_id in self._deleting:
                 return
+            notification = {
+                "event_type": "proactive.cron.completed",
+                "content": f"定时任务已完成：{result.content}",
+                "source_id": job.id,
+                "notification_scope": "all_subscribed",
+            }
+            if self._principal_id is not None:
+                notification["principal_id"] = self._principal_id
             await self._notification_publisher.enqueue(
-                event_type="proactive.cron.completed",
-                content=f"定时任务已完成：{result.content}",
-                source_id=job.id,
-                notification_scope="all_subscribed",
+                **notification,
             )
             if self._incidents is not None and job_id not in self._deleting:
                 await self._incidents.report_recovery(
@@ -483,14 +491,15 @@ class CreateCronTool:
 
     async def run(self, args: dict[str, Any]) -> ToolResult:
         """验证互斥计划参数并创建任务。"""
+        manager = _cron_manager(self._manager)
         cron = _optional_arg(args.get("cron"))
         next_run_at = _optional_arg(args.get("next_run_at"))
         delay_seconds = args.get("delay_seconds")
         if delay_seconds is not None:
             if cron is not None or next_run_at is not None:
                 raise ValueError("delay_seconds 不能与 cron 或 next_run_at 同时设置")
-            next_run_at = self._manager.next_run_at_after_delay(delay_seconds)
-        job = self._manager.create_job(
+            next_run_at = manager.next_run_at_after_delay(delay_seconds)
+        job = manager.create_job(
             str(args["prompt"]),
             cron=cron,
             next_run_at=next_run_at,
@@ -517,12 +526,13 @@ class ListCronsTool:
     async def run(self, args: dict[str, Any]) -> ToolResult:
         """列出定时任务。"""
         del args
-        jobs = self._manager.list_jobs()
+        manager = _cron_manager(self._manager)
+        jobs = manager.list_jobs()
         if not jobs:
             return ToolResult("暂无 Cron 定时任务。")
         lines = [
             (
-                f"{job.id} status={self._manager.runtime_state(job.id)} "
+                f"{job.id} status={manager.runtime_state(job.id)} "
                 f"next_run_at={job.next_run_at} "
                 f"schedule={job.cron or 'one-shot'} recurring={job.recurring} prompt={job.prompt}"
             )
@@ -549,7 +559,7 @@ class DeleteCronTool:
 
     async def run(self, args: dict[str, Any]) -> ToolResult:
         """删除定时任务。"""
-        job = await self._manager.delete_job(str(args["id"]))
+        job = await _cron_manager(self._manager).delete_job(str(args["id"]))
         return ToolResult(f"已删除 Cron 定时任务：{job.id}")
 
 
@@ -558,6 +568,17 @@ def _empty_usage():
     from ..llm.types import LLMUsage
 
     return LLMUsage()
+
+
+def _cron_manager(value: Any) -> CronManager:
+    """按当前可信路由动态解析 Cron manager。"""
+    provider = getattr(value, "workspace_for_route", None)
+    if not callable(provider):
+        return value
+    route = current_route()
+    if route is None:
+        raise RuntimeError("主动 Tool 缺少当前 route")
+    return provider(route).cron
 
 
 def _optional_arg(value: object) -> str | None:

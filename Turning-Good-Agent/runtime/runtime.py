@@ -3,8 +3,9 @@ import logging
 import time
 from pathlib import Path
 
-from ..bus.messages import InboundMessage, OutboundMessage
+from ..bus.messages import ChannelRoute, InboundMessage, OutboundMessage
 from ..channels.base import ChannelRouter
+from ..channels.policy import ChannelToolPolicy, DefaultChannelToolPolicy
 from ..config.settings import Settings
 from ..context.builder import ContextBuilder
 from ..hooks.channel_status import ChannelStatusHook
@@ -27,7 +28,13 @@ from ..sessions.manager import SessionManager
 from ..sessions.store import JsonlSessionStore
 from ..tools.loader import ToolLoader
 from ..tools.registry import ToolRegistry
+from ..gateway.principals import GatewayPrincipalResolver
 from .agent_loop import AgentLoop
+from .principal_context import (
+    PrincipalRuntimeContext,
+    PrincipalSessionReader,
+    RuntimePrincipalResolver,
+)
 from .state import (
     TurnState,
     compact_trace_metadata,
@@ -40,8 +47,11 @@ from .state import (
 from .turn_context import (
     TurnContext,
     reset_current_inbound,
+    reset_current_principal_context,
     reset_current_route,
+    current_principal_context,
     set_current_inbound,
+    set_current_principal_context,
     set_current_route,
 )
 
@@ -62,6 +72,7 @@ class AgentRuntime:
         hooks: HookManager,
         mcp: McpManager,
         skills: SkillManager,
+        principal_resolver: RuntimePrincipalResolver | None = None,
     ) -> None:
         """初始化 Runtime 依赖和唯一 Hook 管理器。"""
         self.settings = settings
@@ -74,6 +85,8 @@ class AgentRuntime:
         self.mcp = mcp
         self.skills = skills
         self.channel_router = ChannelRouter()
+        self._channel_tool_policy: ChannelToolPolicy = DefaultChannelToolPolicy()
+        self._principal_resolver = principal_resolver
         self.token_monitor = TokenMonitor()
         self.last_trace: list[StateTrace] = []
         self._mcp_started = False
@@ -111,7 +124,8 @@ class AgentRuntime:
         hooks.register(ToolResultTruncationHook(settings.runtime.max_tool_result_tokens))
         hooks.register(ChannelStatusHook())
         hooks.register(TurnMonitorHook())
-        return cls(
+        profile_memory = ProfileMemory(settings.data_dir, settings.proactive)
+        runtime = cls(
             settings=settings,
             sessions=sessions,
             context_builder=ContextBuilder(),
@@ -124,12 +138,22 @@ class AgentRuntime:
                 attachment_context_token_limit=settings.mcp.attachment_context_token_limit,
                 skills=settings.skills,
             ),
-            profile_memory=ProfileMemory(settings.data_dir, settings.proactive),
+            profile_memory=profile_memory,
             proactive=ProactiveManager(),
             hooks=hooks,
             mcp=mcp,
             skills=skills,
         )
+        runtime.set_principal_resolver(
+            GatewayPrincipalResolver(
+                settings,
+                owner_sessions=sessions,
+                owner_profile_memory=profile_memory,
+                tools=tools,
+                policy=runtime._channel_tool_policy,
+            )
+        )
+        return runtime
 
     async def run_turn(
         self,
@@ -139,9 +163,15 @@ class AgentRuntime:
         await self._begin_turn()
         route_token = set_current_route(msg.route)
         inbound_token = set_current_inbound(msg)
+        principal_token = None
         try:
+            if hasattr(self, "_principal_resolver"):
+                principal_context = self.resolve_principal_context(msg.route)
+                principal_token = set_current_principal_context(principal_context)
             return await self._run_turn(msg)
         finally:
+            if principal_token is not None:
+                reset_current_principal_context(principal_token)
             reset_current_inbound(inbound_token)
             reset_current_route(route_token)
             await self._end_turn()
@@ -149,12 +179,24 @@ class AgentRuntime:
     async def _run_turn(
         self,
         msg: InboundMessage,
+        principal_context: PrincipalRuntimeContext | None = None,
     ) -> OutboundMessage:
         """执行一轮消息处理并返回出站消息。"""
+        principal_context = principal_context or current_principal_context()
         turn_started = time.perf_counter()
-        ctx = TurnContext(inbound=msg, channel_adapter=self.channel_router.create(msg))
+        ctx = TurnContext(
+            inbound=msg,
+            channel_adapter=self.channel_router.create(msg),
+            allowed_tool_names=(
+                principal_context.allowed_tool_names
+                if principal_context is not None
+                else self.allowed_tool_names_for(msg.route)
+            ),
+            principal_context=principal_context,
+        )
         lock_wait_started = time.perf_counter()
-        lock = self.sessions.locks.lock_for(msg.session_id)
+        sessions = principal_context.sessions if principal_context is not None else self.sessions
+        lock = sessions.locks.lock_for(msg.session_id)
         async with lock:
             session_lock_wait_ms = (time.perf_counter() - lock_wait_started) * 1000
             while True:
@@ -196,6 +238,37 @@ class AgentRuntime:
         else:
             await ctx.channel_adapter.on_completed(outbound.content)
         return outbound
+
+    def set_channel_tool_policy(self, policy: ChannelToolPolicy) -> None:
+        """替换当前 Runtime 使用的 Channel 工具策略。"""
+        self._channel_tool_policy = policy
+        if self._principal_resolver is not None and hasattr(
+            self._principal_resolver, "set_channel_tool_policy"
+        ):
+            self._principal_resolver.set_channel_tool_policy(policy)  # type: ignore[attr-defined]
+
+    def set_principal_resolver(self, resolver: RuntimePrincipalResolver) -> None:
+        """注入按主体解析 Runtime Context 的组件。"""
+        self._principal_resolver = resolver
+
+    def resolve_principal_context(self, route: ChannelRoute) -> PrincipalRuntimeContext:
+        """解析可信路由对应的主体 Context，并保留 Owner 兼容回退。"""
+        principal_resolver = getattr(self, "_principal_resolver", None)
+        if principal_resolver is not None:
+            return principal_resolver.resolve(route)
+        return PrincipalRuntimeContext(
+            principal_id=route.principal_id,
+            data_root=self.settings.data_dir,
+            profile_memory=self.profile_memory,
+            sessions=PrincipalSessionReader(self.sessions, route.principal_id),
+            allowed_tool_names=self.allowed_tool_names_for(route),
+        )
+
+    def allowed_tool_names_for(self, route: ChannelRoute) -> frozenset[str] | None:
+        """按可信路由读取当前注册表和设置计算工具 allowlist。"""
+        return self._channel_tool_policy.allowed_tool_names(
+            route, self.agent_loop.tools, self.settings
+        )
 
     def is_globally_idle(self) -> bool:
         """返回是否没有排队或运行中的前台 turn。"""

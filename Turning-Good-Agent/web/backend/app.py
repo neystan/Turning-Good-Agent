@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -14,6 +15,7 @@ from ...channels.base import ChannelCapabilities
 from ...gateway.auth import is_authorized_bearer
 from ...llm.factory import build_llm
 from ...sessions.types import MessageRecord, Session, ToolCallRecord
+from .channel_control import ChannelControlService
 from .config_control import ApprovalToolChanges, ConfigApplyRequest, ConfigValidationError, WebConfigControlService
 from .http_errors import config_validation_response
 from .read_models import (
@@ -54,6 +56,17 @@ def create_app(gateway: "GatewayHost") -> FastAPI:
     proactive_control = gateway.proactive_control
     proactive_events = gateway.proactive_events
     proactive_owner_state = gateway.proactive_owner_state
+    channel_registry = getattr(gateway, "channel_registry", None)
+    channel_control = (
+        ChannelControlService(
+            channel_registry,
+            weixin_transport=getattr(gateway, "weixin_transport", None),
+            feishu_transport=getattr(gateway, "feishu_transport", None),
+            owner_principal_id=getattr(getattr(settings, "gateway", None), "principal_id", None),
+        )
+        if channel_registry is not None
+        else None
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -72,6 +85,7 @@ def create_app(gateway: "GatewayHost") -> FastAPI:
     app.state.proactive_control = proactive_control
     app.state.proactive_events = proactive_events
     app.state.proactive_owner_state = proactive_owner_state
+    app.state.channel_control = channel_control
 
     def proactive_error(exc: Exception) -> HTTPException:
         if isinstance(exc, ProactiveNotFoundError):
@@ -219,6 +233,145 @@ def create_app(gateway: "GatewayHost") -> FastAPI:
             return config_validation_response(exc.field_errors)
         except Exception as exc:
             raise HTTPException(502, f"LLM 连通性测试失败：{str(exc)[:200]}") from exc
+
+    def require_channel_control() -> ChannelControlService:
+        if channel_control is None:
+            raise HTTPException(503, "IM 控制面不可用")
+        return channel_control
+
+    def channel_view(view: Any) -> dict[str, object]:
+        control = require_channel_control()
+        payload = {
+            "id": view.id,
+            "platform": view.platform,
+            "principal_id": view.principal_id,
+            "status": view.status,
+            "enabled": view.enabled,
+            "subscribed": view.subscribed,
+            "credential_state": view.credential_state,
+            "connected": view.connected,
+        }
+        payload.update(control.safe_details(view))
+        return payload
+
+    def channel_error(exc: Exception) -> HTTPException:
+        if isinstance(exc, KeyError):
+            return HTTPException(404, str(exc).strip("'"))
+        if isinstance(exc, ValueError) and str(exc) == "account id 无效":
+            return HTTPException(404, "账号不存在")
+        return HTTPException(422, str(exc))
+
+    async def channel_body(request: Request, fields: tuple[str, ...]) -> dict[str, str]:
+        """严格读取敏感控制请求，永不让框架回显原始 body。"""
+        try:
+            decoded = (await request.body()).decode("utf-8")
+            payload = json.loads(decoded)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise HTTPException(422, "请求体必须是 JSON object") from None
+        if not isinstance(payload, dict) or set(payload) != set(fields):
+            raise HTTPException(422, "请求字段无效")
+        if any(not isinstance(payload[field], str) for field in fields):
+            raise HTTPException(422, "请求字段必须是字符串")
+        return {field: payload[field] for field in fields}
+
+    @app.get("/api/control/channels")
+    async def list_control_channels() -> dict[str, object]:
+        control = require_channel_control()
+        return {"accounts": [channel_view(item) for item in control.list_views()]}
+
+    @app.get("/api/control/channels/{platform}/{account_id}")
+    async def get_control_channel(platform: str, account_id: str) -> dict[str, object]:
+        try:
+            return channel_view(require_channel_control().get_view(platform, account_id))
+        except (KeyError, ValueError) as exc:
+            raise channel_error(exc) from exc
+
+    @app.post("/api/control/channels/weixin/invitations")
+    async def create_weixin_invitation(request: Request) -> dict[str, object]:
+        try:
+            payload = await channel_body(request, ("principal",))
+            return channel_view(await require_channel_control().create_weixin_invitation(payload["principal"]))
+        except (KeyError, ValueError) as exc:
+            raise channel_error(exc) from exc
+
+    @app.post("/api/control/channels/feishu")
+    async def register_feishu_channel(request: Request) -> dict[str, object]:
+        try:
+            payload = await channel_body(request, ("app_id", "app_secret", "domain"))
+            return channel_view(
+                await require_channel_control().register_feishu(
+                    app_id=payload["app_id"],
+                    app_secret=payload["app_secret"],
+                    domain=payload["domain"],
+                )
+            )
+        except (KeyError, ValueError) as exc:
+            raise channel_error(exc) from exc
+
+    @app.post("/api/control/channels/feishu/{account_id}/owner-code")
+    async def set_feishu_owner_code(account_id: str, request: Request) -> dict[str, object]:
+        try:
+            payload = await channel_body(request, ("code",))
+            return channel_view(await require_channel_control().set_feishu_owner_code(account_id, payload["code"]))
+        except (KeyError, ValueError) as exc:
+            raise channel_error(exc) from exc
+
+    @app.post("/api/control/channels/{platform}/{account_id}/subscribe")
+    async def subscribe_control_channel(platform: str, account_id: str) -> dict[str, object]:
+        try:
+            return channel_view(await require_channel_control().subscribe(platform, account_id))
+        except (KeyError, ValueError) as exc:
+            raise channel_error(exc) from exc
+
+    @app.post("/api/control/channels/{platform}/{account_id}/unsubscribe")
+    async def unsubscribe_control_channel(platform: str, account_id: str) -> dict[str, object]:
+        try:
+            return channel_view(await require_channel_control().unsubscribe(platform, account_id))
+        except (KeyError, ValueError) as exc:
+            raise channel_error(exc) from exc
+
+    @app.post("/api/control/channels/{platform}/{account_id}/enable")
+    async def enable_control_channel(platform: str, account_id: str) -> dict[str, object]:
+        try:
+            return channel_view(await require_channel_control().enable(platform, account_id))
+        except (KeyError, ValueError) as exc:
+            raise channel_error(exc) from exc
+
+    @app.post("/api/control/channels/weixin/{account_id}/rescan")
+    async def rescan_weixin_control_channel(account_id: str) -> dict[str, object]:
+        try:
+            return channel_view(await require_channel_control().rescan_weixin_binding(account_id))
+        except (KeyError, ValueError) as exc:
+            raise channel_error(exc) from exc
+
+    @app.post("/api/control/channels/{platform}/{account_id}/disable")
+    async def disable_control_channel(platform: str, account_id: str) -> dict[str, object]:
+        try:
+            return channel_view(await require_channel_control().disable(platform, account_id))
+        except (KeyError, ValueError) as exc:
+            raise channel_error(exc) from exc
+
+    @app.post("/api/control/channels/{platform}/{account_id}/revoke")
+    async def revoke_control_channel(platform: str, account_id: str) -> dict[str, object]:
+        try:
+            return channel_view(await require_channel_control().revoke(platform, account_id))
+        except (KeyError, ValueError) as exc:
+            raise channel_error(exc) from exc
+
+    @app.post("/api/control/channels/feishu/{account_id}/credentials")
+    async def update_feishu_channel_credentials(account_id: str, request: Request) -> dict[str, object]:
+        try:
+            payload = await channel_body(request, ("app_id", "app_secret", "domain"))
+            return channel_view(
+                await require_channel_control().update_feishu_credentials(
+                    account_id,
+                    app_id=payload["app_id"],
+                    app_secret=payload["app_secret"],
+                    domain=payload["domain"],
+                )
+            )
+        except (KeyError, ValueError) as exc:
+            raise channel_error(exc) from exc
 
     @app.get("/api/control/commands")
     async def get_command_catalog() -> dict[str, object]:

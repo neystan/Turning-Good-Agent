@@ -14,7 +14,7 @@ from ..bus.queue import AsyncMessageBus
 RuntimeProvider = Callable[[], Any | Awaitable[Any]]
 IdleCallback = Callable[[], Awaitable[None]]
 TurnDispatch = Callable[[InboundMessage], Awaitable[None]]
-RouteKey = tuple[str, str]
+RouteKey = tuple[str, str, str]
 _TERMINAL_CACHE_LIMIT = 2_048
 
 
@@ -59,17 +59,23 @@ class GatewayTurnCoordinator:
             self._dispatcher.cancel()
             await asyncio.gather(self._dispatcher, return_exceptions=True)
             self._dispatcher = None
-        for task in tuple(self._running):
+        running = tuple(self._running)
+        for task in running:
             task.cancel()
-        if self._running:
-            await asyncio.gather(*tuple(self._running), return_exceptions=True)
+        if running:
+            await asyncio.gather(*running, return_exceptions=True)
+        async with self._lock:
+            self._running.clear()
+            self._inflight.clear()
+            self._active_routes.clear()
+            self._pending_routes.clear()
 
     async def submit(self, message: InboundMessage, *, dispatch: TurnDispatch) -> bool:
         """接收一条 Adapter 输入；重复 request-id 不会重新执行。"""
-        if self._closed:
-            raise RuntimeError("Gateway 已关闭")
         route_key = self._route_key(message.route)
         async with self._lock:
+            if self._closed:
+                raise RuntimeError("Gateway 已关闭")
             if message.id in self._inflight or message.id in self._terminal:
                 return False
             self._inflight.add(message.id)
@@ -77,7 +83,7 @@ class GatewayTurnCoordinator:
                 self._pending_routes.setdefault(route_key, deque()).append((message, dispatch))
                 return True
             self._active_routes[route_key] = message.id
-        await dispatch(message)
+        await self._dispatch(message, dispatch)
         return True
 
     async def complete_route_turn(self, route: ChannelRoute, request_id: str) -> None:
@@ -95,7 +101,48 @@ class GatewayTurnCoordinator:
             if not pending:
                 self._pending_routes.pop(route_key, None)
             self._active_routes[route_key] = message.id
-        await dispatch(message)
+        await self._dispatch(message, dispatch)
+
+    async def _dispatch(self, message: InboundMessage, dispatch: TurnDispatch) -> None:
+        """执行 Adapter dispatch，并在入站 Bus 失败时回滚路由状态。"""
+        try:
+            await dispatch(message)
+        except asyncio.CancelledError:
+            await self._rollback_dispatch(message.route, message.id, advance=False)
+            raise
+        except BaseException:
+            await self._rollback_dispatch(message.route, message.id, advance=True)
+            raise
+
+    async def _rollback_dispatch(
+        self,
+        route: ChannelRoute,
+        request_id: str,
+        *,
+        advance: bool,
+    ) -> None:
+        """清理失败 dispatch，并尽可能继续该 Route 的待处理 FIFO。"""
+        route_key = self._route_key(route)
+        next_item: tuple[InboundMessage, TurnDispatch] | None = None
+        async with self._lock:
+            self._inflight.discard(request_id)
+            if self._active_routes.get(route_key) != request_id:
+                return
+            pending = self._pending_routes.get(route_key)
+            if advance and pending:
+                next_item = pending.popleft()
+                self._active_routes[route_key] = next_item[0].id
+                if not pending:
+                    self._pending_routes.pop(route_key, None)
+            else:
+                self._active_routes.pop(route_key, None)
+                pending = self._pending_routes.pop(route_key, ())
+                for pending_message, _pending_dispatch in pending:
+                    self._inflight.discard(pending_message.id)
+        if next_item is not None:
+            await self._dispatch(*next_item)
+        elif self._on_idle is not None and self.is_globally_idle():
+            await self._on_idle()
 
     async def discard_pending_route(self, route: ChannelRoute) -> None:
         """丢弃指定 Route 尚未调度的普通消息，不影响当前或其他工作。"""
@@ -161,4 +208,4 @@ class GatewayTurnCoordinator:
 
     @staticmethod
     def _route_key(route: ChannelRoute) -> RouteKey:
-        return route.channel, route.conversation_id
+        return route.principal_id, route.channel, route.conversation_id

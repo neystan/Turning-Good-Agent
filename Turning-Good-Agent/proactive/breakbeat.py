@@ -9,6 +9,7 @@ from typing import Any, Literal, Protocol
 
 from ..sessions.types import MessageRecord, Session
 from ..tools.base import ToolResult
+from ..runtime.turn_context import current_route
 from .executor import ProactiveExecutionResult
 from .review_window import ReviewCursor, ReviewSelection, select_review_window
 from .store import ProactiveStore
@@ -449,7 +450,7 @@ class RunBreakbeatTool:
             current_message is None or current_message.session_id != session_id
         ):
             raise ValueError("session scope 需要当前消息")
-        outcome = await self._manager.run(
+        outcome = await _breakbeat_manager(self._manager).run(
             manual=True,
             scope=scope,
             session_id=session_id,
@@ -475,7 +476,7 @@ class ListBreakbeatTool:
     async def run(self, args: dict[str, Any]) -> ToolResult:
         """执行当前任务。"""
         del args
-        items = self._manager.list_items()
+        items = _breakbeat_manager(self._manager).list_items()
         if not items:
             return ToolResult("暂无 Breakbeat 事项。")
         return ToolResult(
@@ -505,7 +506,7 @@ class CompleteBreakbeatTool:
 
     async def run(self, args: dict[str, Any]) -> ToolResult:
         """完成当前事项。"""
-        item = await self._manager.complete_item(str(args["id"]))
+        item = await _breakbeat_manager(self._manager).complete_item(str(args["id"]))
         return ToolResult(f"已完成 Breakbeat 事项：{item.id}")
 
 
@@ -527,7 +528,7 @@ class DeleteBreakbeatTool:
 
     async def run(self, args: dict[str, Any]) -> ToolResult:
         """执行当前任务。"""
-        item = await self._manager.delete_item(str(args["id"]))
+        item = await _breakbeat_manager(self._manager).delete_item(str(args["id"]))
         return ToolResult(f"已删除 Breakbeat 事项：{item.id}")
 
 
@@ -745,3 +746,14 @@ def _nonnegative_int(value: object) -> int:
 def _as_utc(value: datetime) -> datetime:
     """将可接受的时间规范化到 UTC。"""
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _breakbeat_manager(value: Any) -> BreakbeatManager:
+    """按当前可信路由动态解析 Breakbeat manager。"""
+    provider = getattr(value, "workspace_for_route", None)
+    if not callable(provider):
+        return value
+    route = current_route()
+    if route is None:
+        raise RuntimeError("主动 Tool 缺少当前 route")
+    return provider(route).breakbeat

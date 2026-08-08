@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 from ..tools.base import ToolResult
+from ..runtime.turn_context import current_route
 from .types import Incident, new_id, utc_now_iso
 from .store import ProactiveStore
 
@@ -24,11 +25,13 @@ class IncidentMonitor:
         store: ProactiveStore,
         notification_publisher: IncidentNotificationPublisher,
         *,
+        principal_id: str | None = None,
         state_changed: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """初始化对象状态。"""
         self._store = store
         self._notification_publisher = notification_publisher
+        self._principal_id = principal_id
         self._state_changed = state_changed
         self._lock = asyncio.Lock()
 
@@ -73,12 +76,15 @@ class IncidentMonitor:
                 self._save_incidents(incidents)
                 if notify:
                     try:
-                        await self._notification_publisher.enqueue(
-                            event_type="proactive.incident.opened",
-                            content=f"系统异常：{message}",
-                            source_id=fingerprint,
-                            notification_scope="all_subscribed",
-                        )
+                        payload = {
+                            "event_type": "proactive.incident.opened",
+                            "content": f"系统异常：{message}",
+                            "source_id": fingerprint,
+                            "notification_scope": "all_subscribed",
+                        }
+                        if self._principal_id is not None:
+                            payload["principal_id"] = self._principal_id
+                        await self._notification_publisher.enqueue(**payload)
                     except Exception as error:
                         publish_error = error
                 changed = True
@@ -111,12 +117,15 @@ class IncidentMonitor:
             self._save_incidents(incidents)
             if notify:
                 try:
-                    await self._notification_publisher.enqueue(
-                        event_type="proactive.incident.resolved",
-                        content=f"系统已恢复：{message}",
-                        source_id=fingerprint,
-                        notification_scope="all_subscribed",
-                    )
+                        payload = {
+                            "event_type": "proactive.incident.resolved",
+                            "content": f"系统已恢复：{message}",
+                            "source_id": fingerprint,
+                            "notification_scope": "all_subscribed",
+                        }
+                        if self._principal_id is not None:
+                            payload["principal_id"] = self._principal_id
+                        await self._notification_publisher.enqueue(**payload)
                 except Exception as error:
                     publish_error = error
             changed = True
@@ -233,7 +242,7 @@ class ListIncidentsTool:
         """返回 Incident 摘要，不调用模型。"""
         raw_state = args.get("state")
         state = None if raw_state is None else str(raw_state)
-        incidents = self._monitor.list_incidents(state)
+        incidents = _incident_monitor(self._monitor).list_incidents(state)
         if not incidents:
             return ToolResult("暂无系统异常。")
         return ToolResult(
@@ -242,3 +251,14 @@ class ListIncidentsTool:
                 for item in incidents
             )
         )
+
+
+def _incident_monitor(value: Any) -> IncidentMonitor:
+    """按当前可信路由动态解析 Incident monitor。"""
+    provider = getattr(value, "workspace_for_route", None)
+    if not callable(provider):
+        return value
+    route = current_route()
+    if route is None:
+        raise RuntimeError("主动 Tool 缺少当前 route")
+    return provider(route).incidents

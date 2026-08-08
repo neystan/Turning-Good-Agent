@@ -9,9 +9,16 @@ from typing import Any
 from ..bus.messages import ChannelRoute, OutboundMessage, Recipient
 from ..bus.queue import AsyncMessageBus
 from ..channels.cli_gateway import CliGatewayCoordinator, CliGatewayTransport
+from ..channels.feishu import FeishuTransport
+from ..channels.feishu_ws import FeishuClient
+from ..channels.im import ImGatewayCoordinator
 from ..channels.manager import ChannelManager
+from ..channels.registry import ChannelAccountRegistry
 from ..channels.web import WebChannelTransport
+from ..channels.weixin import LocalIlinkQrPresenter, WeixinTransport
+from ..channels.weixin_ilink import IlinkClient
 from ..config.settings import Settings
+from .principals import GatewayPrincipalResolver
 from ..llm.factory import build_llm
 from ..proactive.notifications import (
     GatewayNotificationPublisher,
@@ -43,6 +50,8 @@ class GatewayHost:
         *,
         runtime: AgentRuntime | None = None,
         runtime_factory: RuntimeFactory | None = None,
+        weixin_client: IlinkClient | None = None,
+        feishu_client: FeishuClient | None = None,
     ) -> None:
         self.settings = settings
         self.bus = AsyncMessageBus()
@@ -52,6 +61,11 @@ class GatewayHost:
         self._runtime_factory = runtime_factory or self._build_replacement_runtime
         self._uses_default_runtime_factory = runtime_factory is None
         initial_runtime = runtime or AgentRuntime.create_default(settings, build_llm(settings))
+        self._install_principal_resolver(initial_runtime)
+        self.channel_registry = ChannelAccountRegistry(
+            settings.data_dir,
+            owner_principal_id=settings.gateway.principal_id,
+        )
         self._initial_runtime = initial_runtime
         self._started = False
         self._lifecycle_lock = asyncio.Lock()
@@ -79,8 +93,6 @@ class GatewayHost:
             on_idle=self._notify_idle,
             execution_semaphore=self._turn_slots,
         )
-        self.channel_manager = ChannelManager(self.bus, (self.web_transport, self.cli_transport))
-        self.channel_manager.add_delivery_listener(self.cli_coordinator.on_delivery)
         self.notification_fanout = NotificationFanout(
             subscriptions=self._notification_subscriptions,
             classify_recipient=self._classify_notification_recipient,
@@ -106,6 +118,30 @@ class GatewayHost:
             on_idle=self._notify_idle,
             execution_semaphore=self._turn_slots,
         )
+        self.im_coordinator = ImGatewayCoordinator(
+            self.bus,
+            self.turn_coordinator,
+            on_idle=self._notify_idle,
+        )
+        self.weixin_qr_presenter = LocalIlinkQrPresenter()
+        self.weixin_transport = WeixinTransport(
+            self.channel_registry,
+            self.im_coordinator,
+            weixin_client,
+            qr_presenter=self.weixin_qr_presenter,
+        )
+        self.feishu_transport = FeishuTransport(
+            self.channel_registry,
+            self.im_coordinator,
+            feishu_client,
+            owner_principal_id=settings.gateway.principal_id,
+        )
+        self.channel_manager = ChannelManager(
+            self.bus,
+            (self.web_transport, self.cli_transport, self.weixin_transport, self.feishu_transport),
+        )
+        self.channel_manager.add_delivery_listener(self.cli_coordinator.on_delivery)
+        self.channel_manager.add_delivery_listener(self.im_coordinator.on_delivery)
         self.config_control = WebConfigControlService(
             self._config_path,
             native_tool_names=self._native_tool_names(initial_runtime),
@@ -123,6 +159,7 @@ class GatewayHost:
         )
         self.web_coordinator.register_runtime(initial_runtime)
         self.cli_coordinator.register_runtime(initial_runtime)
+        self.im_coordinator.register_runtime(initial_runtime)
         self.proactive_control.replace_runtime(initial_runtime, self.proactive_service)
 
     @property
@@ -141,12 +178,13 @@ class GatewayHost:
                 if self.settings.gateway.auth_token is None:
                     self.settings.gateway.auth_token = load_or_create_gateway_token(self._config_path)
                 await self.runtime_supervisor.start()
-                await self.channel_manager.start()
+                await self.current_runtime.start()
                 await self.web_coordinator.start()
                 await self.cli_coordinator.start()
-                await self.current_runtime.start()
+                await self.im_coordinator.start()
                 await self.proactive_service.start()
                 await self.turn_coordinator.start()
+                await self.channel_manager.start()
                 self._started = True
                 await self.proactive_events.publish_all()
             except BaseException:
@@ -211,13 +249,28 @@ class GatewayHost:
         return ProactiveService(
             runtime,
             notification_publisher=self.notification_publisher,
+            principal_registry=self.channel_registry,
             on_domain_change=self._publish_domain_change,
             on_idle=self._notify_idle,
         )
 
     async def _prepare_runtime(self, replacement: AgentRuntime) -> None:
+        self._install_principal_resolver(replacement)
         self.web_coordinator.register_runtime(replacement)
         self.cli_coordinator.register_runtime(replacement)
+        self.im_coordinator.register_runtime(replacement)
+
+    def _install_principal_resolver(self, runtime: AgentRuntime) -> None:
+        """让 Host 接管的所有 Runtime 都按可信主体解析持久化边界。"""
+        resolver = GatewayPrincipalResolver(
+            runtime.settings,
+            owner_sessions=runtime.sessions,
+            owner_profile_memory=runtime.profile_memory,
+            tools=runtime.agent_loop.tools,
+            policy=runtime._channel_tool_policy,
+        )
+        runtime.set_principal_resolver(resolver)
+        self.principal_resolver = resolver
 
     async def _activate_runtime(self, replacement: AgentRuntime) -> None:
         previous = self.proactive_service
@@ -260,26 +313,28 @@ class GatewayHost:
         return True
 
     def _notification_subscriptions(self, principal_id: str) -> Iterable[NotificationSubscription]:
-        if principal_id != self.settings.gateway.principal_id:
-            return ()
-        subscriptions = [
-            NotificationSubscription(
-                Recipient(principal_id, "web", "proactive"),
-                enabled=True,
-            ),
-        ]
-        active_cli_route = self.cli_transport.active_route(principal_id)
-        if active_cli_route is not None:
+        subscriptions: list[NotificationSubscription] = []
+        if principal_id == self.settings.gateway.principal_id:
             subscriptions.append(
                 NotificationSubscription(
-                    Recipient(
-                        active_cli_route.principal_id,
-                        active_cli_route.channel,
-                        active_cli_route.conversation_id,
-                    ),
+                    Recipient(principal_id, "web", "proactive"),
                     enabled=True,
                 )
             )
+            active_cli_route = self.cli_transport.active_route(principal_id)
+            if active_cli_route is not None:
+                subscriptions.append(
+                    NotificationSubscription(
+                        Recipient(
+                            active_cli_route.principal_id,
+                            active_cli_route.channel,
+                            active_cli_route.conversation_id,
+                        ),
+                        enabled=True,
+                    )
+                )
+        for recipient in self.channel_registry.subscribed_recipients(principal_id):
+            subscriptions.append(NotificationSubscription(recipient, enabled=True))
         return tuple(subscriptions)
 
     def _classify_notification_recipient(self, recipient: Recipient) -> bool:
@@ -291,6 +346,10 @@ class GatewayHost:
                 active_cli_route.channel,
                 active_cli_route.conversation_id,
             ) == (recipient.channel, recipient.conversation_id)
+        if recipient.channel == "weixin":
+            return self.weixin_transport.is_deliverable(recipient)
+        if recipient.channel == "feishu":
+            return self.feishu_transport.is_deliverable(recipient)
         return False
 
     def _live_tool_names(self) -> set[str]:
@@ -311,11 +370,12 @@ class GatewayHost:
 
     async def _stop_components(self) -> None:
         await self.catalog_actions.close()
-        await self.turn_coordinator.close()
         await self.proactive_service.stop()
+        await self.channel_manager.close()
+        await self.im_coordinator.close()
         await self.web_coordinator.close()
         await self.cli_coordinator.close()
-        await self.channel_manager.close()
+        await self.turn_coordinator.close()
         await self.runtime_supervisor.close()
 
 

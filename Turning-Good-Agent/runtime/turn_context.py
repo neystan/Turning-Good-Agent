@@ -5,11 +5,15 @@ from uuid import uuid4
 
 from ..bus.messages import ChannelRoute, InboundMessage, OutboundMessage
 from ..channels.base import ChannelAdapter, SilentChannelAdapter
+from .principal_context import PrincipalRuntimeContext
 from .state import TurnState
 
 
 _current_route: ContextVar[ChannelRoute | None] = ContextVar("current_channel_route", default=None)
 _current_inbound: ContextVar[InboundMessage | None] = ContextVar("current_inbound_message", default=None)
+_current_principal_context: ContextVar[PrincipalRuntimeContext | None] = ContextVar(
+    "current_principal_context", default=None
+)
 
 
 def current_route() -> ChannelRoute | None:
@@ -42,6 +46,23 @@ def reset_current_inbound(token: Token[InboundMessage | None]) -> None:
     _current_inbound.reset(token)
 
 
+def current_principal_context() -> PrincipalRuntimeContext | None:
+    """返回当前任务绑定的主体 Runtime Context。"""
+    return _current_principal_context.get()
+
+
+def set_current_principal_context(
+    context: PrincipalRuntimeContext,
+) -> Token[PrincipalRuntimeContext | None]:
+    """设置当前任务主体 Context，并返回复位 token。"""
+    return _current_principal_context.set(context)
+
+
+def reset_current_principal_context(token: Token[PrincipalRuntimeContext | None]) -> None:
+    """复位主体 Context，避免跨 turn 泄漏。"""
+    _current_principal_context.reset(token)
+
+
 @dataclass(slots=True)
 class TurnContext:
     """保存一轮消息处理过程中的临时状态。"""
@@ -69,3 +90,5 @@ class TurnContext:
     outbound: OutboundMessage | None = None
     error: str | None = None
     channel_adapter: ChannelAdapter = field(default_factory=SilentChannelAdapter)
+    allowed_tool_names: frozenset[str] | None = None
+    principal_context: PrincipalRuntimeContext | None = None

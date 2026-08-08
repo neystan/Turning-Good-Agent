@@ -11,6 +11,7 @@ from ..sessions.token_counter import count_content_tokens
 from ..sessions.types import MessageRecord
 from ..skills.manager import SkillManager
 from ..tools.base import ToolResult
+from ..runtime.turn_context import current_route
 from .executor import ProactiveExecutionResult
 from .store import ProactiveStore
 from .types import OBSERVATION_KINDS, Observation, UsageTotals, new_id, utc_now_iso
@@ -456,7 +457,7 @@ class RunSkillEvolutionTool:
     async def run(self, args: dict[str, Any]) -> ToolResult:
         """执行当前任务。"""
         del args
-        outcome = await self._manager.run_evolution(manual=True)
+        outcome = await _skill_manager(self._manager).run_evolution(manual=True)
         if self._on_completed is not None:
             await self._on_completed(outcome)
         return ToolResult(outcome.summary)
@@ -477,7 +478,7 @@ class ListSkillDraftsTool:
     async def run(self, args: dict[str, Any]) -> ToolResult:
         """执行当前任务。"""
         del args
-        drafts = self._manager.list_drafts()
+        drafts = _skill_manager(self._manager).list_drafts()
         return ToolResult("暂无 Skill Draft。" if not drafts else "\n".join(drafts))
 
 
@@ -501,7 +502,7 @@ class DeleteSkillDraftTool:
     async def run(self, args: dict[str, Any]) -> ToolResult:
         """执行当前任务。"""
         name = str(args["name"])
-        await self._skills.delete_draft(name)
+        await _draft_skills(self._skills).delete_draft(name)
         return ToolResult(f"已删除 Skill Draft：{name}")
 
 
@@ -793,3 +794,25 @@ def _as_utc(moment: datetime) -> datetime:
     if moment.tzinfo is None:
         return moment.replace(tzinfo=UTC)
     return moment.astimezone(UTC)
+
+
+def _skill_manager(value: Any) -> SkillEvolutionManager:
+    """按当前可信路由动态解析 SkillEvolution manager。"""
+    provider = getattr(value, "workspace_for_route", None)
+    if not callable(provider):
+        return value
+    route = current_route()
+    if route is None:
+        raise RuntimeError("主动 Tool 缺少当前 route")
+    return provider(route).skill_evolution
+
+
+def _draft_skills(value: Any) -> SkillManager:
+    """按当前可信路由动态解析私有 Draft Skill manager。"""
+    provider = getattr(value, "workspace_for_route", None)
+    if not callable(provider):
+        return value
+    route = current_route()
+    if route is None:
+        raise RuntimeError("主动 Tool 缺少当前 route")
+    return provider(route).draft_skills

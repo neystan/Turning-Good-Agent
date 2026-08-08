@@ -12,6 +12,8 @@ RUN pip install --no-cache-dir \
     "fastapi>=0.115.0" \
     "uvicorn[standard]>=0.30.0" \
     "websockets>=14.0,<16.0" \
+    "httpx>=0.27,<1.0" \
+    "lark-oapi>=1.4,<2.0" \
     "tzdata>=2024.1" \
     "prompt_toolkit>=3.0.0"
 

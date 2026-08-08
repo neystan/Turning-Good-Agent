@@ -128,6 +128,39 @@ test("settings editor scrolls independently while the apply controls stay visibl
   await expect(page.getByRole("button", { name: "应用配置" })).toBeInViewport();
 });
 
+test("settings keeps IM controls in the editor scroll area and clears sensitive failures", async ({ page }) => {
+  const account = { id: "feishu-account", platform: "feishu", principal_id: "owner", status: "awaiting_owner_code", enabled: true, subscribed: false, credential_state: "configured", connected: false, app_id_masked: "cli••••mo", cardkit_enabled: true };
+  await page.route("**/api/control/config", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(controlConfig()) });
+  });
+  await page.route("**/api/control/tools", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(toolCatalog()) });
+  });
+  await page.route("**/api/control/channels", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ accounts: [account] }) });
+  });
+  await page.route("**/api/control/channels/feishu", async (route) => {
+    await route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ detail: "super-secret-must-not-render" }) });
+  });
+
+  await page.goto(`${baseUrl}/#settings`);
+  const scroll = page.locator(".settings-editor-scroll");
+  await expect(scroll.getByRole("heading", { name: "IM Channels" })).toBeVisible();
+  await expect(page.getByText("app_secret", { exact: false })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "订阅通知" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "撤销账号" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "轮换凭据" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "设置 Owner 验证码" })).toBeVisible();
+
+  await page.getByLabel("飞书 App ID").fill("demo");
+  await page.getByLabel("飞书 App Secret").fill("super-secret-must-not-render");
+  await page.getByRole("button", { name: "登记飞书 Bot" }).click();
+
+  await expect(page.getByLabel("飞书 App ID")).toHaveValue("");
+  await expect(page.getByLabel("飞书 App Secret")).toHaveValue("");
+  await expect(page.getByText("super-secret-must-not-render", { exact: false })).toHaveCount(0);
+});
+
 test("settings tests only editable LLM fields and uses text inputs with switches", async ({ page }) => {
   let testedChanges: Record<string, unknown> | null = null;
   await page.route("**/api/control/config", async (route) => {

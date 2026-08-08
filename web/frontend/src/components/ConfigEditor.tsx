@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError, api } from "../api";
 import type { ConfigApplyRequest, ControlConfig, EditableControlConfig, ToolCatalog } from "../types";
 import { ScrollArea } from "./ScrollArea";
+import { ChannelAccountSettings } from "./ChannelAccountSettings";
 import { ToolPermissionEditor } from "./ToolPermissionEditor";
 import { ToggleSwitch } from "./ToggleSwitch";
 
@@ -209,6 +210,7 @@ export function ConfigEditor({ config, catalog, onApplied, onUnavailable }: Conf
     <ScrollArea className="settings-editor-scroll"><div className="settings-groups">
       {groups.map((group, index) => (index === 0 || groups[index - 1].title !== group.title) && <section className="settings-group" key={group.key}><h3>{group.title}</h3>{groups.filter((item) => item.title === group.title).flatMap((item) => fieldsFor(item.key))}{group.key === "llm" && <><div className="settings-field"><span>替换 API Key</span><input aria-label="替换 API Key" type="password" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setClearApiKey(false); }} /></div><div className="settings-field settings-clear-api-key"><span>清除已配置 API Key</span><ToggleSwitch label="清除 API Key" checked={clearApiKey} onCheckedChange={(next) => { setClearApiKey(next); setApiKey(""); }} /></div></>}{group.key === "proactive" && <><div className="settings-field"><span>替换审阅 API Key</span><input aria-label="替换审阅 API Key" type="password" value={reviewApiKey} onChange={(event) => { setReviewApiKey(event.target.value); setClearReviewApiKey(false); }} /></div><div className="settings-field settings-clear-api-key"><span>清除已配置审阅 API Key</span><ToggleSwitch label="清除审阅 API Key" checked={clearReviewApiKey} onCheckedChange={(next) => { setClearReviewApiKey(next); setReviewApiKey(""); }} /></div></>}</section>)}
       <ToolPermissionEditor catalog={catalog} selectedNames={selectedTools} onChange={setSelectedTools} />
+      <ChannelAccountSettings />
     </div></ScrollArea>
     <footer className="settings-apply-bar" data-state={state.state} data-dirty={hasChanges}><span className="settings-apply-status">{applyStatus}</span>{state.state === "active" && !hasChanges && <span className="settings-apply-revision" title={state.active_revision}>revision {shortRevision}</span>}{testResult && <span className="settings-test-result" role="status">{testResult}</span>}<button type="button" onClick={() => void testLlm()} disabled={isApplying}>测试连接</button><button type="button" onClick={() => void apply()} disabled={!hasChanges || isApplying}>{isApplying ? "正在应用…" : "应用配置"}</button></footer>
   </div>;

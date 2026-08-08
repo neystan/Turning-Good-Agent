@@ -136,7 +136,7 @@ class GatewayNotificationPublisher:
         self._fanout = fanout
         self._publish_outbound = publish_outbound
         self._active_cli_route = active_cli_route
-        self._principal_id = principal_id
+        del principal_id
 
     async def publish(self, event: ProactiveResultEvent) -> tuple[OutboundMessage, ...]:
         """按结果产生时的实际在线 CLI 路由展开并发送一次。"""
@@ -162,7 +162,7 @@ class GatewayNotificationPublisher:
         """兼容领域 Manager 的轻量 enqueue 调用，并归一化为结果事件。"""
         del target_channel
         selected_principal = principal_id or (
-            origin_route.principal_id if origin_route is not None else self._principal_id
+            origin_route.principal_id if origin_route is not None else None
         )
         if not selected_principal:
             raise ValueError("主动通知缺少 principal_id")

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum, auto
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from ..bus.messages import OutboundMessage, Recipient, utc_now_iso
@@ -15,6 +15,27 @@ from ..sessions.token_counter import count_content_tokens
 if TYPE_CHECKING:
     from .runtime import AgentRuntime
     from .turn_context import TurnContext
+
+
+def _sessions_for(runtime: AgentRuntime, ctx: TurnContext) -> Any:
+    """返回当前 turn 绑定的主体会话读取器。"""
+    principal_context = getattr(ctx, "principal_context", None)
+    if principal_context is not None:
+        return principal_context.sessions
+    return runtime.sessions
+
+
+def _profile_for(runtime: AgentRuntime, ctx: TurnContext) -> Any:
+    """返回当前 turn 绑定的主体画像。"""
+    principal_context = getattr(ctx, "principal_context", None)
+    if principal_context is not None:
+        return principal_context.profile_memory
+    return runtime.profile_memory
+
+
+def _storage_for(sessions: Any) -> Any:
+    """兼容旧 SessionManager，同时避免主体 reader 暴露底层 store。"""
+    return sessions if hasattr(sessions, "save_tool_calls") else sessions.store
 
 
 class TurnState(Enum):
@@ -69,7 +90,8 @@ async def run_state(runtime: AgentRuntime, ctx: TurnContext) -> str:
 async def command(runtime: AgentRuntime, ctx: TurnContext) -> str:
     """处理 slash command，命中后跳过模型链路。"""
     msg = ctx.inbound
-    ctx.shortcut_response = await runtime.sessions.handle_inbound_command(msg.session_id, msg)
+    sessions = _sessions_for(runtime, ctx)
+    ctx.shortcut_response = await sessions.handle_inbound_command(msg.session_id, msg)
     if ctx.shortcut_response is not None:
         ctx.final_content = ctx.shortcut_response
         return "shortcut"
@@ -79,8 +101,9 @@ async def command(runtime: AgentRuntime, ctx: TurnContext) -> str:
 async def session(runtime: AgentRuntime, ctx: TurnContext) -> str:
     """清理过期会话并加载/创建当前会话。"""
     msg = ctx.inbound
-    await runtime.sessions.cleanup_expired_sessions(runtime.settings.sessions.retention_days)
-    ctx.session = await runtime.sessions.load_or_create(msg.route)
+    sessions = _sessions_for(runtime, ctx)
+    await sessions.cleanup_expired_sessions(runtime.settings.sessions.retention_days)
+    ctx.session = await sessions.load_or_create(msg.route)
     return "ok"
 
 
@@ -90,15 +113,19 @@ async def build(runtime: AgentRuntime, ctx: TurnContext) -> str:
     if ctx.session is None:
         raise RuntimeError("BUILD 缺少已加载的 session。")
 
-    session_context = build_session_context(ctx.session, await runtime.sessions.all_messages(ctx.session.id))
+    sessions = _sessions_for(runtime, ctx)
+    profile_memory = _profile_for(runtime, ctx)
+    session_context = build_session_context(
+        ctx.session, await sessions.all_messages(ctx.session.id)
+    )
     ctx.uncompacted_history = session_context.uncompacted_history
     context_tokens = build_context_token_breakdown(
         summary=ctx.session.summary,
         history=ctx.uncompacted_history,
         current_input=msg.content,
         output="",
-        profile_memory=runtime.profile_memory.read(),
-        openai_tools=runtime.agent_loop.tools.openai_tools(),
+        profile_memory=profile_memory.read(),
+        openai_tools=runtime.agent_loop.tools.openai_tools(ctx.allowed_tool_names),
         include_current_turn=True,
         skills=runtime.skills.list_skills(),
     )
@@ -110,7 +137,7 @@ async def build(runtime: AgentRuntime, ctx: TurnContext) -> str:
         summary=session_context.summary,
         history=ctx.uncompacted_history,
         user_content=msg.content,
-        profile_memory=runtime.profile_memory.read(),
+        profile_memory=profile_memory.read(),
         skills=runtime.skills.list_skills(),
     )
     return "ok"
@@ -124,6 +151,7 @@ async def run(runtime: AgentRuntime, ctx: TurnContext) -> str:
         ctx.model_messages,
         ctx.channel_adapter,
         runtime.settings.tool_permissions.auto_approve_tools,
+        allowed_tool_names=ctx.allowed_tool_names,
     )
     ctx.final_content = result.final_content
     ctx.tool_calls = result.tool_calls
@@ -149,8 +177,8 @@ async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
         history=uncompacted_history,
         current_input="",
         output="",
-        profile_memory=runtime.profile_memory.read(),
-        openai_tools=runtime.agent_loop.tools.openai_tools(),
+        profile_memory=_profile_for(runtime, ctx).read(),
+        openai_tools=runtime.agent_loop.tools.openai_tools(ctx.allowed_tool_names),
         include_current_turn=False,
         skills=runtime.skills.list_skills(),
     )
@@ -195,22 +223,24 @@ async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
     if not ctx.true_token_usage and not ctx.cancelled:
         raise RuntimeError("本轮缺少 true_token_usage，无法执行 SAVE。")
     if ctx.session is not None:
+        sessions = _sessions_for(runtime, ctx)
         if ctx.session.title == ctx.session.id:
             title = " ".join(ctx.inbound.content.split())[:48]
             if title:
                 ctx.session.title = title
-                await runtime.sessions.store.update_session_metadata(session_id, title=title)
+                await sessions.update_session_metadata(session_id, title=title)
         ctx.context_tokens = build_save_context_token_breakdown(
             summary=ctx.session.summary,
             uncompacted_history=ctx.session.uncompacted_history,
             current_input=ctx.inbound.content,
             output=ctx.final_content,
-            profile_memory=runtime.profile_memory.read(),
-            openai_tools=runtime.agent_loop.tools.openai_tools(),
+            profile_memory=_profile_for(runtime, ctx).read(),
+            openai_tools=runtime.agent_loop.tools.openai_tools(ctx.allowed_tool_names),
             tool_count=len(ctx.tool_calls),
             skills=runtime.skills.list_skills(),
         )
-    await runtime.sessions.save_user_message(
+    sessions = _sessions_for(runtime, ctx)
+    await sessions.save_user_message(
         session_id,
         ctx.inbound.content,
         count_content_tokens(ctx.inbound.content),
@@ -218,10 +248,10 @@ async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
         created_at=ctx.inbound.created_at,
     )
     for guidance in ctx.consumed_guidance:
-        await runtime.sessions.save_user_message(session_id, guidance, count_content_tokens(guidance))
+        await sessions.save_user_message(session_id, guidance, count_content_tokens(guidance))
     completed_assistant_message_id: str | None = None
     if ctx.final_content or not ctx.cancelled:
-        assistant_message = await runtime.sessions.save_assistant_message(
+        assistant_message = await sessions.save_assistant_message(
             session_id,
             ctx.final_content,
             count_content_tokens(ctx.final_content),
@@ -230,12 +260,16 @@ async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
         if not ctx.cancelled:
             completed_assistant_message_id = assistant_message.id
     if ctx.session is not None:
-        await runtime.sessions.store.update_summary(session_id, ctx.session.summary)
-        await runtime.sessions.store.update_uncompacted_history(session_id, ctx.session.uncompacted_history)
-    await runtime.sessions.store.save_tool_calls(ctx.turn_id, session_id, ctx.tool_calls)
+        await _storage_for(sessions).update_summary(session_id, ctx.session.summary)
+        await _storage_for(sessions).update_uncompacted_history(session_id, ctx.session.uncompacted_history)
+    await _storage_for(sessions).save_tool_calls(ctx.turn_id, session_id, ctx.tool_calls)
     if ctx.true_token_usage:
-        await runtime.sessions.store.save_true_token_usage(ctx.turn_id, session_id, ctx.true_token_usage)
-    payload: dict[str, object] = {"session_id": session_id, "turn_id": ctx.turn_id}
+        await _storage_for(sessions).save_true_token_usage(ctx.turn_id, session_id, ctx.true_token_usage)
+    payload: dict[str, object] = {
+        "session_id": session_id,
+        "turn_id": ctx.turn_id,
+        "principal_id": ctx.inbound.route.principal_id,
+    }
     if completed_assistant_message_id is not None:
         payload["completed_assistant_message_id"] = completed_assistant_message_id
     await runtime.proactive.emit(CONVERSATION_COMPLETED, payload)
@@ -274,7 +308,9 @@ async def save_remaining_traces(runtime: AgentRuntime, ctx: TurnContext) -> None
     """补保存尚未落盘的状态 trace。"""
     if ctx.shortcut_response is not None or ctx.session is None:
         return
-    await runtime.sessions.store.save_turn_traces(ctx.trace[ctx.saved_trace_count:])
+    await _storage_for(_sessions_for(runtime, ctx)).save_turn_traces(
+        ctx.trace[ctx.saved_trace_count:]
+    )
     ctx.saved_trace_count = len(ctx.trace)
 
 
@@ -286,7 +322,9 @@ async def build_true_token_usage(
     """用真实 LLM usage 生成当前 turn 的完整 token 记录。"""
     if ctx.llm_usage is None:
         raise RuntimeError("本轮 LLM 响应缺少 usage，无法写入 true_token_usage.jsonl。")
-    previous_total = await runtime.sessions.store.last_total_tokens(ctx.inbound.session_id)
+    previous_total = await _storage_for(_sessions_for(runtime, ctx)).last_total_tokens(
+        ctx.inbound.session_id
+    )
     return runtime.token_monitor.record_llm_usage(
         ctx.llm_usage,
         previous_total_tokens=previous_total,

@@ -10,6 +10,7 @@ from typing import Any, Literal, Protocol
 from ..memory.long_term import ProfileMemory, ProfileMemorySnapshot
 from ..sessions.types import MessageRecord, Session
 from ..tools.base import ToolResult
+from ..runtime.turn_context import current_route
 from .executor import ProactiveExecutionResult
 from .review_window import ReviewCursor, ReviewSelection, select_review_window
 from .store import ProactiveStore
@@ -330,7 +331,7 @@ class RunDreamTool:
             current_message is None or current_message.session_id != session_id
         ):
             raise ValueError("session scope 需要当前消息")
-        outcome = await self._manager.run(
+        outcome = await _dream_manager(self._manager).run(
             manual=True,
             scope=scope,
             session_id=session_id,
@@ -361,7 +362,7 @@ class ReadProfileMemoryTool:
     async def run(self, args: dict[str, Any]) -> ToolResult:
         """返回当前 USER/SOUL 内容。"""
         del args
-        snapshot = self._profile_memory.read()
+        snapshot = _profile_memory(self._profile_memory).read()
         return ToolResult(
             f"USER：{snapshot.user or '(空)'}\n"
             f"SOUL：{snapshot.soul or '(空)'}"
@@ -500,3 +501,25 @@ def _nonnegative_int(value: object) -> int:
 def _as_utc(value: datetime) -> datetime:
     """将可接受的时间规范化到 UTC。"""
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _dream_manager(value: Any) -> DreamManager:
+    """按当前可信路由动态解析 Dream manager。"""
+    provider = getattr(value, "workspace_for_route", None)
+    if not callable(provider):
+        return value
+    route = current_route()
+    if route is None:
+        raise RuntimeError("主动 Tool 缺少当前 route")
+    return provider(route).dream
+
+
+def _profile_memory(value: Any) -> ProfileMemory:
+    """按当前可信路由动态解析画像。"""
+    provider = getattr(value, "workspace_for_route", None)
+    if not callable(provider):
+        return value
+    route = current_route()
+    if route is None:
+        raise RuntimeError("主动 Tool 缺少当前 route")
+    return provider(route).profile_memory
