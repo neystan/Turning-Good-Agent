@@ -12,6 +12,7 @@ SESSIONS_SPEC.md
 /.skill/
 /docs/
 /tests/
+/.superpowers/
 web/static/
 web/frontend/node_modules/
 web/frontend/*.tsbuildinfo
