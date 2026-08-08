@@ -43,7 +43,24 @@ class ChannelControlService:
         app_id = account.private.get("app_id")
         return {
             "app_id_masked": _mask_identifier(app_id) if isinstance(app_id, str) else None,
-            "cardkit_enabled": bool(account.private.get("cardkit_enabled", False)),
+        }
+
+    async def get_weixin_qr(self, account_id: str) -> dict[str, object]:
+        """返回当前 Binding 的短时内存二维码，不暴露 Registry 私有状态。"""
+        account = self._account("weixin", account_id)
+        transport = self.weixin_transport
+        getter = getattr(transport, "get_qr", None) if transport is not None else None
+        snapshot = getter(account.id) if getter is not None else None
+        if inspect.isawaitable(snapshot):
+            snapshot = await snapshot
+        current = self.registry.get("weixin", account.id) or account
+        content = getattr(snapshot, "content", None) if snapshot is not None else None
+        expires_at = getattr(snapshot, "expires_at", None) if snapshot is not None else None
+        return {
+            "binding_id": current.id,
+            "status": current.status,
+            "qr_content": content if isinstance(content, str) else None,
+            "expires_at": expires_at if isinstance(expires_at, (int, float)) else None,
         }
 
     async def create_weixin_invitation(self, principal: str) -> ChannelAccountView:
@@ -165,6 +182,7 @@ class ChannelControlService:
         next_app_secret = _required_text(app_secret, "app_secret")
         next_domain = _required_text(domain, "domain")
         private = dict(account.private)
+        private.pop("cardkit_enabled", None)
         private.update(
             {
                 "app_id": next_app_id,
@@ -183,7 +201,6 @@ class ChannelControlService:
             ):
                 private.pop(field_name, None)
             private["connected"] = False
-            private["cardkit_enabled"] = False
         candidate = replace(
             account,
             status="awaiting_owner_code" if app_identity_changed else account.status,

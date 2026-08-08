@@ -5,7 +5,7 @@ import hashlib
 import json
 import logging
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from dataclasses import replace
 from typing import Any
@@ -28,6 +28,14 @@ _APP_SCOPED_PRIVATE_FIELDS = {
     "owner_code_hash",
     "owner_code_expires_at",
 }
+_LEGACY_PRIVATE_FIELDS = frozenset({"cardkit_enabled"})
+
+
+def _clean_private(private: Mapping[str, object]) -> dict[str, object]:
+    cleaned = dict(private)
+    for field_name in _LEGACY_PRIVATE_FIELDS:
+        cleaned.pop(field_name, None)
+    return cleaned
 
 
 class FeishuTransport(ChannelTransport):
@@ -153,19 +161,20 @@ class FeishuTransport(ChannelTransport):
         if not selected.isdigit() or len(selected) != 6:
             raise ValueError("验证码必须是六位数字")
         expires_at = datetime.now(UTC) + timedelta(seconds=_OWNER_CODE_TTL_SECONDS)
-        private = dict(account.private)
+        private = _clean_private(account.private)
         private["owner_code_hash"] = _hash_owner_code(selected)
         private["owner_code_expires_at"] = expires_at.isoformat()
         owner_locked = isinstance(private.get("owner_open_id"), str) and bool(
             private.get("owner_open_id")
         )
-        updated = self.registry.update(
+        updated = self._persist_private_state(
+            account,
             replace(
                 account,
                 status=account.status if owner_locked else "awaiting_owner_code",
                 enabled=account.enabled if owner_locked else True,
                 private=private,
-            )
+            ),
         )
         del updated
         return selected
@@ -204,38 +213,7 @@ class FeishuTransport(ChannelTransport):
         if message.disposition == "proactive_notification":
             return await self._send_final_text(client, account, chat_id, message.content)
         if message.event_type == "response.delta":
-            if not state.cardkit_enabled:
-                return True
-            try:
-                accepted = await client.update_card(
-                    account,
-                    chat_id,
-                    message.content,
-                    completed=False,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                accepted = False
-            if accepted is False:
-                self._disable_cardkit(account.id, state)
-            return accepted is not False
-
-        if state.cardkit_enabled:
-            try:
-                card_accepted = await client.update_card(
-                    account,
-                    chat_id,
-                    message.content,
-                    completed=True,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                card_accepted = False
-            if card_accepted is not False:
-                return True
-            self._disable_cardkit(account.id, state)
+            return True
         return await self._send_final_text(client, account, chat_id, message.content)
 
     def is_deliverable(self, recipient: Recipient) -> bool:
@@ -306,6 +284,7 @@ class FeishuTransport(ChannelTransport):
         expected_revision = expected_updated_at or previous_account.updated_at
         if previous_account.updated_at != expected_revision:
             return False
+        account = replace(account, private=_clean_private(account.private))
         previous_client = self._clients.get(account.id)
         client = self._client_factory() if self._client_factory is not None else self._client
         if client is None:
@@ -319,7 +298,7 @@ class FeishuTransport(ChannelTransport):
         except asyncio.CancelledError:
             raise
         except Exception:
-            state = FeishuConnectionState(False, False)
+            state = FeishuConnectionState(False)
         if not state.connected:
             if client is not previous_client:
                 try:
@@ -338,9 +317,8 @@ class FeishuTransport(ChannelTransport):
                 account,
                 status=status,
                 private={
-                    **account.private,
+                    **_clean_private(account.private),
                     "connected": state.connected,
-                    "cardkit_enabled": state.cardkit_enabled,
                     "instance_id": account.id,
                 },
             )
@@ -349,7 +327,9 @@ class FeishuTransport(ChannelTransport):
                     updated_account,
                     expected_updated_at=expected_revision,
                 )
-                if replace_private
+                if replace_private or any(
+                    field_name in previous_account.private for field_name in _LEGACY_PRIVATE_FIELDS
+                )
                 else self.registry.update(
                     updated_account,
                     expected_updated_at=expected_revision,
@@ -398,7 +378,7 @@ class FeishuTransport(ChannelTransport):
     ) -> None:
         try:
             self.registry.replace_private_state(
-                previous_account,
+                replace(previous_account, private=_clean_private(previous_account.private)),
                 expected_updated_at=committed_account.updated_at,
             )
         except (OSError, ValueError):
@@ -417,7 +397,7 @@ class FeishuTransport(ChannelTransport):
         if client is previous_client:
             try:
                 restored = await client.start_bot(
-                    previous_account,
+                    replace(previous_account, private=_clean_private(previous_account.private)),
                     lambda event, current_account_id=account_id: self._on_event(
                         current_account_id,
                         event,
@@ -441,6 +421,15 @@ class FeishuTransport(ChannelTransport):
     def _account_lifecycle_lock(self, account_id: str) -> asyncio.Lock:
         return self._account_locks.setdefault(account_id, asyncio.Lock())
 
+    def _persist_private_state(
+        self,
+        current: ChannelAccount,
+        candidate: ChannelAccount,
+    ) -> ChannelAccount:
+        if any(field_name in current.private for field_name in _LEGACY_PRIVATE_FIELDS):
+            return self.registry.replace_private_state(candidate)
+        return self.registry.update(candidate)
+
     def _set_client_state_handler(self, client: FeishuClient, account_id: str) -> None:
         setter = getattr(client, "set_state_handler", None)
         if not callable(setter):
@@ -457,16 +446,16 @@ class FeishuTransport(ChannelTransport):
                     return
                 if current.status == "failed":
                     try:
-                        self.registry.update(
+                        self._persist_private_state(
+                            current,
                             replace(
                                 current,
                                 status="active" if current.private.get("owner_open_id") else "awaiting_owner_code",
                                 private={
-                                    **current.private,
+                                    **_clean_private(current.private),
                                     "connected": True,
-                                    "cardkit_enabled": state.cardkit_enabled,
                                 },
-                            )
+                            ),
                         )
                     except (OSError, ValueError):
                         logger.debug("Unable to restore Feishu state for instance %s", account_id)
@@ -544,13 +533,13 @@ class FeishuTransport(ChannelTransport):
         return secrets.compare_digest(code_hash, _hash_owner_code(content.strip()))
 
     def _lock_owner(self, account: ChannelAccount, sender: str, chat_id: str) -> ChannelAccount:
-        private = dict(account.private)
+        private = _clean_private(account.private)
         private["owner_open_id"] = sender
         private["conversation_id"] = f"{account.id}:{chat_id}"
         private.pop("owner_code_hash", None)
         private.pop("owner_code_expires_at", None)
         private["connected"] = True
-        return self.registry.update(replace(account, status="active", private=private))
+        return self._persist_private_state(account, replace(account, status="active", private=private))
 
     @staticmethod
     def _owner_reverification_pending(account: ChannelAccount) -> bool:
@@ -569,27 +558,12 @@ class FeishuTransport(ChannelTransport):
         conversation_id = f"{account.id}:{chat_id}"
         if account.private.get("conversation_id") == conversation_id:
             return account
-        return self.registry.update(
-            replace(account, private={**account.private, "conversation_id": conversation_id})
-        )
+        private = _clean_private(account.private)
+        private["conversation_id"] = conversation_id
+        return self._persist_private_state(account, replace(account, private=private))
 
     async def _mark_disconnected(self, account: ChannelAccount) -> None:
         await self._mark_disconnected_by_id(account.id)
-
-    def _disable_cardkit(self, account_id: str, state: FeishuConnectionState) -> None:
-        self._states[account_id] = FeishuConnectionState(state.connected, False)
-        current = self.registry.get("feishu", account_id)
-        if current is None or current.status == "revoked":
-            return
-        try:
-            self.registry.update(
-                replace(
-                    current,
-                    private={**current.private, "cardkit_enabled": False},
-                )
-            )
-        except ValueError:
-            logger.debug("Unable to disable CardKit for instance %s", account_id)
 
     async def _mark_disconnected_by_id(self, account_id: str) -> None:
         async with self._account_lifecycle_lock(account_id):
@@ -599,14 +573,18 @@ class FeishuTransport(ChannelTransport):
         current = self.registry.get("feishu", account_id)
         if current is None or current.status == "revoked":
             return
-        self._states[account_id] = FeishuConnectionState(False, False)
+        self._states[account_id] = FeishuConnectionState(False)
         try:
-            self.registry.update(
+            self._persist_private_state(
+                current,
                 replace(
                     current,
                     status="failed" if current.status != "disabled" else current.status,
-                    private={**current.private, "connected": False},
-                )
+                    private={
+                        **_clean_private(current.private),
+                        "connected": False,
+                    },
+                ),
             )
         except ValueError:
             logger.debug("Unable to mark Feishu instance %s disconnected", account_id)

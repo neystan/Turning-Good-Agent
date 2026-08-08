@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import time
 from collections.abc import Callable, Iterable
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 from ..bus.messages import ChannelRoute, InboundMessage, OutboundMessage, Recipient
@@ -25,6 +26,8 @@ from .weixin_qr import LocalIlinkQrPresenter
 logger = logging.getLogger(__name__)
 _DEFAULT_MAX_MESSAGE_BYTES = 2_048
 _DEFAULT_POLL_INTERVAL_SECONDS = 1.0
+_DEFAULT_QR_TTL_SECONDS = 300.0
+_MAX_QR_CONTENT_LENGTH = 8 * 1024 * 1024
 _TEXT_NOTICE = "当前仅支持文本"
 _SUPPRESSED_OUTBOUND_EVENTS = {"response.delta", "response.status"}
 
@@ -68,6 +71,67 @@ class IlinkQrPresenter(Protocol):
     def is_presenting(self, binding_id: str) -> bool: ...
 
 
+@dataclass(frozen=True, slots=True)
+class IlinkQrSnapshot:
+    """仅供本机控制面短时展示的二维码快照。"""
+
+    content: str = field(repr=False)
+    expires_at: float
+
+
+class IlinkQrCache(Protocol):
+    def put(self, binding_id: str, content: str) -> bool: ...
+
+    def get(self, binding_id: str) -> IlinkQrSnapshot | None: ...
+
+    def clear(self, binding_id: str) -> None: ...
+
+    def clear_all(self) -> None: ...
+
+
+class InMemoryIlinkQrCache:
+    """保存二维码原文的短时内存缓存，不写 Registry 或其他持久化介质。"""
+
+    def __init__(
+        self,
+        *,
+        ttl_seconds: float = _DEFAULT_QR_TTL_SECONDS,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        if ttl_seconds <= 0:
+            raise ValueError("ttl_seconds 必须大于 0")
+        self.ttl_seconds = float(ttl_seconds)
+        self._clock = clock or time.time
+        self._entries: dict[str, IlinkQrSnapshot] = {}
+
+    def put(self, binding_id: str, content: str) -> bool:
+        if not isinstance(binding_id, str) or not binding_id:
+            return False
+        if not isinstance(content, str):
+            return False
+        content = content.strip()
+        if not content or len(content) > _MAX_QR_CONTENT_LENGTH:
+            return False
+        now = self._clock()
+        self._entries[binding_id] = IlinkQrSnapshot(content, now + self.ttl_seconds)
+        return True
+
+    def get(self, binding_id: str) -> IlinkQrSnapshot | None:
+        snapshot = self._entries.get(binding_id)
+        if snapshot is None:
+            return None
+        if snapshot.expires_at <= self._clock():
+            self._entries.pop(binding_id, None)
+            return None
+        return snapshot
+
+    def clear(self, binding_id: str) -> None:
+        self._entries.pop(binding_id, None)
+
+    def clear_all(self) -> None:
+        self._entries.clear()
+
+
 class WeixinTransport(ChannelTransport):
     """个人微信 iLink Transport；所有 Binding 共享一个出站消费者。"""
 
@@ -82,6 +146,7 @@ class WeixinTransport(ChannelTransport):
         *,
         client_factory: ClientFactory | None = None,
         qr_presenter: IlinkQrPresenter | None = None,
+        qr_cache: IlinkQrCache | None = None,
         poll_interval_seconds: float = _DEFAULT_POLL_INTERVAL_SECONDS,
         max_message_bytes: int = _DEFAULT_MAX_MESSAGE_BYTES,
     ) -> None:
@@ -101,6 +166,7 @@ class WeixinTransport(ChannelTransport):
         self.poll_interval_seconds = poll_interval_seconds
         self.max_message_bytes = max_message_bytes
         self._qr_presenter = qr_presenter
+        self._qr_cache = qr_cache
         self._configure_qr_presenter()
         self._clients: dict[str, IlinkClient] = {}
         self._poll_tasks: dict[str, asyncio.Task[None]] = {}
@@ -133,6 +199,17 @@ class WeixinTransport(ChannelTransport):
                     await result
         self._clients.clear()
         await self._close_qr_presenter()
+        self._clear_all_qr()
+
+    def get_qr(self, binding_id: str) -> IlinkQrSnapshot | None:
+        """返回仍处于待扫码生命周期的内存二维码，不读取 Registry 私有二维码字段。"""
+        if self._qr_cache is None:
+            return None
+        account = self.registry.get("weixin", binding_id)
+        if account is None or not account.enabled or account.status != "pending_qr":
+            self._clear_qr(binding_id)
+            return None
+        return self._qr_cache.get(binding_id)
 
     async def enable_account(self, binding_id: str) -> None:
         account = self.registry.get("weixin", binding_id)
@@ -256,7 +333,12 @@ class WeixinTransport(ChannelTransport):
             return account.status
         client = await self._client_for(account)
         try:
-            if account.private.get("qrcode"):
+            if self._qr_cache is None:
+                qr_available = True
+            else:
+                qr_available = self.get_qr(account.id) is not None
+            should_continue_login = bool(account.private.get("qrcode")) and qr_available
+            if should_continue_login:
                 result = await client.continue_login(account)
             else:
                 result = await client.begin_login(account)
@@ -269,13 +351,22 @@ class WeixinTransport(ChannelTransport):
             return failed.status
         account = self._apply_login_result(account, result)
         qr_content = getattr(result, "qr_content", None)
-        if isinstance(qr_content, str) and qr_content and self._qr_presenter is not None:
-            if not await self._present_qr(account.id, qr_content):
+        if isinstance(qr_content, str) and qr_content:
+            cached = self._cache_qr(account.id, qr_content)
+            presented = True
+            if self._qr_presenter is not None:
+                presented = await self._present_qr(account.id, qr_content)
+            if not presented and not cached:
                 failed = self._fail_pending_qr(account)
                 await self._dismiss_qr(account.id)
                 return failed.status
-        elif account.status == "pending_qr" and not self._is_qr_presenting(account.id):
-            return self._fail_pending_qr(account).status
+        elif account.status == "pending_qr":
+            cached = self.get_qr(account.id)
+            if self._qr_presenter is None:
+                if cached is None:
+                    return self._fail_pending_qr(account).status
+            elif cached is None and not self._is_qr_presenting(account.id):
+                return self._fail_pending_qr(account).status
         elif account.status != "pending_qr":
             await self._dismiss_qr(account.id)
         return account.status
@@ -427,6 +518,7 @@ class WeixinTransport(ChannelTransport):
             logger.debug("Unable to mark Weixin binding %s disconnected", account.id)
 
     async def _expire_binding(self, account: ChannelAccount) -> None:
+        await self._dismiss_qr(account.id)
         current = self.registry.get("weixin", account.id)
         if current is None or current.status == "revoked":
             return
@@ -462,6 +554,7 @@ class WeixinTransport(ChannelTransport):
             return False
 
     async def _dismiss_qr(self, binding_id: str) -> None:
+        self._clear_qr(binding_id)
         if self._qr_presenter is None:
             return
         dismiss = getattr(self._qr_presenter, "dismiss", None)
@@ -490,6 +583,31 @@ class WeixinTransport(ChannelTransport):
             raise
         except Exception:
             logger.warning("Unable to close Weixin QR presenter")
+
+    def _cache_qr(self, binding_id: str, content: str) -> bool:
+        if self._qr_cache is None:
+            return False
+        try:
+            return self._qr_cache.put(binding_id, content)
+        except Exception:
+            logger.warning("Unable to cache Weixin QR for binding %s", binding_id)
+            return False
+
+    def _clear_qr(self, binding_id: str) -> None:
+        if self._qr_cache is None:
+            return
+        try:
+            self._qr_cache.clear(binding_id)
+        except Exception:
+            logger.debug("Unable to clear Weixin QR for binding %s", binding_id)
+
+    def _clear_all_qr(self) -> None:
+        if self._qr_cache is None:
+            return
+        try:
+            self._qr_cache.clear_all()
+        except Exception:
+            logger.debug("Unable to clear Weixin QR cache")
 
     def _configure_qr_presenter(self) -> None:
         if self._qr_presenter is None:
@@ -525,6 +643,7 @@ class WeixinTransport(ChannelTransport):
         *,
         credential_state: str = "local_qr_unavailable",
     ) -> ChannelAccount:
+        self._clear_qr(account.id)
         current = self.registry.get("weixin", account.id) or account
         private = dict(current.private)
         private.update(

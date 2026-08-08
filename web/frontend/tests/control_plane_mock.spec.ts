@@ -129,7 +129,7 @@ test("settings editor scrolls independently while the apply controls stay visibl
 });
 
 test("settings keeps IM controls in the editor scroll area and clears sensitive failures", async ({ page }) => {
-  const account = { id: "feishu-account", platform: "feishu", principal_id: "owner", status: "awaiting_owner_code", enabled: true, subscribed: false, credential_state: "configured", connected: false, app_id_masked: "cli••••mo", cardkit_enabled: true };
+  const account = { id: "feishu-account", platform: "feishu", principal_id: "owner", status: "awaiting_owner_code", enabled: true, subscribed: false, credential_state: "configured", connected: false, app_id_masked: "cli••••mo" };
   await page.route("**/api/control/config", async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(controlConfig()) });
   });
@@ -159,6 +159,64 @@ test("settings keeps IM controls in the editor scroll area and clears sensitive 
   await expect(page.getByLabel("飞书 App ID")).toHaveValue("");
   await expect(page.getByLabel("飞书 App Secret")).toHaveValue("");
   await expect(page.getByText("super-secret-must-not-render", { exact: false })).toHaveCount(0);
+});
+
+test("settings renders a local QR image when iLink returns a scan URL", async ({ page }) => {
+  const account = { id: "weixin-binding", platform: "weixin", principal_id: "owner", status: "pending_qr", enabled: true, subscribed: false, credential_state: "pending", connected: false };
+  await page.route("**/api/control/config", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(controlConfig()) });
+  });
+  await page.route("**/api/control/tools", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(toolCatalog()) });
+  });
+  await page.route("**/api/control/channels", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ accounts: [account] }) });
+  });
+  await page.route("**/api/control/channels/weixin/weixin-binding/qr", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      headers: { "Cache-Control": "no-store" },
+      body: JSON.stringify({ binding_id: account.id, status: "pending_qr", qr_content: "https://ilink.example/scan?token=opaque", expires_at: Math.floor(Date.now() / 1000) + 300 }),
+    });
+  });
+
+  await page.goto(`${baseUrl}/#settings`);
+  const image = page.getByAltText("微信登录二维码");
+  await expect(image).toBeVisible();
+  await expect.poll(() => image.getAttribute("src")).toMatch(/^data:image\/png;base64,/);
+});
+
+test("settings can restart an expired Weixin binding and show its new QR", async ({ page }) => {
+  const expired = { id: "expired-binding", platform: "weixin", principal_id: "owner", status: "expired", enabled: false, subscribed: false, credential_state: "expired", connected: false };
+  const pending = { ...expired, status: "pending_qr", enabled: true, credential_state: "pending" };
+  let rescanCalled = false;
+  await page.route("**/api/control/config", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(controlConfig()) });
+  });
+  await page.route("**/api/control/tools", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(toolCatalog()) });
+  });
+  await page.route("**/api/control/channels", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ accounts: [expired] }) });
+  });
+  await page.route("**/api/control/channels/weixin/expired-binding/rescan", async (route) => {
+    rescanCalled = true;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(pending) });
+  });
+  await page.route("**/api/control/channels/weixin/expired-binding/qr", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      headers: { "Cache-Control": "no-store" },
+      body: JSON.stringify({ binding_id: pending.id, status: "pending_qr", qr_content: "https://ilink.example/scan?token=new", expires_at: Math.floor(Date.now() / 1000) + 300 }),
+    });
+  });
+
+  await page.goto(`${baseUrl}/#settings`);
+  await expect(page.getByRole("button", { name: "重新扫码" })).toBeVisible();
+  await page.getByRole("button", { name: "重新扫码" }).click();
+
+  await expect.poll(() => rescanCalled).toBe(true);
+  await expect(page.getByAltText("微信登录二维码")).toBeVisible();
 });
 
 test("settings tests only editable LLM fields and uses text inputs with switches", async ({ page }) => {

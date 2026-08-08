@@ -9,7 +9,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from multiprocessing.connection import Connection
 from typing import Any, Protocol
-from uuid import uuid4
 
 from .registry import ChannelAccount
 
@@ -30,17 +29,9 @@ class FeishuConnectionState:
     """飞书单 Bot 连接的脱敏状态。"""
 
     connected: bool
-    cardkit_enabled: bool
 
 
 FeishuConnectionStateHandler = Callable[[FeishuConnectionState], Awaitable[None]]
-
-
-@dataclass(slots=True)
-class _CardStream:
-    card_id: str
-    content: str
-    sequence: int = 0
 
 
 FeishuEventHandler = Callable[[dict[str, object]], Awaitable[None]]
@@ -65,15 +56,6 @@ class FeishuClient(Protocol):
     async def stop_bot(self, account_id: str) -> None: ...
 
     async def send_text(self, account: ChannelAccount, chat_id: str, content: str) -> bool: ...
-
-    async def update_card(
-        self,
-        account: ChannelAccount,
-        chat_id: str,
-        content: str,
-        *,
-        completed: bool = False,
-    ) -> bool: ...
 
 
 class _ProcessWsConnection:
@@ -102,7 +84,6 @@ class _ProcessWsConnection:
         self._closing = False
         self._ready = False
         self._ever_ready = False
-        self._cardkit_enabled = False
         self._disconnected_reported = False
         self._exit_status: str | None = None
 
@@ -125,9 +106,6 @@ class _ProcessWsConnection:
     def set_state_change_handler(self, handler: FeishuConnectionStateHandler) -> None:
         self._on_state_change = handler
 
-    def set_cardkit_enabled(self, enabled: bool) -> None:
-        self._cardkit_enabled = enabled
-
     async def close(self) -> None:
         self._closing = True
         try:
@@ -139,7 +117,6 @@ class _ProcessWsConnection:
                 self._on_event = None
                 self._ready = False
                 self._ever_ready = False
-                self._cardkit_enabled = False
                 self._disconnected_reported = False
                 self._exit_status = None
                 self._closing = False
@@ -246,16 +223,14 @@ class _ProcessWsConnection:
                                     ready_future.set_result(True)
                                 if was_ready:
                                     self._disconnected_reported = False
-                                    await self._report_state(
-                                        FeishuConnectionState(True, self._cardkit_enabled)
-                                    )
+                                    await self._report_state(FeishuConnectionState(True))
                             elif status == _PROCESS_DISCONNECTED:
                                 if not self._closing and self._ready:
                                     self._ready = False
                                     if not self._disconnected_reported:
                                         self._disconnected_reported = True
                                         await self._report_state(
-                                            FeishuConnectionState(False, False)
+                                            FeishuConnectionState(False)
                                         )
                             elif status in {_PROCESS_FAILED, _PROCESS_STOPPED}:
                                 if not ready_future.done():
@@ -294,7 +269,7 @@ class _ProcessWsConnection:
             return
         if not self._disconnected_reported:
             self._disconnected_reported = True
-            await self._report_state(FeishuConnectionState(False, False))
+            await self._report_state(FeishuConnectionState(False))
         if status is not None:
             logger.warning("Feishu Bot process exited with status %s", status)
         else:
@@ -367,7 +342,7 @@ class _ProcessWsConnection:
         if self._disconnected_reported:
             return
         self._disconnected_reported = True
-        await self._report_state(FeishuConnectionState(False, False))
+        await self._report_state(FeishuConnectionState(False))
 
     async def _report_state(self, state: FeishuConnectionState) -> None:
         on_state_change = self._on_state_change
@@ -402,7 +377,7 @@ class LarkFeishuClient:
     def __init__(
         self,
         *,
-        sdk_loader: Callable[[], tuple[Any, Any, Any, Any]] | None = None,
+        sdk_loader: Callable[[], tuple[Any, Any, Any]] | None = None,
         connection_factory: WsConnectionFactory | None = None,
     ) -> None:
         self._sdk_loader = sdk_loader or _load_lark_sdk
@@ -411,7 +386,6 @@ class LarkFeishuClient:
         self._rest_clients: dict[str, Any] = {}
         self._handlers: dict[str, FeishuEventHandler] = {}
         self._state_handlers: dict[str, Callable[[FeishuConnectionState], Any]] = {}
-        self._card_streams: dict[tuple[str, str], _CardStream] = {}
 
     def set_state_handler(
         self,
@@ -427,7 +401,7 @@ class LarkFeishuClient:
         try:
             app_id, app_secret, domain = _credentials(account)
             _disable_lark_sdk_logging()
-            lark, auth_v3, _im_v1, cardkit_v1 = self._sdk_loader()
+            lark, auth_v3, _im_v1 = self._sdk_loader()
             rest_client = (
                 lark.Client.builder()
                 .app_id(app_id)
@@ -436,7 +410,7 @@ class LarkFeishuClient:
                 .build()
             )
             if not await _validate_credentials(rest_client, auth_v3, app_id, app_secret):
-                return FeishuConnectionState(False, False)
+                return FeishuConnectionState(False)
             loop = asyncio.get_running_loop()
 
             def receive(event: object) -> None:
@@ -465,10 +439,6 @@ class LarkFeishuClient:
                 domain,
                 dispatcher,
             )
-            cardkit_enabled = _cardkit_supported(rest_client, cardkit_v1)
-            set_cardkit_enabled = getattr(candidate_connection, "set_cardkit_enabled", None)
-            if callable(set_cardkit_enabled):
-                set_cardkit_enabled(cardkit_enabled)
             state_handler = self._state_handlers.get(account.id)
             set_state_change_handler = getattr(
                 candidate_connection,
@@ -492,7 +462,7 @@ class LarkFeishuClient:
             if not await candidate_connection.start(on_event):
                 await _close_connection_quietly(candidate_connection)
                 logger.warning("Feishu SDK connection startup failed")
-                return FeishuConnectionState(False, False)
+                return FeishuConnectionState(False)
             previous_connection = self._connections.get(account.id)
             if previous_connection is not None and previous_connection is not candidate_connection:
                 try:
@@ -503,14 +473,11 @@ class LarkFeishuClient:
                 except Exception:
                     await _close_connection_quietly(candidate_connection)
                     logger.warning("Feishu SDK connection replacement failed")
-                    return FeishuConnectionState(False, False)
+                    return FeishuConnectionState(False)
             self._connections[account.id] = candidate_connection
             self._rest_clients[account.id] = rest_client
             self._handlers[account.id] = on_event
-            for key in tuple(self._card_streams):
-                if key[0] == account.id:
-                    self._card_streams.pop(key, None)
-            return FeishuConnectionState(True, cardkit_enabled)
+            return FeishuConnectionState(True)
         except asyncio.CancelledError:
             if candidate_connection is not None:
                 await _close_connection_quietly(candidate_connection)
@@ -519,7 +486,7 @@ class LarkFeishuClient:
             if candidate_connection is not None:
                 await _close_connection_quietly(candidate_connection)
             logger.warning("Feishu SDK connection startup failed")
-            return FeishuConnectionState(False, False)
+            return FeishuConnectionState(False)
 
     async def stop_bot(self, account_id: str) -> None:
         connection = self._connections.get(account_id)
@@ -529,16 +496,13 @@ class LarkFeishuClient:
         self._rest_clients.pop(account_id, None)
         self._handlers.pop(account_id, None)
         self._state_handlers.pop(account_id, None)
-        for key in tuple(self._card_streams):
-            if key[0] == account_id:
-                self._card_streams.pop(key, None)
 
     async def send_text(self, account: ChannelAccount, chat_id: str, content: str) -> bool:
         rest_client = self._rest_clients.get(account.id)
         if rest_client is None:
             return False
         try:
-            _lark, _auth_v3, im_v1, _cardkit_v1 = self._sdk_loader()
+            _lark, _auth_v3, im_v1 = self._sdk_loader()
             body = (
                 im_v1.CreateMessageRequestBody.builder()
                 .receive_id(chat_id)
@@ -557,134 +521,6 @@ class LarkFeishuClient:
             return False
         return _response_succeeded(response)
 
-    async def update_card(
-        self,
-        account: ChannelAccount,
-        chat_id: str,
-        content: str,
-        *,
-        completed: bool = False,
-    ) -> bool:
-        rest_client = self._rest_clients.get(account.id)
-        if rest_client is None:
-            return False
-        try:
-            _lark, _auth_v3, im_v1, cardkit_v1 = self._sdk_loader()
-            if not _cardkit_supported(rest_client, cardkit_v1):
-                return False
-            key = (account.id, chat_id)
-            stream = self._card_streams.get(key)
-            if stream is None:
-                return await self._create_card_stream(
-                    rest_client,
-                    im_v1,
-                    cardkit_v1,
-                    account.id,
-                    chat_id,
-                    content,
-                    completed=completed,
-                )
-            next_content = content if completed else stream.content + content
-            accepted = await self._update_card_stream(
-                rest_client,
-                cardkit_v1,
-                stream,
-                next_content,
-                completed=completed,
-            )
-        except Exception:
-            return False
-        if not accepted:
-            self._card_streams.pop(key, None)
-            return False
-        if completed:
-            self._card_streams.pop(key, None)
-        else:
-            stream.content = next_content
-        return True
-
-    async def _create_card_stream(
-        self,
-        rest_client: Any,
-        im_v1: Any,
-        cardkit_v1: Any,
-        account_id: str,
-        chat_id: str,
-        content: str,
-        *,
-        completed: bool,
-    ) -> bool:
-        card_body = (
-            cardkit_v1.CreateCardRequestBody.builder()
-            .type("card_json")
-            .data(json.dumps(_card_spec(content, completed=completed), ensure_ascii=False))
-            .build()
-        )
-        card_request = cardkit_v1.CreateCardRequest.builder().request_body(card_body).build()
-        card_response = await rest_client.cardkit.v1.card.acreate(card_request)
-        card_id = _field(_field(card_response, "data"), "card_id")
-        if not _response_succeeded(card_response) or not isinstance(card_id, str) or not card_id:
-            return False
-        message_body = (
-            im_v1.CreateMessageRequestBody.builder()
-            .receive_id(chat_id)
-            .msg_type("interactive")
-            .content(
-                json.dumps(
-                    {"type": "card", "data": {"card_id": card_id}},
-                    ensure_ascii=False,
-                )
-            )
-            .build()
-        )
-        message_request = (
-            im_v1.CreateMessageRequest.builder()
-            .receive_id_type("chat_id")
-            .request_body(message_body)
-            .build()
-        )
-        message_response = await rest_client.im.v1.message.acreate(message_request)
-        if not _response_succeeded(message_response):
-            return False
-        if not completed:
-            self._card_streams[(account_id, chat_id)] = _CardStream(card_id, content)
-        return True
-
-    @staticmethod
-    async def _update_card_stream(
-        rest_client: Any,
-        cardkit_v1: Any,
-        stream: _CardStream,
-        content: str,
-        *,
-        completed: bool,
-    ) -> bool:
-        card = (
-            cardkit_v1.Card.builder()
-            .type("card_json")
-            .data(json.dumps(_card_spec(content, completed=completed), ensure_ascii=False))
-            .build()
-        )
-        body = (
-            cardkit_v1.UpdateCardRequestBody.builder()
-            .card(card)
-            .uuid(str(uuid4()))
-            .sequence(stream.sequence + 1)
-            .build()
-        )
-        request = (
-            cardkit_v1.UpdateCardRequest.builder()
-            .card_id(stream.card_id)
-            .request_body(body)
-            .build()
-        )
-        response = await rest_client.cardkit.v1.card.aupdate(request)
-        if not _response_succeeded(response):
-            return False
-        stream.sequence += 1
-        return True
-
-
 def _run_lark_ws_process(
     app_id: str,
     app_secret: str,
@@ -693,7 +529,7 @@ def _run_lark_ws_process(
 ) -> None:
     _disable_lark_sdk_logging()
     try:
-        lark, _auth_v3, _im_v1, _cardkit_v1 = _load_lark_sdk()
+        lark = _load_lark_sdk()[0]
 
         def receive(event: object) -> None:
             payload = _normalize_event(event)
@@ -773,15 +609,14 @@ async def _close_connection_quietly(connection: _WsConnection) -> None:
         return
 
 
-def _load_lark_sdk() -> tuple[Any, Any, Any, Any]:
+def _load_lark_sdk() -> tuple[Any, Any, Any]:
     try:
         import lark_oapi
         import lark_oapi.api.auth.v3 as auth_v3
-        import lark_oapi.api.cardkit.v1 as cardkit_v1
         import lark_oapi.api.im.v1 as im_v1
     except ImportError as exc:  # pragma: no cover - exercised only in real deployment
         raise RuntimeError("飞书 Transport 需要 lark-oapi") from exc
-    return lark_oapi, auth_v3, im_v1, cardkit_v1
+    return lark_oapi, auth_v3, im_v1
 
 
 def _credentials(account: ChannelAccount) -> tuple[str, str, str]:
@@ -825,39 +660,6 @@ def _response_succeeded(response: object) -> bool:
     if callable(success):
         return bool(success())
     return getattr(response, "code", None) in (None, 0)
-
-
-def _cardkit_supported(rest_client: object, cardkit_v1: object) -> bool:
-    try:
-        create = rest_client.cardkit.v1.card.acreate  # type: ignore[attr-defined]
-        update = rest_client.cardkit.v1.card.aupdate  # type: ignore[attr-defined]
-        request = cardkit_v1.CreateCardRequest  # type: ignore[attr-defined]
-        request_body = cardkit_v1.CreateCardRequestBody  # type: ignore[attr-defined]
-        card = cardkit_v1.Card  # type: ignore[attr-defined]
-        update_request = cardkit_v1.UpdateCardRequest  # type: ignore[attr-defined]
-        update_request_body = cardkit_v1.UpdateCardRequestBody  # type: ignore[attr-defined]
-    except AttributeError:
-        return False
-    return all(
-        callable(callback)
-        for callback in (
-            create,
-            update,
-            getattr(request, "builder", None),
-            getattr(request_body, "builder", None),
-            getattr(card, "builder", None),
-            getattr(update_request, "builder", None),
-            getattr(update_request_body, "builder", None),
-        )
-    )
-
-
-def _card_spec(content: str, *, completed: bool) -> dict[str, object]:
-    return {
-        "schema": "2.0",
-        "config": {"streaming_mode": not completed},
-        "body": {"elements": [{"tag": "markdown", "content": content}]},
-    }
 
 
 def _normalize_event(payload: object) -> dict[str, object] | None:

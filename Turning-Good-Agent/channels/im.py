@@ -4,7 +4,6 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
-from uuid import uuid4
 
 from ..bus.messages import ChannelRoute, InboundMessage, OutboundMessage, Recipient
 from ..bus.queue import AsyncMessageBus
@@ -43,7 +42,7 @@ class ImTurnControl:
 
 
 class ImChannelAdapter:
-    """将共享 Runtime 的中间输出安全地投影为 IM 增量。"""
+    """将共享 Runtime 的输出安全地投影到不支持流式的 IM。"""
 
     def __init__(self, bus: AsyncMessageBus, control: ImTurnControl) -> None:
         self.bus = bus
@@ -51,21 +50,8 @@ class ImChannelAdapter:
         self.route = control.route
 
     async def on_delta(self, text: str) -> None:
-        """仅发布非空的普通文本增量。"""
-        if not text:
-            return
-        await self.bus.publish_outbound(
-            OutboundMessage(
-                str(uuid4()),
-                self.control.session_id,
-                recipient=self.control.recipient,
-                content=text,
-                event_type="response.delta",
-                event_id=self.control.request_id,
-                disposition="chat_reply",
-                metadata={"request_id": self.control.request_id},
-            )
-        )
+        """丢弃中间增量；IM v1 只投递终态文本。"""
+        del text
 
     async def on_status(self, text: str) -> None:
         """IM v1 不展示运行状态。"""

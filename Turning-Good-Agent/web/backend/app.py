@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -341,6 +341,14 @@ def create_app(gateway: "GatewayHost") -> FastAPI:
     async def rescan_weixin_control_channel(account_id: str) -> dict[str, object]:
         try:
             return channel_view(await require_channel_control().rescan_weixin_binding(account_id))
+        except (KeyError, ValueError) as exc:
+            raise channel_error(exc) from exc
+
+    @app.get("/api/control/channels/weixin/{account_id}/qr")
+    async def get_weixin_control_qr(account_id: str, response: Response) -> dict[str, object]:
+        try:
+            response.headers["Cache-Control"] = "no-store"
+            return await require_channel_control().get_weixin_qr(account_id)
         except (KeyError, ValueError) as exc:
             raise channel_error(exc) from exc
 

@@ -18,7 +18,7 @@ services:
     image: node:22-alpine
     working_dir: /app/web/frontend
     command: >-
-      sh -c "test -x node_modules/.bin/vite || npm ci;
+      sh -c "npm ci --no-audit --no-fund &&
       exec npm run dev -- --host 0.0.0.0"
     environment:
       VITE_BACKEND_URL: http://backend:8000

@@ -168,8 +168,16 @@
 .channel-account-copy { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .channel-account-copy strong { font-size: .8125rem; }
 .channel-account-copy span { color: var(--muted); font-size: .75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-weixin-qr { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 0 2px 23px; }
+.channel-weixin-qr-image, .channel-weixin-qr-placeholder { width: 132px; height: 132px; flex: 0 0 132px; border: 0; border-radius: var(--radius-control); background: var(--surface-raised); }
+.channel-weixin-qr-image { box-sizing: border-box; object-fit: contain; padding: 6px; }
+.channel-weixin-qr-placeholder { display: grid; place-items: center; padding: 10px; color: var(--muted); font-size: .75rem; text-align: center; }
+.channel-weixin-qr-copy { display: grid; gap: 4px; min-width: 0; }
+.channel-weixin-qr-copy strong { font-size: .8125rem; }
+.channel-weixin-qr-copy span { color: var(--muted); font-size: .75rem; }
+.channel-weixin-qr-binding { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
-@media (max-width: 720px) { .channel-feishu-form { align-items: stretch; flex-direction: column; }.channel-feishu-form label, .channel-feishu-form button { width: 100%; } }
+@media (max-width: 720px) { .channel-feishu-form { align-items: stretch; flex-direction: column; }.channel-feishu-form label, .channel-feishu-form button { width: 100%; }.channel-weixin-qr { align-items: flex-start; padding-left: 0; } }
 
 @media (max-width: 720px) { .settings-field { grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 9px 0; }.settings-field-error { grid-column: 1; margin-top: 0; }.settings-switch { justify-self: start; } }
 

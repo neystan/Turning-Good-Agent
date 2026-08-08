@@ -8,7 +8,13 @@ export type ChannelAccountView = {
   credential_state: string;
   connected: boolean;
   app_id_masked?: string | null;
-  cardkit_enabled?: boolean;
+};
+
+export type WeixinQrView = {
+  binding_id: string;
+  status: string;
+  qr_content: string | null;
+  expires_at: number | null;
 };
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -20,6 +26,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export const channelControlApi = {
   list: () => request<{ accounts: ChannelAccountView[] }>("/api/control/channels"),
   inviteWeixin: (principal: "owner" | "new") => request<ChannelAccountView>("/api/control/channels/weixin/invitations", { method: "POST", body: JSON.stringify({ principal }) }),
+  rescanWeixin: (id: string) => request<ChannelAccountView>(`/api/control/channels/weixin/${encodeURIComponent(id)}/rescan`, { method: "POST" }),
+  getWeixinQr: (id: string) => request<WeixinQrView>(`/api/control/channels/weixin/${encodeURIComponent(id)}/qr`),
   registerFeishu: (payload: { app_id: string; app_secret: string; domain: string }) => request<ChannelAccountView>("/api/control/channels/feishu", { method: "POST", body: JSON.stringify(payload) }),
   enable: (platform: string, id: string) => request<ChannelAccountView>(`/api/control/channels/${platform}/${encodeURIComponent(id)}/enable`, { method: "POST" }),
   disable: (platform: string, id: string) => request<ChannelAccountView>(`/api/control/channels/${platform}/${encodeURIComponent(id)}/disable`, { method: "POST" }),

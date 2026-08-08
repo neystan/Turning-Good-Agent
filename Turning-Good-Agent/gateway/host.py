@@ -15,7 +15,7 @@ from ..channels.im import ImGatewayCoordinator
 from ..channels.manager import ChannelManager
 from ..channels.registry import ChannelAccountRegistry
 from ..channels.web import WebChannelTransport
-from ..channels.weixin import LocalIlinkQrPresenter, WeixinTransport
+from ..channels.weixin import InMemoryIlinkQrCache, LocalIlinkQrPresenter, WeixinTransport
 from ..channels.weixin_ilink import IlinkClient
 from ..config.settings import Settings
 from .principals import GatewayPrincipalResolver
@@ -124,11 +124,13 @@ class GatewayHost:
             on_idle=self._notify_idle,
         )
         self.weixin_qr_presenter = LocalIlinkQrPresenter()
+        self.weixin_qr_cache = InMemoryIlinkQrCache()
         self.weixin_transport = WeixinTransport(
             self.channel_registry,
             self.im_coordinator,
             weixin_client,
             qr_presenter=self.weixin_qr_presenter,
+            qr_cache=self.weixin_qr_cache,
         )
         self.feishu_transport = FeishuTransport(
             self.channel_registry,
