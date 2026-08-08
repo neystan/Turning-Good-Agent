@@ -11,6 +11,7 @@ import pytest
 settings_module = importlib.import_module("Turning-Good-Agent.config.settings")
 validate_module = importlib.import_module("Turning-Good-Agent.config.validate")
 service_module = importlib.import_module("Turning-Good-Agent.proactive.service")
+tools_module = importlib.import_module("Turning-Good-Agent.tools.registry")
 
 
 def test_settings_loads_phase_7_proactive_defaults(tmp_path) -> None:
@@ -103,7 +104,7 @@ def test_review_llm_configuration_must_be_complete(proactive, tmp_path) -> None:
     assert "proactive.review_configuration" in raised.value.field_errors
 
 
-def test_review_provider_uses_complete_independent_llm_configuration(monkeypatch) -> None:
+def test_review_loop_uses_complete_independent_llm_configuration(monkeypatch) -> None:
     settings = settings_module.Settings()
     settings.llm.provider = "openai-compatible"
     settings.llm.api_key = "main-key"
@@ -114,21 +115,26 @@ def test_review_provider_uses_complete_independent_llm_configuration(monkeypatch
     settings.proactive.review_base_url = "https://review.example/v1"
     settings.proactive.review_model = "shared-name"
     captured = []
-    provider = object()
 
     def capture_build_llm(candidate_settings):
         captured.append(deepcopy(candidate_settings.llm))
-        return provider
+        return object()
 
     monkeypatch.setattr(service_module, "build_llm", capture_build_llm)
+    primary_loop = SimpleNamespace(
+        tools=tools_module.ToolRegistry(),
+        attachment_context_token_limit=12_000,
+    )
     service = object.__new__(service_module.ProactiveService)
     service.runtime = SimpleNamespace(
         settings=settings,
+        agent_loop=primary_loop,
+        hooks=object(),
     )
 
-    review_provider = service._review_provider()
+    review_loop = service._review_loop()
 
-    assert review_provider is provider
+    assert review_loop is not primary_loop
     assert len(captured) == 1
     assert captured[0].provider == "openai-compatible"
     assert captured[0].api_key == "review-key"

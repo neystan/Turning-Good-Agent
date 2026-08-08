@@ -15,7 +15,6 @@ memory_module = importlib.import_module("Turning-Good-Agent.memory.long_term")
 skills_module = importlib.import_module("Turning-Good-Agent.skills.manager")
 store_module = importlib.import_module("Turning-Good-Agent.proactive.store")
 app_module = importlib.import_module("Turning-Good-Agent.web.backend.app")
-events_module = importlib.import_module("Turning-Good-Agent.web.backend.proactive_events")
 incidents_module = importlib.import_module("Turning-Good-Agent.proactive.incidents")
 
 ProactiveConflictError = control_module.ProactiveConflictError
@@ -187,37 +186,10 @@ def _owned_live_app(tmp_path: Path, proactive_service: object) -> tuple[object, 
     runtime.settings.proactive.enabled = True
     store = ProactiveStore(tmp_path)
     _seed_snapshots(store)
-    app = _gateway_app(runtime)
+    app = create_app(runtime.settings, runtime)
     app.state.proactive_control.replace_runtime(runtime, proactive_service)
+    app.state.proactive_ownership._acquired = True
     return app, store
-
-
-def _gateway_app(runtime: SimpleNamespace) -> object:
-    """构建只注入服务的 Web 测试 Gateway，绝不回退到独立 Web Host。"""
-
-    class _Gateway:
-        def __init__(self) -> None:
-            self.settings = runtime.settings
-            self.web_coordinator = SimpleNamespace()
-            self.runtime_supervisor = SimpleNamespace(
-                current_runtime=runtime,
-                status=lambda: SimpleNamespace(active_revision="test"),
-            )
-            self.config_control = SimpleNamespace()
-            self.proactive_control = WebProactiveControlService(runtime)
-            self.proactive_owner_state = events_module.GatewayProactiveState(owner_id="gateway-test", owner_pid=1)
-            self.proactive_events = events_module.ProactiveEventHub(
-                self.proactive_control,
-                self.proactive_owner_state,
-            )
-
-        async def start(self) -> None:
-            return None
-
-        async def close(self) -> None:
-            return None
-
-    return create_app(_Gateway())
 
 
 def _seed_snapshots(store: ProactiveStore) -> None:
@@ -485,7 +457,7 @@ def test_manual_incident_resolve_does_not_enqueue_delivery(tmp_path: Path) -> No
     store = ProactiveStore(tmp_path)
     _seed_snapshots(store)
     delivery = _DeliveryRecorder()
-    monitor = IncidentMonitor(store, delivery)
+    monitor = IncidentMonitor(store, delivery, target_channel="web")
 
     asyncio.run(monitor.resolve_by_fingerprint("cron:failed"))
 
@@ -500,7 +472,7 @@ def test_http_reads_return_complete_domain_snapshots(tmp_path: Path) -> None:
     runtime.settings.proactive.enabled = False
     _seed_snapshots(ProactiveStore(tmp_path))
     _create_draft(SimpleNamespace(runtime=runtime))
-    app = _gateway_app(runtime)
+    app = create_app(runtime.settings, runtime)
 
     client = TestClient(app)
     for path, domain in (
@@ -524,7 +496,7 @@ def test_http_disabled_mode_actions_clean_snapshots_and_return_updated_snapshot(
     store = ProactiveStore(tmp_path)
     _seed_snapshots(store)
     _create_draft(SimpleNamespace(runtime=runtime))
-    app = _gateway_app(runtime)
+    app = create_app(runtime.settings, runtime)
 
     client = TestClient(app)
     requests = (
@@ -562,7 +534,7 @@ def test_http_proactive_capability_matrix_covers_domain_aggregate_and_action_sna
     runtime.settings.proactive.enabled = False
     store = ProactiveStore(tmp_path)
     _seed_snapshots(store)
-    app = _gateway_app(runtime)
+    app = create_app(runtime.settings, runtime)
 
     client = TestClient(app)
     domain = client.get("/api/proactive/cron")
@@ -575,6 +547,78 @@ def test_http_proactive_capability_matrix_covers_domain_aggregate_and_action_sna
     assert all(snapshot["mutations_allowed"] is True for snapshot in aggregate.json()["snapshots"])
     assert action.status_code == 200
     assert action.json()["mutations_allowed"] is True
+
+    readonly_path = tmp_path / "readonly"
+    readonly_path.mkdir()
+    runtime = _runtime(readonly_path)
+    runtime.settings.proactive.enabled = True
+    store = ProactiveStore(readonly_path)
+    _seed_snapshots(store)
+    app = create_app(runtime.settings, runtime)
+    ownership = app.state.proactive_ownership
+    ownership._path.parent.mkdir(parents=True, exist_ok=True)
+    ownership._path.write_text(
+        '{"owner_id":"cli-owner","owner_kind":"cli","owner_pid":1}',
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    readonly_domain = client.get("/api/proactive/cron")
+    readonly_aggregate = client.get("/api/proactive")
+    readonly_action = client.delete("/api/proactive/cron/cron-1")
+    client.close()
+
+    assert readonly_domain.json()["mutations_allowed"] is False
+    assert readonly_aggregate.json()["mutations_allowed"] is False
+    assert all(snapshot["mutations_allowed"] is False for snapshot in readonly_aggregate.json()["snapshots"])
+    assert readonly_action.status_code == 409
+
+
+def test_http_owner_conflict_and_missing_action_keep_snapshots_unchanged(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    runtime.settings.proactive.enabled = True
+    store = ProactiveStore(tmp_path)
+    _seed_snapshots(store)
+    app = create_app(runtime.settings, runtime)
+    ownership = app.state.proactive_ownership
+    ownership._path.parent.mkdir(parents=True, exist_ok=True)
+    ownership._path.write_text(
+        '{"owner_id":"other-host","owner_kind":"cli","owner_pid":1}',
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    assert client.delete("/api/proactive/cron/cron-1").status_code == 409
+    client.close()
+
+    ownership._path.unlink()
+    runtime.settings.proactive.enabled = False
+    client = TestClient(app)
+    assert client.delete("/api/proactive/cron/missing").status_code == 404
+    client.close()
+
+    assert store.read_json("cron.json", {})["jobs"][0]["id"] == "cron-1"
+
+
+def test_http_disabled_mode_with_another_owner_remains_read_only(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    runtime.settings.proactive.enabled = False
+    store = ProactiveStore(tmp_path)
+    _seed_snapshots(store)
+    app = create_app(runtime.settings, runtime)
+    ownership = app.state.proactive_ownership
+    ownership._path.parent.mkdir(parents=True, exist_ok=True)
+    ownership._path.write_text(
+        '{"owner_id":"cli-owner","owner_kind":"cli","owner_pid":1}',
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    assert client.delete("/api/proactive/cron/cron-1").status_code == 409
+    client.close()
+
+    assert store.read_json("cron.json", {})["jobs"][0]["id"] == "cron-1"
+
 
 @pytest.mark.parametrize(
     ("path", "snapshot_name"),
@@ -591,7 +635,7 @@ def test_http_malformed_snapshot_reads_return_422(tmp_path: Path, path: str, sna
     store = ProactiveStore(tmp_path)
     _seed_snapshots(store)
     store.write_json(snapshot_name, {})
-    app = _gateway_app(runtime)
+    app = create_app(runtime.settings, runtime)
 
     client = TestClient(app, raise_server_exceptions=False)
     response = client.get(path)
