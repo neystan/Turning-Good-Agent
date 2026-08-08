@@ -28,14 +28,11 @@ class CronExecutor(Protocol):
         """执行后台任务。"""
 
 
-class CronDeliveryGate(Protocol):
-    """Cron 所需的可靠投递接口。"""
+class CronNotificationPublisher(Protocol):
+    """Cron 所需的 Gateway 主动结果发布接口。"""
 
     async def enqueue(self, **payload: Any) -> Any:
-        """写入待投递记录。"""
-
-    async def delete_by_source_id(self, source_id: str) -> int:
-        """硬删除来源关联的待投递记录。"""
+        """发布一次结果事件，由 Gateway 决定 Fanout 与投递。"""
 
 
 class CronIncidentReporter(Protocol):
@@ -58,30 +55,38 @@ class CronManager:
         self,
         store: ProactiveStore,
         executor: CronExecutor,
-        delivery_gate: CronDeliveryGate,
+        notification_publisher: CronNotificationPublisher,
         proactive_settings: Any,
         *,
-        target_channel: str,
         incidents: CronIncidentReporter | None = None,
         clock: Callable[[], datetime] | None = None,
         schedule_changed: Callable[[], None] | None = None,
+        idle_changed: Callable[[], None] | None = None,
+        available_tool_names: Callable[[], frozenset[str]] | None = None,
     ) -> None:
         """恢复 Cron 快照并建立内存 deadline 索引。"""
         self._store = store
         self._executor = executor
-        self._delivery_gate = delivery_gate
+        self._notification_publisher = notification_publisher
         self._timezone = ZoneInfo(str(proactive_settings.timezone))
-        self._target_channel = target_channel
         self._incidents = incidents
         self._clock = clock or (lambda: datetime.now(UTC))
         self._schedule_changed = schedule_changed
+        self._idle_changed = idle_changed
+        self._available_tool_names = available_tool_names or frozenset
         self._jobs, self._usage = self._load_state()
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._running_ids: set[str] = set()
         self._next_fire: dict[str, datetime] = {}
         self._deleting: set[str] = set()
         self._lock = asyncio.Lock()
-        self._rebuild_deadlines(self._now())
+        self._rebuild_deadlines(self._now(), persist=False)
+
+    def initialize_schedule(self, now: datetime | None = None) -> None:
+        """在所属 Gateway 已激活后刷新快照并持久化可恢复的 deadline。"""
+        self._jobs, self._usage = self._load_state()
+        self._rebuild_deadlines(now or self._now(), persist=True)
+        self._notify_schedule_changed()
 
     def create_job(
         self,
@@ -235,7 +240,7 @@ class CronManager:
     def update_timezone(self, name: str) -> None:
         """切换全局 IANA 时区并重算周期任务的下次运行。"""
         self._timezone = ZoneInfo(name)
-        self._rebuild_deadlines(self._now())
+        self._rebuild_deadlines(self._now(), persist=True)
         self._notify_schedule_changed()
 
     async def wait_for_jobs(self) -> None:
@@ -256,10 +261,11 @@ class CronManager:
         try:
             job = self.get_job(job_id)
             try:
+                available_tool_names = frozenset(self._available_tool_names())
                 result = await self._executor.run(
                     "cron",
                     job.prompt,
-                    allowed_tool_names=frozenset(),
+                    allowed_tool_names=available_tool_names,
                     on_started=lambda: self._mark_running(job_id, scheduled_at),
                 )
             except asyncio.CancelledError:
@@ -274,6 +280,7 @@ class CronManager:
             self._tasks.pop(job_id, None)
             self._running_ids.discard(job_id)
             self._notify_schedule_changed()
+            self._notify_idle_changed()
 
     async def _mark_running(self, job_id: str, scheduled_at: datetime) -> None:
         """仅在共享后台容量取得后标记为运行中。"""
@@ -306,18 +313,16 @@ class CronManager:
                 self._jobs.pop(job_id, None)
                 self._next_fire.pop(job_id, None)
             self._save_state()
-            targets = self._delivery_targets(job) if result.success else []
         fingerprint = f"proactive:cron:{job.id}"
         if result.success:
-            for channel in targets:
-                if job_id in self._deleting:
-                    return
-                await self._delivery_gate.enqueue(
-                    target_channel=channel,
-                    event_type="proactive.cron.completed",
-                    content=f"定时任务已完成：{result.content}",
-                    source_id=job.id,
-                )
+            if job_id in self._deleting:
+                return
+            await self._notification_publisher.enqueue(
+                event_type="proactive.cron.completed",
+                content=f"定时任务已完成：{result.content}",
+                source_id=job.id,
+                notification_scope="all_subscribed",
+            )
             if self._incidents is not None and job_id not in self._deleting:
                 await self._incidents.report_recovery(
                     fingerprint=fingerprint,
@@ -346,28 +351,31 @@ class CronManager:
         self._next_fire[job.id] = next_fire.astimezone(UTC)
         self._replace_job(job, next_fire)
 
-    def _rebuild_deadlines(self, now: datetime) -> None:
-        """从快照恢复 deadline；只重算周期任务，固定时刻不受时区变更影响。"""
+    def _rebuild_deadlines(self, now: datetime, *, persist: bool) -> None:
+        """从快照恢复 deadline；仅激活后的服务可以改写 durable state。"""
         self._next_fire.clear()
         changed = False
         for job in list(self._jobs.values()):
             if job.recurring:
                 deadline = next_job_fire(job, now, self._timezone)
                 if deadline is None:
-                    self._jobs.pop(job.id, None)
-                    changed = True
+                    if persist:
+                        self._jobs.pop(job.id, None)
+                        changed = True
                     continue
                 self._next_fire[job.id] = deadline.astimezone(UTC)
-                self._replace_job(job, deadline)
-                changed = True
+                if persist:
+                    self._replace_job(job, deadline)
+                    changed = True
                 continue
             deadline = next_job_fire(job, now, self._timezone)
             if deadline is None:
-                self._jobs.pop(job.id, None)
-                changed = True
+                if persist:
+                    self._jobs.pop(job.id, None)
+                    changed = True
                 continue
             self._next_fire[job.id] = deadline.astimezone(UTC)
-        if changed:
+        if persist and changed:
             self._save_state()
 
     def _replace_job(self, job: CronJob, deadline: datetime | None) -> CronJob:
@@ -378,22 +386,12 @@ class CronManager:
         return updated
 
     async def _purge_related_records(self, job_id: str) -> None:
-        """硬删除关联待投递通知和异常记录。"""
+        """硬删除关联异常记录；通知从不作为 durable 状态保存。"""
         fingerprint = f"proactive:cron:{job_id}"
-        delete_delivery = getattr(self._delivery_gate, "delete_by_source_id", None)
-        if callable(delete_delivery):
-            await delete_delivery(job_id)
-            await delete_delivery(fingerprint)
         if self._incidents is not None:
             delete_incident = getattr(self._incidents, "delete_by_fingerprint", None)
             if callable(delete_incident):
                 await delete_incident(fingerprint)
-
-    def _delivery_targets(self, job: CronJob) -> list[str]:
-        """解析任务投递渠道。"""
-        if "all" in job.delivery_channels or self._target_channel in job.delivery_channels:
-            return [self._target_channel]
-        return []
 
     def _load_state(self) -> tuple[dict[str, CronJob], UsageTotals]:
         """读取最小 Cron 快照。"""
@@ -442,6 +440,11 @@ class CronManager:
         """唤醒 Service 重新读取最早 deadline。"""
         if self._schedule_changed is not None:
             self._schedule_changed()
+
+    def _notify_idle_changed(self) -> None:
+        """在任务已从运行时投影移除后通知 Gateway 复查全局空闲。"""
+        if self._idle_changed is not None:
+            self._idle_changed()
 
 
 class CreateCronTool:

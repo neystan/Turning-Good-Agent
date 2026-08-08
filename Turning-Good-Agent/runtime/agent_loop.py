@@ -58,9 +58,13 @@ class AgentLoop:
         auto_approve_tools: bool = False,
         *,
         allowed_tool_names: frozenset[str] | None = None,
+        llm_override: LLMProvider | None = None,
+        streaming_enabled: bool | None = None,
     ) -> AgentLoopResult:
         """运行模型调用和工具循环直到得到最终文本。"""
         channel_adapter = channel_adapter or SilentChannelAdapter()
+        llm = self.llm if llm_override is None else llm_override
+        use_streaming = self.streaming_enabled if streaming_enabled is None else streaming_enabled
         working = list(messages)
         openai_tools = self.tools.openai_tools(allowed_tool_names)
         attachments = AttachmentManager(
@@ -89,7 +93,13 @@ class AgentLoop:
         for _ in range(self.runtime.max_tool_rounds):
             if await self._apply_turn_control(working, channel_adapter, consumed_guidance):
                 return finish("", cancelled=True)
-            response = await self._complete(working, openai_tools, channel_adapter)
+            response = await self._complete(
+                working,
+                openai_tools,
+                channel_adapter,
+                llm=llm,
+                streaming_enabled=use_streaming,
+            )
             usage = usage.add(response.usage)
             if not response.tool_calls:
                 if channel_adapter.is_stop_requested():
@@ -131,7 +141,14 @@ class AgentLoop:
             if await self._apply_turn_control(working, channel_adapter, consumed_guidance):
                 return finish(response.content, cancelled=True)
         working.append({"role": "system", "content": TOOL_ROUND_LIMIT_SUMMARY_PROMPT})
-        summary = await self._complete(working, [], channel_adapter, emit_deltas=False)
+        summary = await self._complete(
+            working,
+            [],
+            channel_adapter,
+            llm=llm,
+            streaming_enabled=use_streaming,
+            emit_deltas=False,
+        )
         usage = usage.add(summary.usage)
         if channel_adapter.is_stop_requested():
             return finish("", cancelled=True)
@@ -210,17 +227,20 @@ class AgentLoop:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         channel_adapter: ChannelAdapter,
+        *,
+        llm: LLMProvider,
+        streaming_enabled: bool,
         emit_deltas: bool = True,
     ) -> LLMResponse:
         """按配置选择非流式或流式模型调用。"""
-        if not self.streaming_enabled or not hasattr(self.llm, "stream"):
-            return await self.llm.complete(messages, tools)
+        if not streaming_enabled or not hasattr(llm, "stream"):
+            return await llm.complete(messages, tools)
 
         content_parts: list[str] = []
         tool_calls = []
         usage = LLMUsage()
         protocol_error: str | None = None
-        async for chunk in self.llm.stream(messages, tools):
+        async for chunk in llm.stream(messages, tools):
             usage = usage.add(chunk.usage)
             if chunk.delta_text:
                 content_parts.append(chunk.delta_text)

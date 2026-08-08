@@ -63,6 +63,7 @@ def validate_settings(
         errors["llm.provider"] = "仅支持 openai-compatible"
     if settings.web.host not in {"127.0.0.1", "localhost", "::1"}:
         errors["web.host"] = "仅支持本机监听地址"
+    _validate_gateway_settings(errors, settings)
     _validate_proactive_settings(errors, settings)
 
     _validate_approval_names(
@@ -108,6 +109,21 @@ def _validate_approval_names(
     unknown = set(names) - available_names - unavailable_names
     if unknown:
         errors["tool_permissions.approval_required_tools"] = f"包含未知工具：{', '.join(sorted(unknown))}"
+
+
+def _validate_gateway_settings(errors: dict[str, str], settings: Settings) -> None:
+    """校验 Gateway 仅在本机监听，并保留可选的本机认证令牌。"""
+    gateway = settings.gateway
+    if gateway.host not in {"127.0.0.1", "localhost", "::1"}:
+        errors["gateway.host"] = "仅支持本机监听地址"
+    if type(gateway.port) is not int or gateway.port <= 0:
+        errors["gateway.port"] = "必须是正整数"
+    if not isinstance(gateway.principal_id, str) or not gateway.principal_id.strip():
+        errors["gateway.principal_id"] = "必须是非空字符串"
+    if gateway.auth_token is not None and (
+        not isinstance(gateway.auth_token, str) or not gateway.auth_token.strip()
+    ):
+        errors["gateway.auth_token"] = "必须是非空字符串或 null"
 
 
 def _validate_proactive_settings(errors: dict[str, str], settings: Settings) -> None:

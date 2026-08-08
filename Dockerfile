@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir \
     "mcp>=1.26.0,<2.0.0" \
     "fastapi>=0.115.0" \
     "uvicorn[standard]>=0.30.0" \
+    "websockets>=14.0,<16.0" \
     "tzdata>=2024.1" \
     "prompt_toolkit>=3.0.0"
 
@@ -37,4 +38,4 @@ COPY --from=frontend-build /build/web/static ./web/static/
 
 EXPOSE 8000
 
-CMD ["python", "-m", "Turning-Good-Agent", "web", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "Turning-Good-Agent", "gateway", "--host", "0.0.0.0", "--port", "8000"]

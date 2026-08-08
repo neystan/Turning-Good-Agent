@@ -1,29 +1,42 @@
 from __future__ import annotations
 
 import asyncio
-import copy
-from collections.abc import Awaitable, Callable
-from dataclasses import asdict
-from typing import Any
+import os
+from dataclasses import asdict, dataclass, field
 from uuid import uuid4
 
 from .proactive_control import ProactiveDomain, ProactiveSnapshot, WebProactiveControlService
-from .proactive_ownership import OwnershipState
 
 
-_DOMAINS = frozenset({"cron", "breakbeat", "dream", "skill", "incident"})
-_NOTICE_FIELDS = frozenset({"id", "domain", "entity_id", "severity", "title", "message", "target"})
+@dataclass(frozen=True, slots=True)
+class GatewayProactiveState:
+    """Web 兼容投影：主动能力始终由当前 Gateway 唯一持有。"""
 
+    owner_id: str = "gateway"
+    owner_pid: int = field(default_factory=os.getpid)
+    owner_kind: str = "gateway"
 
-def mutations_allowed(owner: OwnershipState, *, proactive_enabled: bool) -> bool:
-    return owner.writable or (not proactive_enabled and owner.owner_id is None)
+    @property
+    def mode(self) -> str:
+        return "owner"
+
+    @property
+    def writable(self) -> bool:
+        return True
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "mode": self.mode,
+            "writable": self.writable,
+            "owner_id": self.owner_id,
+            "owner_kind": self.owner_kind,
+            "owner_pid": self.owner_pid,
+        }
 
 
 def snapshot_payload(
     snapshot: ProactiveSnapshot,
-    owner: OwnershipState,
-    *,
-    proactive_enabled: bool,
+    owner: GatewayProactiveState,
 ) -> dict[str, object]:
     """将领域快照转换成唯一的 WebSocket/REST 传输形状。"""
     return {
@@ -33,7 +46,7 @@ def snapshot_payload(
         "runtime": asdict(snapshot.runtime),
         "proactive_revision": snapshot.proactive_revision,
         "owner": owner.to_dict(),
-        "mutations_allowed": mutations_allowed(owner, proactive_enabled=proactive_enabled),
+        "mutations_allowed": True,
     }
 
 
@@ -43,17 +56,12 @@ class ProactiveEventHub:
     def __init__(
         self,
         controller: WebProactiveControlService,
-        ownership: Callable[[], OwnershipState],
+        owner: GatewayProactiveState,
     ) -> None:
         self._controller = controller
-        self._ownership = ownership
+        self._owner = owner
         self._queues: set[asyncio.Queue[dict[str, object]]] = set()
         self._lock = asyncio.Lock()
-        self._last_bridge_payload: dict[str, object] | None = None
-        self._bridge_snapshots: dict[str, dict[str, object]] = {}
-        self._bridge_owner_id: str | None = None
-        self._bridge_source_revision = 0
-        self._bridge_rebased = False
 
     async def subscribe(self) -> asyncio.Queue[dict[str, object]]:
         queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
@@ -66,21 +74,10 @@ class ProactiveEventHub:
             self._queues.discard(queue)
 
     def initial_snapshots(self) -> list[dict[str, object]]:
-        owner = self._ownership()
-        snapshots = []
-        for domain, snapshot in self._controller.snapshot_all().items():
-            cached = self._bridge_snapshots.get(domain)
-            if cached is not None and self._bridge_owner_is_current(cached, owner):
-                snapshots.append(copy.deepcopy(cached))
-            else:
-                snapshots.append(
-                    snapshot_payload(
-                        snapshot,
-                        owner,
-                        proactive_enabled=self._proactive_enabled(),
-                    )
-                )
-        return snapshots
+        return [
+            snapshot_payload(snapshot, self._owner)
+            for snapshot in self._controller.snapshot_all().values()
+        ]
 
     async def publish_all(self) -> None:
         """广播当前完整快照，用于所有权变化和重连校正。"""
@@ -96,11 +93,9 @@ class ProactiveEventHub:
         """推送完整领域快照；后台变更时递增 revision，动作结果复用既有 revision。"""
         if changed:
             self._controller.bump_revision()
-        owner = self._ownership()
         payload = snapshot_payload(
             self._controller.snapshot_domain(domain),
-            owner,
-            proactive_enabled=self._proactive_enabled(),
+            self._owner,
         )
         await self._broadcast(payload)
         return payload
@@ -116,7 +111,6 @@ class ProactiveEventHub:
         target: str,
     ) -> dict[str, object]:
         self._controller.bump_revision()
-        owner = self._ownership()
         payload: dict[str, object] = {
             "type": "notice",
             "id": str(uuid4()),
@@ -127,91 +121,11 @@ class ProactiveEventHub:
             "message": message,
             "target": target,
             "proactive_revision": self._controller.proactive_revision,
-            "owner": owner.to_dict(),
-            "mutations_allowed": mutations_allowed(owner, proactive_enabled=self._proactive_enabled()),
+            "owner": self._owner.to_dict(),
+            "mutations_allowed": True,
         }
         await self._broadcast(payload)
         return payload
-
-    async def accept_bridge_event(self, payload: dict[str, object]) -> None:
-        """接收本机 CLI 所有者转发的完整事件，不接受公网或旧事件。"""
-        self._validate_bridge_payload(payload)
-        source_payload = copy.deepcopy(payload)
-        if self._last_bridge_payload == source_payload:
-            return
-        revision = payload["proactive_revision"]
-        assert isinstance(revision, int)
-        owner = payload["owner"]
-        assert isinstance(owner, dict)
-        owner_id = owner["owner_id"]
-        assert isinstance(owner_id, str)
-        if owner_id != self._bridge_owner_id:
-            self._bridge_owner_id = owner_id
-            self._bridge_source_revision = 0
-            self._bridge_rebased = self._controller.proactive_revision > 0
-        if revision <= self._bridge_source_revision:
-            raise ValueError("bridge revision 必须严格递增")
-        self._bridge_source_revision = revision
-        if self._bridge_rebased:
-            payload = copy.deepcopy(payload)
-            payload["proactive_revision"] = self._controller.bump_revision()
-        else:
-            self._controller.advance_revision(revision)
-        self._last_bridge_payload = source_payload
-        payload = self._project_bridge_payload(payload)
-        if payload["type"] == "snapshot":
-            self._bridge_snapshots[str(payload["domain"])] = copy.deepcopy(payload)
-        await self._broadcast(payload)
-
-    def _project_bridge_payload(self, payload: dict[str, object]) -> dict[str, object]:
-        owner = self._ownership()
-        projected = copy.deepcopy(payload)
-        projected["owner"] = owner.to_dict()
-        projected["mutations_allowed"] = mutations_allowed(owner, proactive_enabled=self._proactive_enabled())
-        return projected
-
-    def _proactive_enabled(self) -> bool:
-        settings = getattr(self._controller.runtime, "settings", None)
-        proactive = getattr(settings, "proactive", None)
-        return bool(getattr(proactive, "enabled", False))
-
-    def _validate_bridge_payload(self, payload: dict[str, object]) -> None:
-        if not isinstance(payload, dict):
-            raise ValueError("bridge payload 必须是对象")
-        event_type = payload.get("type")
-        if event_type not in {"snapshot", "notice"}:
-            raise ValueError("bridge payload type 必须是 snapshot 或 notice")
-        domain = payload.get("domain")
-        if domain not in _DOMAINS:
-            raise ValueError("bridge payload domain 无效")
-        revision = payload.get("proactive_revision")
-        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
-            raise ValueError("bridge revision 无效")
-        owner = payload.get("owner")
-        if not isinstance(owner, dict) or owner.get("owner_kind") != "cli":
-            raise ValueError("bridge owner 必须是 CLI 所有者")
-        if not isinstance(owner.get("owner_id"), str) or not owner["owner_id"]:
-            raise ValueError("bridge owner 缺少 owner_id")
-        active_owner = self._ownership()
-        if active_owner.owner_kind != "cli" or owner["owner_id"] != active_owner.owner_id:
-            raise ValueError("bridge event 来自 foreign owner")
-        if event_type == "snapshot":
-            if not isinstance(payload.get("data"), dict) or not isinstance(payload.get("runtime"), dict):
-                raise ValueError("bridge snapshot 必须包含 data 和 runtime")
-            return
-        if not _NOTICE_FIELDS.issubset(payload):
-            raise ValueError("bridge notice 缺少通知字段")
-        if any(not isinstance(payload[field], str) or not payload[field] for field in _NOTICE_FIELDS):
-            raise ValueError("bridge notice 字段无效")
-
-    @staticmethod
-    def _bridge_owner_is_current(payload: dict[str, object], owner: OwnershipState) -> bool:
-        bridge_owner = payload.get("owner")
-        return (
-            owner.owner_kind == "cli"
-            and isinstance(bridge_owner, dict)
-            and bridge_owner.get("owner_id") == owner.owner_id
-        )
 
     async def _broadcast(self, payload: dict[str, object]) -> None:
         async with self._lock:

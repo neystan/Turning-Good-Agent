@@ -53,9 +53,6 @@
 
 .overlay-portal .session-menu { position: static; z-index: auto; }
 
-/* 交互反馈使用中性阴影，避免页面出现高饱和焦点框。 */
-button:not(:disabled):hover { box-shadow: 0 6px 16px color-mix(in srgb, var(--shadow) 72%, transparent); }
-
 /* 非聊天正文的滚动容器统一使用贴边的低对比度圆角滑块。 */
 :where(.sidebar, .inspector-body, .session-search-results, .activity-steps, .markdown pre, .code-block code, .inspector-section pre, .settings-editor-scroll, .slash-command-menu) { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 48%, transparent) transparent; }
 

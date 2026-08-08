@@ -71,22 +71,50 @@ export function UsageFacts({ usage }: { usage: ProactiveUsage }) {
   </dl>;
 }
 
-export function DomainSummary({ nextRunAt, runtimeNextRunAt, running, usage, timezone }: {
+export function DomainSummary({ nextRunAt, usage, timezone }: {
   nextRunAt?: string | null;
-  runtimeNextRunAt: string | null;
-  running: boolean;
   usage?: ProactiveUsage;
   timezone?: string | null;
 }) {
+  if (nextRunAt === undefined && !usage) return null;
   return <section className="proactive-domain-summary" aria-label="领域运行摘要">
     <dl className="proactive-summary-facts">
-      <div><dt>服务</dt><dd>{running ? "运行中" : "空闲"}</dd></div>
-      <div><dt>数据计划</dt><dd>{nextRunAt || "暂无计划"}</dd></div>
-      <div><dt>运行投影</dt><dd>{runtimeNextRunAt || "暂无计划"}</dd></div>
-      {timezone && <div><dt>配置时区</dt><dd>{timezone}</dd></div>}
+      {nextRunAt !== undefined && <div><dt>下次执行</dt><dd>{formatNextRun(nextRunAt, timezone)}</dd></div>}
     </dl>
     {usage && <UsageFacts usage={usage} />}
   </section>;
+}
+
+export function formatNextRun(value: string | null, timezone?: string | null): string {
+  if (!value) return "暂无计划";
+  return formatLocalDateTime(value, timezone);
+}
+
+export function formatProactiveState(value: string): string {
+  return {
+    queued: "等待执行",
+    running: "运行中",
+    in_progress: "进行中",
+    completed: "已完成",
+    partial: "部分完成",
+    failed: "失败",
+    open: "未解决",
+    resolved: "已解决",
+    idle: "空闲",
+    readonly: "只读",
+  }[value] || value;
+}
+
+export function formatLocalDateTime(value: string | null | undefined, timezone?: string | null): string {
+  if (!value) return "时间待确认";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "时间待确认";
+  const options: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short", ...(timezone ? { timeZone: timezone } : {}) };
+  try {
+    return new Intl.DateTimeFormat("zh-CN", options).format(date);
+  } catch {
+    return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
+  }
 }
 
 export function EmptyRecords({ children }: { children: string }) {

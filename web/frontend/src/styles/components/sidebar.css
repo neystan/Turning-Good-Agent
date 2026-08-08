@@ -5,9 +5,9 @@
 
 .brand .mobile-only { margin-left: auto; }
 
-.new-session, .restore-session { width: 100%; display: flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--border); border-radius: 6px; padding: 9px; background: var(--surface-raised); cursor: pointer; }
+.restore-session { width: 100%; display: flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--border); border-radius: 6px; padding: 9px; background: var(--surface-raised); cursor: pointer; }
 
-.new-session:hover, .restore-session:hover { background: var(--surface-hover); }
+.restore-session:hover { background: var(--surface-hover); }
 
 .session-section { margin-top: 18px; }
 
@@ -43,9 +43,7 @@
 .session-menu { z-index: 35; }
 
 /* 搜索对话框保持会话选择的键盘焦点和长列表滚动边界。 */
-.sidebar-commands { display: flex; gap: 6px; }
-
-.sidebar-commands .new-session { flex: 1; }
+.sidebar-commands { display: grid; gap: 4px; }
 
 /* Radix 统一托管浮层位置、外部关闭与焦点回归。 */
 .session-menu { z-index: 100; top: auto; right: auto; min-width: 164px; padding: 5px; }
@@ -55,9 +53,6 @@
 .session-menu [role="menuitem"][data-highlighted] { background: var(--surface-hover); }
 
 .session-menu-separator { height: 1px; margin: 5px 3px; background: var(--border); }
-
-/* 会话栏采用固定的右侧操作槽，避免标题与置顶状态互相挤压。 */
-.new-session { min-height: 44px; border-radius: 14px; }
 
 .session-section { margin-top: 16px; }
 
@@ -106,14 +101,6 @@
 
 .app-shell.is-sidebar-collapsed .sidebar-collapse-control { width: 0; min-width: 0; padding: 0; opacity: 0; transform: translateX(.75rem); pointer-events: none; }
 
-.sidebar-commands { align-items: center; }
-
-.new-session { min-height: 40px; border-color: transparent; padding: 7px 9px; background: var(--surface-raised); }
-
-.sidebar-commands > .icon-button { width: 32px; height: 32px; }
-
-.new-session:hover { background: var(--surface-hover); }
-
 .session-menu { box-shadow: 0 14px 32px var(--shadow); }
 
 .session-menu-separator { display: none; }
@@ -124,16 +111,12 @@
 
 .session-select:hover { background: transparent; }
 
-.session-actions .icon-button:hover { box-shadow: 0 6px 16px color-mix(in srgb, var(--shadow) 72%, transparent); }
-
 /* 会话操作菜单与侧栏共用底色，只在命中项时提供阴影反馈。 */
 .session-menu { width: 108px; min-width: 108px; padding: 4px; border-radius: var(--radius-control); background: var(--surface); box-shadow: none; }
 
 .session-menu [role="menuitem"] { width: 100%; min-height: 30px; justify-content: flex-start; gap: 6px; padding: 0 7px; background: transparent; box-shadow: none; font-size: 13px; white-space: nowrap; }
 
 .session-menu [role="menuitem"] svg { width: 14px; height: 14px; flex: 0 0 14px; }
-
-.session-menu [role="menuitem"][data-highlighted], .session-menu [role="menuitem"]:hover { background: var(--surface-hover); box-shadow: 0 5px 14px color-mix(in srgb, var(--shadow) 58%, transparent); }
 
 .session-menu [role="menuitem"].danger { margin-top: 0; background: transparent; }
 
@@ -159,11 +142,9 @@
 /* 悬浮或打开会话操作菜单时，三点锚点升为独立的圆形浮面。 */
 .session-actions:has(.icon-button[aria-expanded="true"]) { opacity: 1; pointer-events: auto; }
 
-.session-actions .icon-button:is(:hover, [aria-expanded="true"]) { position: relative; z-index: 201; border-radius: var(--radius-round); background: var(--surface-raised); box-shadow: 0 5px 14px color-mix(in srgb, var(--shadow) 58%, transparent); }
+.session-actions .icon-button { box-shadow: 0 1px 4px color-mix(in srgb, var(--shadow) 28%, transparent); }
 
-:root[data-theme="light"] .new-session { background: #eceeef; color: #3a3d42; }
-
-:root[data-theme="light"] .new-session:hover { background: #e2e4e7; }
+.session-actions .icon-button:is(:hover, [aria-expanded="true"]) { position: relative; z-index: 201; border-radius: var(--radius-round); background: var(--surface-raised); box-shadow: 0 3px 8px color-mix(in srgb, var(--shadow) 38%, transparent); }
 
 .sidebar-settings { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; margin: 10px; border: 0; border-radius: var(--radius-control); padding: 0 10px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: .875rem; }
 
@@ -193,35 +174,51 @@
 
 .sidebar-workspaces { display: grid; gap: 2px; padding: 6px 10px 10px; }
 
-.sidebar-proactive,
-.sidebar-settings { width: 100%; min-height: 40px; display: inline-flex; align-items: center; gap: 8px; margin: 0; border: 0; border-radius: var(--radius-control); padding: 0 10px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: .875rem; text-align: left; }
+.sidebar-proactive-section { display: grid; margin: 10px 0; }
 
+.sidebar-proactive-domains { display: grid; gap: 4px; }
+
+.sidebar-primary-action,
+.sidebar-proactive,
+.sidebar-settings { width: 100%; display: inline-flex; align-items: center; gap: 8px; margin: 0; border: 0; border-radius: var(--radius-control); padding: 0 10px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: .875rem; text-align: left; }
+
+.sidebar-primary-action,
+.sidebar-proactive { min-height: 36px; justify-content: flex-start; }
+
+.sidebar-primary-action:hover,
+.sidebar-primary-action:focus-visible,
 .sidebar-proactive:hover,
 .sidebar-proactive:focus-visible,
 .sidebar-settings:hover,
 .sidebar-settings:focus-visible { background: var(--surface-hover); color: var(--text); }
 
-.sidebar-health { min-width: 0; display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--muted); font-size: .6875rem; white-space: nowrap; }
+.sidebar-proactive[aria-current="page"] { background: var(--surface-hover); color: var(--text); font-weight: 600; }
 
-.sidebar-health i { width: 7px; height: 7px; flex: 0 0 7px; border-radius: var(--radius-round); background: var(--muted); }
+.sidebar-proactive-health { min-width: 0; display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--muted); font-size: .6875rem; white-space: nowrap; }
 
-.sidebar-health[data-state="idle"] { color: var(--success); }
-.sidebar-health[data-state="idle"] i { background: var(--success); }
-.sidebar-health[data-state="active"] { color: var(--accent); }
-.sidebar-health[data-state="active"] i { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
-.sidebar-health[data-state="incident"] { color: var(--danger); }
-.sidebar-health[data-state="incident"] i { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 16%, transparent); }
-.sidebar-health[data-state="readonly"] { color: var(--muted); }
-.sidebar-health[data-state="readonly"] i,
-.sidebar-health[data-state="unavailable"] i { background: var(--muted); }
+.sidebar-proactive-health i { width: 6px; height: 6px; flex: 0 0 6px; border-radius: var(--radius-round); background: var(--muted); }
+
+.sidebar-proactive-health[data-state="idle"] { color: var(--success); }
+.sidebar-proactive-health[data-state="idle"] i { background: var(--success); }
+.sidebar-proactive-health[data-state="active"] { color: var(--accent); }
+.sidebar-proactive-health[data-state="active"] i { background: var(--accent); }
+.sidebar-proactive-health[data-state="incident"] { color: var(--danger); }
+.sidebar-proactive-health[data-state="incident"] i { background: var(--danger); }
+
+.session-section { margin-top: 12px; }
+
+.section-title { min-height: 28px; padding: 4px 8px; font-size: .75rem; }
+
+.session-row { border-radius: 10px; padding: 1px 3px; }
+
+.session-select { min-height: 34px; padding: 6px 5px; font-size: .8125rem; }
 
 .app-shell.is-sidebar-collapsed .sidebar-workspaces { padding-inline: 10px; }
 .app-shell.is-sidebar-collapsed .sidebar-proactive,
 .app-shell.is-sidebar-collapsed .sidebar-settings { justify-content: center; padding-inline: 0; }
-.app-shell.is-sidebar-collapsed .sidebar-proactive > span:not(.sidebar-health),
-.app-shell.is-sidebar-collapsed .sidebar-settings > span,
-.app-shell.is-sidebar-collapsed .sidebar-health > span { display: none; }
-.app-shell.is-sidebar-collapsed .sidebar-health { margin-left: 0; }
+.app-shell.is-sidebar-collapsed .sidebar-proactive-section { margin-top: 10px; }
+.app-shell.is-sidebar-collapsed .sidebar-proactive > span,
+.app-shell.is-sidebar-collapsed .sidebar-settings > span { display: none; }
 
 .session-select {
   color: var(--muted);
@@ -286,4 +283,12 @@
 .session-menu [role="menuitem"]:hover {
   background: var(--surface-hover);
   box-shadow: none;
+}
+
+.session-menu [role="menuitem"].danger {
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--shadow) 28%, transparent);
+}
+
+.session-menu [role="menuitem"].danger:is([data-highlighted], :hover) {
+  box-shadow: 0 3px 8px color-mix(in srgb, var(--shadow) 38%, transparent);
 }

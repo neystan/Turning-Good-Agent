@@ -46,6 +46,29 @@ def test_apply_merges_changes_and_redacts_api_key(tmp_path) -> None:
     assert "api_key" not in view.desired["llm"]
 
 
+def test_desired_revision_ignores_gateway_auth_token(tmp_path) -> None:
+    """Would fail if Gateway's private local CLI credential looked like a Runtime config Apply."""
+    config_path = tmp_path / "settings.local.json"
+    config_path.write_text(
+        json.dumps({"gateway": {"auth_token": "first-local-token"}, "llm": {"model": "model-a"}}),
+        encoding="utf-8",
+    )
+    service = control_module.WebConfigControlService(
+        config_path,
+        native_tool_names={"edit_file", "exec", "write_file", "write_stdin"},
+        live_tool_names=lambda: {"edit_file", "exec", "write_file", "write_stdin"},
+        unavailable_approval_names=lambda: set(),
+    )
+    before = service.read_desired().revision
+
+    config_path.write_text(
+        json.dumps({"gateway": {"auth_token": "second-local-token"}, "llm": {"model": "model-a"}}),
+        encoding="utf-8",
+    )
+
+    assert service.read_desired().revision == before
+
+
 def test_control_plane_rejects_global_auto_approval_changes(tmp_path) -> None:
     config_path = tmp_path / "settings.local.json"
     config_path.write_text(json.dumps({"tool_permissions": {"auto_approve_tools": False}}), encoding="utf-8")

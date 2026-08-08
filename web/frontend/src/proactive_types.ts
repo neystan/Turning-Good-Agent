@@ -1,5 +1,6 @@
 export type ProactiveRouteDomain = "cron" | "breakbeat" | "memory" | "skills" | "incidents";
 export type ProactiveWireDomain = "cron" | "breakbeat" | "dream" | "skill" | "incident";
+export type ProactiveRoute = ProactiveRouteDomain;
 
 export type ProactiveDomain = ProactiveRouteDomain;
 
@@ -155,7 +156,7 @@ export type ProactiveState = {
   connection: "connecting" | "connected" | "reconnecting" | "disconnected";
 };
 
-export function routeDomain(domain: ProactiveRouteDomain): string {
+export function routeDomain(domain: ProactiveRoute): string {
   return `#proactive/${domain}`;
 }
 
@@ -167,8 +168,8 @@ export function routeDomainForWire(domain: ProactiveWireDomain): ProactiveRouteD
   return wireToRoute[domain];
 }
 
-export function proactiveRouteFromHash(hash = window.location.hash): ProactiveRouteDomain | null {
+export function proactiveRouteFromHash(hash = window.location.hash): ProactiveRoute | null {
   if (hash === "#proactive" || hash === "#proactive/") return "cron";
   const match = hash.match(/^#proactive\/(cron|breakbeat|memory|skills|incidents)$/);
-  return match ? match[1] as ProactiveRouteDomain : null;
+  return match ? match[1] as ProactiveRoute : null;
 }

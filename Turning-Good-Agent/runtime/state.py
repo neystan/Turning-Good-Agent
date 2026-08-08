@@ -4,7 +4,7 @@ from enum import Enum, auto
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from ..bus.messages import OutboundMessage, utc_now_iso
+from ..bus.messages import OutboundMessage, Recipient, utc_now_iso
 from ..context.session_context import build_session_context
 from ..context.token_budget import build_context_token_breakdown, build_save_context_token_breakdown
 from ..memory.short_term import ShortTermMemory
@@ -80,7 +80,7 @@ async def session(runtime: AgentRuntime, ctx: TurnContext) -> str:
     """清理过期会话并加载/创建当前会话。"""
     msg = ctx.inbound
     await runtime.sessions.cleanup_expired_sessions(runtime.settings.sessions.retention_days)
-    ctx.session = await runtime.sessions.load_or_create(msg.session_id, msg.user_id, msg.channel)
+    ctx.session = await runtime.sessions.load_or_create(msg.route)
     return "ok"
 
 
@@ -244,10 +244,27 @@ async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
 
 async def respond(ctx: TurnContext) -> str:
     """构造出站消息。"""
+    recipient = Recipient(
+        ctx.inbound.route.principal_id,
+        ctx.inbound.route.channel,
+        ctx.inbound.route.conversation_id,
+    )
     if ctx.error:
-        ctx.outbound = OutboundMessage.error(ctx.inbound.session_id, ctx.inbound.channel, ctx.final_content)
+        ctx.outbound = OutboundMessage(
+            str(uuid4()),
+            ctx.inbound.session_id,
+            recipient=recipient,
+            content=ctx.final_content,
+            event_type="response.error",
+            event_id=ctx.inbound.id,
+        )
     else:
-        ctx.outbound = OutboundMessage.completed(ctx.inbound.session_id, ctx.inbound.channel, ctx.final_content)
+        ctx.outbound = OutboundMessage.completed(
+            ctx.inbound.session_id,
+            recipient,
+            ctx.final_content,
+            event_id=ctx.inbound.id,
+        )
         if ctx.cancelled:
             ctx.outbound.metadata["outcome"] = "cancelled"
     return "ok"

@@ -4,22 +4,16 @@ import asyncio
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
-from uuid import uuid4
+from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from ...bus.queue import AsyncMessageBus
-from ...config.settings import Settings
+from ...channels.base import ChannelCapabilities
+from ...gateway.auth import is_authorized_bearer
 from ...llm.factory import build_llm
-from ...proactive.delivery import WebDeliverySink
-from ...proactive.bridge import ProactiveBridgeListener
-from ...proactive.service import ProactiveService
-from ...runtime.runtime import AgentRuntime
 from ...sessions.types import MessageRecord, Session, ToolCallRecord
-from .coordinator import WebSessionCoordinator
 from .config_control import ApprovalToolChanges, ConfigApplyRequest, ConfigValidationError, WebConfigControlService
 from .http_errors import config_validation_response
 from .read_models import (
@@ -30,138 +24,54 @@ from .read_models import (
     build_tool_catalog,
     page_tool_calls,
 )
-from .runtime_supervisor import RuntimeSupervisor
 from .proactive_control import (
     ProactiveConflictError,
     ProactiveNotFoundError,
-    WebProactiveControlService,
 )
-from .proactive_events import ProactiveEventHub, mutations_allowed, snapshot_payload
-from .proactive_ownership import ProactiveOwnershipLease
-from .proactive_lifecycle import WebProactiveLifecycle
+from .proactive_events import snapshot_payload
+
+if TYPE_CHECKING:
+    from ...gateway.host import GatewayHost
 
 
-def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
-    """创建复用既有 Runtime 的本机 Web Host。"""
-    coordinator = WebSessionCoordinator(
-        runtime,
-        AsyncMessageBus(),
-        settings.web.max_concurrent_sessions,
-        settings.web.event_buffer_size,
-    )
-    config_path = settings.local_config_path or Path.cwd() / "settings.local.json"
-    native_tool_names = {name for name in runtime.agent_loop.tools.tool_names if not name.startswith("mcp_")}
-    supervisor_holder: dict[str, RuntimeSupervisor[AgentRuntime]] = {}
-    ownership = ProactiveOwnershipLease(settings.data_dir, owner_kind="web")
-    proactive_control = WebProactiveControlService(runtime)
-    proactive_events = ProactiveEventHub(proactive_control, ownership.state)
-    proactive_bridge = ProactiveBridgeListener(settings.data_dir, proactive_events.accept_bridge_event)
+WEB_CHANNEL_CAPABILITIES = ChannelCapabilities(supports_guidance=True)
 
-    async def publish_web_notice(**notice: str) -> None:
-        domain = str(notice["domain"])
-        targets = {
-            "cron": "#proactive/cron",
-            "breakbeat": "#proactive/breakbeat",
-            "dream": "#proactive/memory",
-            "skill": "#proactive/skills",
-            "incident": "#proactive/incidents",
-        }
-        await proactive_events.publish_notice(
-            domain=domain,  # type: ignore[arg-type]
-            entity_id=notice["entity_id"],
-            severity=notice["severity"],
-            title=notice["title"],
-            message=notice["message"],
-            target=targets[domain],
-        )
-        await proactive_events.publish_snapshot(domain, changed=False)  # type: ignore[arg-type]
 
-    async def publish_domain_change(domain: str) -> None:
-        await proactive_events.publish_snapshot(domain, changed=True)  # type: ignore[arg-type]
+def _require_boolean(action: dict[str, Any], name: str) -> bool:
+    """只接受 JSON 原生 boolean，避免字符串或数字发生真值转换。"""
+    value = action.get(name)
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} 必须是布尔值")
+    return value
 
-    def create_proactive_service(selected_runtime: AgentRuntime) -> ProactiveService:
-        return ProactiveService(
-            selected_runtime,
-            coordinator.bus,
-            target_channel="web",
-            delivery_sink=WebDeliverySink(publish_web_notice),
-            on_domain_change=publish_domain_change,
-        )
 
-    async def notify_proactive_idle() -> None:
-        supervisor = supervisor_holder.get("supervisor")
-        if supervisor is not None:
-            await supervisor.notify_idle()
-
-    proactive_lifecycle = WebProactiveLifecycle(
-        runtime,
-        ownership,
-        service_factory=create_proactive_service,
-        bind_runtime=proactive_control.replace_runtime,
-        publish_state=proactive_events.publish_all,
-        notify_idle=notify_proactive_idle,
-    )
-
-    def live_tool_names() -> set[str]:
-        active_runtime = supervisor_holder.get("supervisor", None)
-        selected = active_runtime.current_runtime if active_runtime is not None else runtime
-        catalog = build_tool_catalog(selected, "")
-        return {str(item["name"]) for item in catalog["tools"]}
-
-    def unavailable_approval_names() -> set[str]:
-        active_runtime = supervisor_holder.get("supervisor", None)
-        selected = active_runtime.current_runtime if active_runtime is not None else runtime
-        return set(selected.settings.tool_permissions.approval_required_tools) - live_tool_names()
-
-    config_control = WebConfigControlService(
-        config_path,
-        native_tool_names=native_tool_names,
-        live_tool_names=live_tool_names,
-        unavailable_approval_names=unavailable_approval_names,
-    )
-    initial_config = config_control.read_desired()
-
-    async def create_replacement_runtime() -> AgentRuntime:
-        replacement_settings = Settings.load(local_config_path=config_path)
-        return AgentRuntime.create_default(replacement_settings, build_llm(replacement_settings))
-
-    supervisor = RuntimeSupervisor(
-        runtime,
-        runtime_factory=create_replacement_runtime,
-        idle_probe=lambda: coordinator.is_globally_idle() and proactive_lifecycle.is_idle(),
-        active_revision=initial_config.revision,
-        on_prepare=coordinator.register_runtime,
-        on_activate=proactive_lifecycle.activate_replacement,
-    )
-    supervisor_holder["supervisor"] = supervisor
-    coordinator.set_runtime_supervisor(supervisor)
+def create_app(gateway: "GatewayHost") -> FastAPI:
+    """将 Web API 挂载到唯一 Gateway；Web 不拥有 Runtime 或主动生命周期。"""
+    settings = gateway.settings
+    coordinator = gateway.web_coordinator
+    supervisor = gateway.runtime_supervisor
+    config_control = gateway.config_control
+    proactive_control = gateway.proactive_control
+    proactive_events = gateway.proactive_events
+    proactive_owner_state = gateway.proactive_owner_state
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        """统一管理 Runtime 和 Web 调度器生命周期。"""
-        await proactive_bridge.start()
+        """Web 仅委托 Gateway 的统一生命周期。"""
+        await gateway.start()
         try:
-            await supervisor.start()
-            coordinator.register_runtime(runtime)
-            await runtime.start()
-            await coordinator.start()
-            await proactive_lifecycle.start()
             yield
         finally:
-            await proactive_lifecycle.stop()
-            await coordinator.close()
-            await supervisor.close()
-            await proactive_bridge.stop()
+            await gateway.close()
 
     app = FastAPI(title="Turning Good Agent", lifespan=lifespan)
+    app.state.gateway = gateway
     app.state.coordinator = coordinator
     app.state.runtime_supervisor = supervisor
     app.state.config_control = config_control
     app.state.proactive_control = proactive_control
     app.state.proactive_events = proactive_events
-    app.state.proactive_bridge = proactive_bridge
-    app.state.proactive_ownership = ownership
-    app.state.proactive_lifecycle = proactive_lifecycle
+    app.state.proactive_owner_state = proactive_owner_state
 
     def proactive_error(exc: Exception) -> HTTPException:
         if isinstance(exc, ProactiveNotFoundError):
@@ -170,27 +80,32 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
             return HTTPException(409, str(exc))
         return HTTPException(422, str(exc))
 
+    async def web_session_or_404(session_id: str) -> Session:
+        """仅允许 Web 控制面读取或修改其自身 Channel 的聊天会话。"""
+        session = await supervisor.current_runtime.sessions.store.load_session(session_id)
+        if session is None or (session.principal_id, session.channel) != (
+            gateway.settings.gateway.principal_id,
+            "web",
+        ):
+            raise HTTPException(404, "会话不存在")
+        return session
+
     def proactive_snapshot(domain: str) -> dict[str, object]:
         try:
             return snapshot_payload(
                 proactive_control.snapshot_domain(domain),
-                ownership.state(),
-                proactive_enabled=proactive_control.runtime.settings.proactive.enabled,
+                proactive_owner_state,
             )
         except ValueError as exc:
             raise proactive_error(exc) from exc
 
     @app.get("/api/proactive")
     async def get_proactive_snapshot() -> dict[str, object]:
-        owner = ownership.state()
         return {
             "snapshots": proactive_events.initial_snapshots(),
-            "owner": owner.to_dict(),
+            "owner": proactive_owner_state.to_dict(),
             "proactive_revision": proactive_control.proactive_revision,
-            "mutations_allowed": mutations_allowed(
-                owner,
-                proactive_enabled=proactive_control.runtime.settings.proactive.enabled,
-            ),
+            "mutations_allowed": True,
         }
 
     @app.get("/api/proactive/cron")
@@ -214,9 +129,6 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
         return proactive_snapshot("incident")
 
     async def proactive_action(domain: str, action: Any, *args: str) -> dict[str, object]:
-        owner = ownership.state()
-        if not mutations_allowed(owner, proactive_enabled=proactive_control.runtime.settings.proactive.enabled):
-            raise HTTPException(409, "主动能力由另一个 Host 持有，当前为只读")
         try:
             await action(*args)
             return await proactive_events.publish_snapshot(domain, changed=False)  # type: ignore[arg-type]
@@ -291,7 +203,7 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
                 ),
             )
             desired = config_control.apply(request)
-            await supervisor.request_reload(desired.revision)
+            await gateway.request_runtime_reload(desired.revision)
             return config_view()
         except ConfigValidationError as exc:
             return config_validation_response(exc.field_errors)
@@ -318,6 +230,7 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
 
     @app.get("/api/control/sessions/{session_id}/context")
     async def get_control_context(session_id: str) -> dict[str, object]:
+        await web_session_or_404(session_id)
         model = await build_context_read_model(supervisor.current_runtime, session_id, supervisor.status().active_revision)
         if model is None:
             raise HTTPException(404, "会话不存在")
@@ -325,6 +238,7 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
 
     @app.get("/api/control/sessions/{session_id}/tool-calls")
     async def get_control_tool_calls(session_id: str, limit: int = 50, cursor: str | None = None) -> dict[str, object]:
+        await web_session_or_404(session_id)
         try:
             model = await page_tool_calls(supervisor.current_runtime, session_id, limit, cursor)
         except ValueError as exc:
@@ -347,29 +261,28 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
     @app.get("/api/sessions")
     async def list_sessions(archived: bool = False) -> list[dict[str, Any]]:
         """返回一个会话分组的轻量列表。"""
-        return [_session_dict(item) for item in await supervisor.current_runtime.sessions.store.list_sessions(archived)]
+        sessions = await supervisor.current_runtime.sessions.list_sessions(
+            archived,
+            channel="web",
+            principal_id=gateway.settings.gateway.principal_id,
+        )
+        return [_session_dict(item) for item in sessions]
 
     @app.get("/api/sessions/{session_id}")
     async def get_session(session_id: str) -> dict[str, Any]:
         """返回单个会话元数据。"""
-        session = await supervisor.current_runtime.sessions.store.load_session(session_id)
-        if session is None:
-            raise HTTPException(404, "会话不存在")
-        return _session_dict(session)
+        return _session_dict(await web_session_or_404(session_id))
 
     @app.get("/api/sessions/{session_id}/messages")
     async def get_messages(session_id: str) -> list[dict[str, Any]]:
         """返回已持久化的原始对话消息。"""
-        if await supervisor.current_runtime.sessions.store.load_session(session_id) is None:
-            raise HTTPException(404, "会话不存在")
+        await web_session_or_404(session_id)
         return [_message_dict(item) for item in await supervisor.current_runtime.sessions.all_messages(session_id)]
 
     @app.get("/api/sessions/{session_id}/observability")
     async def get_observability(session_id: str) -> dict[str, Any]:
         """聚合既有 JSON/JSONL 的会话观测数据。"""
-        session = await supervisor.current_runtime.sessions.store.load_session(session_id)
-        if session is None:
-            raise HTTPException(404, "会话不存在")
+        session = await web_session_or_404(session_id)
         return {
             "session": _session_dict(session),
             "traces": await supervisor.current_runtime.sessions.store.all_turn_traces(session_id),
@@ -382,17 +295,14 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
     @app.get("/api/sessions/{session_id}/context-window")
     async def get_context_window(session_id: str) -> dict[str, int]:
         """返回 Composer 所需的轻量上下文窗口读数。"""
-        if await supervisor.current_runtime.sessions.store.load_session(session_id) is None:
-            raise HTTPException(404, "会话不存在")
+        await web_session_or_404(session_id)
         traces = await supervisor.current_runtime.sessions.store.all_turn_traces(session_id)
         return _context_window_dict(traces, supervisor.current_runtime.settings.runtime.max_context_tokens)
 
     @app.patch("/api/sessions/{session_id}")
     async def patch_session(session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         """更新标题、置顶或归档状态。"""
-        session = await supervisor.current_runtime.sessions.store.load_session(session_id)
-        if session is None:
-            raise HTTPException(404, "会话不存在")
+        await web_session_or_404(session_id)
         if bool(payload.get("archived")) and coordinator.is_active(session_id):
             raise HTTPException(409, "运行中、等待审批或停止中的会话不能归档")
         values: dict[str, Any] = {}
@@ -414,8 +324,7 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
         """删除一个非活动会话的完整目录。"""
         if coordinator.is_active(session_id):
             raise HTTPException(409, "运行中、等待审批或停止中的会话不能删除")
-        if await supervisor.current_runtime.sessions.store.load_session(session_id) is None:
-            raise HTTPException(404, "会话不存在")
+        await web_session_or_404(session_id)
         await supervisor.current_runtime.sessions.store.clear_session(session_id)
 
     @app.websocket("/ws/proactive")
@@ -462,7 +371,122 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
             )
             await proactive_events.unsubscribe(queue)
 
-    @app.websocket("/ws")
+    @app.websocket("/ws/cli")
+    async def cli_websocket(websocket: WebSocket) -> None:
+        """将认证后的本地 CLI 连接绑定为 Gateway 的即时 Channel。"""
+        auth_token = getattr(settings.gateway, "auth_token", None)
+        if not isinstance(auth_token, str) or not is_authorized_bearer(
+            websocket.headers.get("authorization"), auth_token
+        ):
+            await websocket.close(code=1008)
+            return
+        await websocket.accept()
+        connection_id: str | None = None
+        route = None
+        registered = False
+
+        async def send_action_error(message: str, request_id: str | None = None) -> None:
+            payload: dict[str, str] = {"type": "error", "message": message}
+            if request_id:
+                payload["request_id"] = request_id
+            await websocket.send_json(payload)
+
+        def require_text(action: dict[str, Any], name: str) -> str:
+            value = action.get(name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} 必须是非空字符串")
+            return value.strip()
+
+        def validate_bound_session(action: dict[str, Any]) -> None:
+            assert route is not None
+            supplied = action.get("session_id")
+            if supplied is not None and str(supplied) != route.session_id:
+                raise ValueError("CLI 会话不匹配")
+
+        try:
+            handshake = await websocket.receive_json()
+            if handshake.get("type") != "cli.connect":
+                raise ValueError("首个 CLI 动作必须是 cli.connect")
+            connection_id = require_text(handshake, "connection_id")
+            conversation_id = require_text(handshake, "conversation_id")
+
+            async def sender(payload: dict[str, object]) -> bool:
+                await websocket.send_json(payload)
+                return True
+
+            route = gateway.cli_transport.register(
+                connection_id,
+                settings.gateway.principal_id,
+                conversation_id,
+                sender,
+            )
+            registered = True
+            await websocket.send_json(
+                {
+                    "type": "cli.ready",
+                    "connection_id": connection_id,
+                    "conversation_id": route.conversation_id,
+                    "session_id": route.session_id,
+                }
+            )
+
+            while True:
+                action = await websocket.receive_json()
+                action_type = action.get("type")
+                request_id = str(action.get("request_id", "")) or None
+                try:
+                    if action_type == "message.send":
+                        validate_bound_session(action)
+                        accepted_request_id = await gateway.cli_coordinator.send(
+                            route,
+                            require_text(action, "request_id"),
+                            require_text(action, "content"),
+                        )
+                        await websocket.send_json(
+                            {
+                                "type": "message.accepted",
+                                "session_id": route.session_id,
+                                "request_id": accepted_request_id,
+                            }
+                        )
+                    elif action_type == "guidance.send":
+                        validate_bound_session(action)
+                        if not gateway.cli_transport.capabilities.supports_guidance:
+                            raise ValueError("CLI Channel 不支持运行中引导")
+                    elif action_type == "task.stop":
+                        validate_bound_session(action)
+                        await gateway.cli_coordinator.stop(route)
+                        await websocket.send_json({"type": "task.stopping", "session_id": route.session_id})
+                    elif action_type == "approval.resolve":
+                        validate_bound_session(action)
+                        approval_id = require_text(action, "approval_id")
+                        approved = _require_boolean(action, "approved")
+                        if not await gateway.cli_coordinator.resolve_approval(route, approval_id, approved):
+                            raise RuntimeError("审批已失效")
+                        await websocket.send_json(
+                            {
+                                "type": "approval.resolved",
+                                "session_id": route.session_id,
+                                "approval_id": approval_id,
+                                "approved": approved,
+                            }
+                        )
+                    else:
+                        raise ValueError("不支持的 CLI WebSocket 动作")
+                except (RuntimeError, ValueError) as exc:
+                    await send_action_error(str(exc), request_id)
+        except (RuntimeError, ValueError) as exc:
+            await send_action_error(str(exc))
+            await websocket.close(code=1008)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            if route is not None:
+                await gateway.cli_coordinator.disconnect(route)
+            if registered and connection_id is not None:
+                gateway.cli_transport.deregister(connection_id)
+
+    @app.websocket("/ws/web")
     async def websocket_endpoint(websocket: WebSocket) -> None:
         """处理实时事件订阅、消息、引导、停止与审批动作。"""
         await websocket.accept()
@@ -494,6 +518,11 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
                 action_type = action.get("type")
                 if action_type == "session.subscribe":
                     session_id = str(action["session_id"])
+                    try:
+                        await web_session_or_404(session_id)
+                    except HTTPException as exc:
+                        await send_action_error(str(exc.detail), client_action_id(action))
+                        continue
                     if forwarder is not None:
                         forwarder.cancel()
                         await asyncio.gather(forwarder, return_exceptions=True)
@@ -511,7 +540,7 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
                     action_id = client_action_id(action)
                     try:
                         requested_id = action.get("session_id")
-                        session_id = str(requested_id or f"web-{uuid4()}")
+                        session_id = str(requested_id) if requested_id else None
                         if requested_id:
                             session = await supervisor.current_runtime.sessions.store.load_session(session_id)
                             if session is not None and session.archived:
@@ -519,8 +548,7 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
                         session_id, request_id = await coordinator.send(
                             session_id,
                             str(action.get("content", "")),
-                            settings.user_id,
-                            action_id,
+                            client_action_id=action_id,
                         )
                     except (ValueError, RuntimeError) as exc:
                         await send_action_error(str(exc), action_id)
@@ -533,8 +561,33 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
                                 "client_action_id": action_id,
                             }
                         )
+                elif action_type == "catalog.execute":
+                    action_id = client_action_id(action)
+                    try:
+                        session_id = str(action.get("session_id", ""))
+                        if not session_id:
+                            raise ValueError("Catalog 动作需要当前会话")
+                        session = await web_session_or_404(session_id)
+                        if session.archived:
+                            raise ValueError("请先恢复已归档会话")
+                        catalog_action = str(action.get("catalog_action", ""))
+                        request_id = await gateway.catalog_actions.execute(session_id, catalog_action)
+                    except (ValueError, RuntimeError) as exc:
+                        await send_action_error(str(exc), action_id)
+                    else:
+                        await websocket.send_json(
+                            {
+                                "type": "catalog.accepted",
+                                "session_id": session_id,
+                                "request_id": request_id,
+                                "catalog_action": catalog_action,
+                                "client_action_id": action_id,
+                            }
+                        )
                 elif action_type == "guidance.send":
                     try:
+                        if not WEB_CHANNEL_CAPABILITIES.supports_guidance:
+                            raise RuntimeError("Web Channel 不支持运行中引导")
                         await coordinator.send_guidance(str(action.get("session_id", "")), str(action.get("content", "")))
                     except (ValueError, RuntimeError) as exc:
                         await send_action_error(str(exc), client_action_id(action))
@@ -546,8 +599,9 @@ def create_app(settings: Settings, runtime: AgentRuntime) -> FastAPI:
                 elif action_type == "approval.resolve":
                     action_id = client_action_id(action)
                     try:
+                        approved = _require_boolean(action, "approved")
                         resolved = await coordinator.resolve_approval(
-                            str(action.get("session_id", "")), str(action.get("approval_id", "")), bool(action.get("approved"))
+                            str(action.get("session_id", "")), str(action.get("approval_id", "")), approved
                         )
                         if not resolved:
                             raise RuntimeError("审批已失效")

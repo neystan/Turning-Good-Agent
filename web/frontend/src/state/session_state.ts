@@ -259,6 +259,7 @@ function appendTurnEvent(current: TurnState | undefined, event: TaskEvent): Turn
   const terminal = !isTurnRunning(status);
   return {
     requestId: event.request_id,
+    kind: event.type === "task.queued" && event.payload.kind === "catalog" ? "catalog" : current?.kind || "chat",
     status,
     events: [...(current?.events || []), event],
     guidanceCount: (current?.guidanceCount || 0) + (isGuidanceStatus(event) ? 1 : 0),

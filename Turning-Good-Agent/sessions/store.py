@@ -6,7 +6,7 @@ from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
 
-from ..bus.messages import utc_now_iso
+from ..bus.messages import ChannelRoute, utc_now_iso
 from .token_counter import count_content_tokens
 from .types import MessageRecord, Session, ToolCallRecord
 
@@ -27,10 +27,30 @@ class JsonlSessionStore:
         path = self._session_file(session_id)
         return self._read_session_file(path)
 
-    async def create_session(self, session_id: str, user_id: str, channel: str) -> Session:
+    async def create_session(
+        self,
+        session_id: str,
+        user_id: str | ChannelRoute,
+        channel: str | None = None,
+        conversation_id: str | None = None,
+    ) -> Session:
         """创建新会话并写入独立目录。"""
+        route = self._coerce_route(session_id, user_id, channel, conversation_id)
         now = utc_now_iso()
-        session = Session(session_id, user_id, channel, session_id, "", False, False, [], now, now)
+        session = Session(
+            session_id,
+            route.principal_id,
+            route.channel,
+            session_id,
+            "",
+            False,
+            False,
+            [],
+            now,
+            now,
+            principal_id=route.principal_id,
+            conversation_id=route.conversation_id,
+        )
         session_dir = self._new_session_dir(session_id, now)
         session_dir.mkdir(parents=True, exist_ok=True)
         self._write_session(session, session_dir)
@@ -110,7 +130,13 @@ class JsonlSessionStore:
         session.updated_at = utc_now_iso()
         self._write_session(session)
 
-    async def list_sessions(self, archived: bool | None = None) -> list[Session]:
+    async def list_sessions(
+        self,
+        archived: bool | None = None,
+        *,
+        channel: str | None = None,
+        principal_id: str | None = None,
+    ) -> list[Session]:
         """读取会话列表并按置顶和最后活动时间排序。"""
         sessions = [
             session
@@ -119,6 +145,10 @@ class JsonlSessionStore:
         ]
         if archived is not None:
             sessions = [item for item in sessions if item.archived is archived]
+        if channel is not None:
+            sessions = [item for item in sessions if item.channel == channel]
+        if principal_id is not None:
+            sessions = [item for item in sessions if item.principal_id == principal_id]
         sessions.sort(key=lambda item: item.updated_at, reverse=True)
         sessions.sort(key=lambda item: not item.pinned)
         return sessions
@@ -293,6 +323,20 @@ class JsonlSessionStore:
         """返回单个会话目录路径。"""
         return self._find_session_dir(session_id)
 
+    def has_session_record(self, session_id: str) -> bool:
+        """返回是否存在指定 ID 的原始会话记录（包括已拒绝的旧 schema）。"""
+        for session_dir in self._all_session_dirs():
+            path = session_dir / "session.json"
+            if not path.exists():
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(payload, dict) and payload.get("id") == session_id:
+                return True
+        return False
+
     def _new_session_dir(self, session_id: str, created_at: str) -> Path:
         """返回新会话目录路径。"""
         stamp = datetime.fromisoformat(created_at).astimezone(BEIJING_TZ).strftime("%Y%m%d_%H%M%S")
@@ -349,6 +393,8 @@ class JsonlSessionStore:
                 "id",
                 "user_id",
                 "channel",
+                "principal_id",
+                "conversation_id",
                 "title",
                 "summary",
                 "created_at",
@@ -395,6 +441,8 @@ class JsonlSessionStore:
             uncompacted_history=uncompacted_history,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            principal_id=row["principal_id"],
+            conversation_id=row["conversation_id"],
         )
 
     def _session_to_dict(self, session: Session) -> dict[str, Any]:
@@ -403,6 +451,8 @@ class JsonlSessionStore:
             "id": session.id,
             "user_id": session.user_id,
             "channel": session.channel,
+            "principal_id": session.principal_id,
+            "conversation_id": session.conversation_id,
             "title": session.title,
             "summary": session.summary,
             "pinned": session.pinned,
@@ -414,6 +464,22 @@ class JsonlSessionStore:
             "created_at": session.created_at,
             "updated_at": session.updated_at,
         }
+
+    def _coerce_route(
+        self,
+        session_id: str,
+        user_id: str | ChannelRoute,
+        channel: str | None,
+        conversation_id: str | None,
+    ) -> ChannelRoute:
+        """将旧创建参数归一化为带完整身份的路由。"""
+        if isinstance(user_id, ChannelRoute):
+            if user_id.session_id != session_id:
+                raise ValueError("session_id 必须与 route 一致")
+            return user_id
+        if channel is None:
+            raise TypeError("channel 为必填")
+        return ChannelRoute(user_id, channel, conversation_id or session_id, session_id)
 
     def _context_message_to_dict(self, record: MessageRecord) -> dict[str, str]:
         """将上下文消息转换为最小可读字典。"""

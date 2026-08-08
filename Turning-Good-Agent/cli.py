@@ -1,80 +1,177 @@
+from __future__ import annotations
+
 import argparse
 import asyncio
+import json
 import sys
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
 
-from .bus.messages import InboundMessage, OutboundMessage
-from .bus.queue import AsyncMessageBus
-from .channels.cli import CliChannelAdapter
 from .config.settings import Settings
-from .llm.factory import OPENAI_COMPATIBLE_PROVIDER, build_llm
-from .proactive.cli_lifecycle import CliProactiveLifecycle
-from .runtime.runtime import AgentRuntime
 
 
-class CliBusDispatcher:
-    """顺序消费 CLI 入站队列，并把 Runtime 终态重新写回 outbound。"""
+class GatewaySocket(Protocol):
+    """CLI 所需的最小异步 WebSocket 接口。"""
 
-    def __init__(self, bus: AsyncMessageBus, runtime: AgentRuntime) -> None:
-        """初始化对象状态。"""
-        self._bus = bus
-        self._runtime = runtime
-        self._task: asyncio.Task[None] | None = None
-        self._closed = False
-        self._pending: dict[str, asyncio.Future[OutboundMessage]] = {}
+    async def send(self, payload: str) -> None:
+        """发送一段 JSON 文本。"""
 
-    async def start(self) -> None:
-        """启动当前服务。"""
-        if self._task is None:
-            self._task = asyncio.create_task(self._dispatch(), name="cli-inbound-dispatcher")
+    async def recv(self) -> str | bytes:
+        """接收一段 JSON 文本。"""
 
     async def close(self) -> None:
-        """关闭当前资源。"""
-        self._closed = True
-        if self._task is not None:
-            self._task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._task
-            self._task = None
-        for future in self._pending.values():
-            if not future.done():
-                future.cancel()
-        self._pending.clear()
+        """关闭连接。"""
 
-    async def send_and_wait(self, message: InboundMessage) -> OutboundMessage:
-        """发送输入并等待回复。"""
-        if self._closed:
-            raise RuntimeError("CLI dispatcher 已关闭")
-        if message.id in self._pending:
-            raise RuntimeError("重复的 CLI 请求 ID")
-        future: asyncio.Future[OutboundMessage] = asyncio.get_running_loop().create_future()
-        self._pending[message.id] = future
+
+GatewayConnector = Callable[[str, dict[str, str]], Awaitable[GatewaySocket]]
+ContentReader = Callable[[], Awaitable[str]]
+Renderer = Callable[[str, bool], None]
+
+
+class GatewayCliClient:
+    """只通过认证 WebSocket 与唯一 Gateway 交互的 CLI Client。"""
+
+    def __init__(
+        self,
+        url: str,
+        auth_token: str,
+        *,
+        connector: GatewayConnector | None = None,
+        connection_id: str | None = None,
+    ) -> None:
+        self._url = url
+        self._auth_token = auth_token
+        self._connector = connector or _connect_websocket
+        self._connection_id = connection_id or str(uuid4())
+        self._socket: GatewaySocket | None = None
+        self._session_id: str | None = None
+
+    @classmethod
+    def from_settings(
+        cls,
+        settings: Any,
+        *,
+        connector: GatewayConnector | None = None,
+        connection_id: str | None = None,
+    ) -> "GatewayCliClient":
+        """从本地 Gateway 配置构建 Client，不读取 LLM 或 Runtime 配置。"""
+        gateway = settings.gateway
+        token = getattr(gateway, "auth_token", None)
+        if not isinstance(token, str) or not token:
+            raise RuntimeError("缺少 gateway.auth_token；请先启动 tga gateway 以创建本机凭据")
+        host = str(getattr(gateway, "host", "127.0.0.1"))
+        port = int(getattr(gateway, "port", 8000))
+        return cls(
+            _gateway_url(host, port),
+            token,
+            connector=connector,
+            connection_id=connection_id,
+        )
+
+    @property
+    def session_id(self) -> str | None:
+        """返回 Gateway 在握手后确认的 opaque session ID。"""
+        return self._session_id
+
+    async def connect(self, conversation_id: str) -> str:
+        """认证并把当前终端绑定到一个 CLI conversation。"""
+        if self._socket is not None:
+            raise RuntimeError("CLI Gateway Client 已连接")
+        if not isinstance(conversation_id, str) or not conversation_id.strip():
+            raise ValueError("session 必须是非空字符串")
+        self._socket = await self._connector(
+            self._url,
+            {"Authorization": f"Bearer {self._auth_token}"},
+        )
         try:
-            await self._bus.publish_inbound(message)
-            return await future
-        finally:
-            self._pending.pop(message.id, None)
+            await self._send(
+                {
+                    "type": "cli.connect",
+                    "connection_id": self._connection_id,
+                    "conversation_id": conversation_id.strip(),
+                }
+            )
+            ready = await self.receive_event()
+            if ready.get("type") == "error":
+                raise RuntimeError(str(ready.get("message", "Gateway 拒绝 CLI 连接")))
+            if ready.get("type") != "cli.ready":
+                raise RuntimeError("Gateway 未确认 CLI 会话")
+            session_id = ready.get("session_id")
+            if not isinstance(session_id, str) or not session_id:
+                raise RuntimeError("Gateway 返回了无效 CLI session")
+            if ready.get("conversation_id") != conversation_id.strip():
+                raise RuntimeError("Gateway 返回了不匹配的 CLI conversation")
+            self._session_id = session_id
+            return session_id
+        except BaseException:
+            await self.close()
+            raise
 
-    async def _dispatch(self) -> None:
-        """分发入站消息并运行 Runtime。"""
-        while not self._closed:
-            message = await self._bus.consume_inbound()
-            try:
-                outbound = await self._runtime.run_turn(message)
-            except Exception as exc:
-                outbound = OutboundMessage.error(message.session_id, message.channel, f"请求失败：{exc}")
-            outbound.metadata["request_id"] = message.id
-            await self._bus.publish_outbound(outbound)
-            future = self._pending.get(message.id)
-            if future is not None and not future.done():
-                future.set_result(outbound)
+    async def send_message(self, content: str, *, request_id: str | None = None) -> str:
+        """提交一条普通聊天输入到当前 Gateway 绑定路由。"""
+        text = content.strip()
+        if not text:
+            raise ValueError("消息不能为空")
+        identifier = request_id or str(uuid4())
+        await self._send({"type": "message.send", "request_id": identifier, "content": text})
+        return identifier
+
+    async def request_stop(self) -> None:
+        """请求当前 CLI turn 在下一个安全检查点停止。"""
+        await self._send({"type": "task.stop", "session_id": self._require_session()})
+
+    async def resolve_approval(self, approval_id: str, *, approved: bool) -> None:
+        """提交当前终端针对一个工具审批的选择。"""
+        if not isinstance(approval_id, str) or not approval_id:
+            raise ValueError("approval_id 必须是非空字符串")
+        await self._send(
+            {
+                "type": "approval.resolve",
+                "session_id": self._require_session(),
+                "approval_id": approval_id,
+                "approved": approved,
+            }
+        )
+
+    async def receive_event(self) -> dict[str, object]:
+        """读取并验证一条 Gateway JSON 事件。"""
+        socket = self._require_socket()
+        payload = await socket.recv()
+        if isinstance(payload, bytes):
+            payload = payload.decode("utf-8")
+        try:
+            event = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Gateway 返回了无效 JSON") from exc
+        if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+            raise RuntimeError("Gateway 返回了无效事件")
+        return event
+
+    async def close(self) -> None:
+        """断开瞬态 CLI 连接，不请求重放或创建 Outbox。"""
+        socket, self._socket = self._socket, None
+        self._session_id = None
+        if socket is not None:
+            await socket.close()
+
+    async def _send(self, payload: dict[str, object]) -> None:
+        await self._require_socket().send(json.dumps(payload, ensure_ascii=False))
+
+    def _require_socket(self) -> GatewaySocket:
+        if self._socket is None:
+            raise RuntimeError("CLI Gateway Client 尚未连接")
+        return self._socket
+
+    def _require_session(self) -> str:
+        if self._session_id is None:
+            raise RuntimeError("CLI Gateway Client 尚未完成会话握手")
+        return self._session_id
 
 
 def supports_prompt_toolkit(input_stream: Any = None, output_stream: Any = None) -> bool:
-    """仅在真实交互终端启用 prompt_toolkit 的 Win32 console 输出。"""
+    """仅在真实交互终端启用 prompt_toolkit。"""
     source = sys.stdin if input_stream is None else input_stream
     target = sys.stdout if output_stream is None else output_stream
     try:
@@ -82,216 +179,248 @@ def supports_prompt_toolkit(input_stream: Any = None, output_stream: Any = None)
     except (AttributeError, OSError):
         return False
 
+
 def build_parser() -> argparse.ArgumentParser:
-    """创建命令行参数解析器。"""
+    """创建只暴露 Gateway Client 所需参数的命令行解析器。"""
     parser = argparse.ArgumentParser(prog="tga")
     subcommands = parser.add_subparsers(dest="command")
-    chat = subcommands.add_parser("chat", help="启动交互式 CLI 会话")
-    chat.add_argument("--session", help="会话 ID，不传则每次启动创建临时会话")
-    chat.add_argument("--data-dir", help="本地数据目录，未传时读取 settings.local.json 或默认值")
-    chat.add_argument(
-        "--llm",
-        choices=["openai-compatible"],
-        help="LLM 接入类型",
-    )
-    chat.add_argument("--api-key", help="真实 LLM API Key")
-    chat.add_argument("--base-url", help="OpenAI-compatible API Base URL")
-    chat.add_argument("--model", help="真实 LLM 模型名")
-    web = subcommands.add_parser("web", help="启动本机 Web 工作台")
-    web.add_argument("--host", help="本机监听地址")
-    web.add_argument("--port", type=int, help="本机监听端口")
+    chat = subcommands.add_parser("chat", help="连接本机 Gateway 的交互式 CLI 会话")
+    chat.add_argument("--session", default="default", help="CLI conversation 名称")
+    gateway = subcommands.add_parser("gateway", help="启动唯一 Gateway 与 Web 服务")
+    gateway.add_argument("--host", help="仅覆盖本次 Gateway 监听地址")
+    gateway.add_argument("--port", type=int, help="仅覆盖本次 Gateway 监听端口")
     return parser
 
 
-def configure_readline_for_unicode_input() -> None:
-    """配置 readline，避免中文输入退格删除异常。"""
-    try:
-        import readline
-
-        readline.parse_and_bind("set bind-tty-special-chars off")
-        readline.parse_and_bind("set input-meta on")
-        readline.parse_and_bind("set output-meta on")
-        readline.parse_and_bind("set convert-meta off")
-    except ImportError:
-        readline = None
-
-
-def resolve_cli_session_id(session_id: str | None) -> str:
-    """解析 CLI 会话 ID，默认创建临时会话。"""
-    return session_id or f"cli-{uuid4()}"
-
-
-def resolve_provider(provider: str) -> str:
-    """将 provider 名称归一化到当前支持的实现类型。"""
-    if provider == OPENAI_COMPATIBLE_PROVIDER:
-        return OPENAI_COMPATIBLE_PROVIDER
-    return provider
-
-
 async def chat(
-    session_id: str | None,
-    data_dir: str | None,
-    provider: str | None,
-    api_key: str | None,
-    base_url: str | None,
-    model: str | None,
+    session_id: str,
+    *,
+    settings_loader: Callable[[], Any] = Settings.load,
+    client_factory: Callable[[Any], GatewayCliClient] = GatewayCliClient.from_settings,
+    read_content: ContentReader | None = None,
+    render: Renderer | None = None,
 ) -> None:
-    """运行交互式聊天循环。"""
-    active_session_id = resolve_cli_session_id(session_id)
-    active_inbound_message: InboundMessage | None = None
-    root = Path(data_dir) if data_dir is not None else None
-    settings = Settings.load(data_dir=root, default_session_id=active_session_id)
-    if provider is not None:
-        settings.llm.provider = provider
-    if api_key is not None:
-        settings.llm.api_key = api_key
-    if base_url is not None:
-        settings.llm.base_url = base_url
-    if model is not None:
-        settings.llm.model = model
-    runtime = AgentRuntime.create_default(settings, build_llm(settings))
-    bus = AsyncMessageBus()
-    interactive_terminal = supports_prompt_toolkit()
-    prompt = None
-    if interactive_terminal:
+    """运行纯 Gateway Client 的终端输入、流式输出和交互控制循环。"""
+    settings = settings_loader()
+    client = client_factory(settings)
+    default_reader, default_renderer = _terminal_io()
+    reader = read_content or default_reader
+    renderer = render or default_renderer
+    ui_events: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+    input_consumed = asyncio.Event()
+    approvals: list[dict[str, object]] = []
+    streamed: set[str] = set()
+    receiver: asyncio.Task[None] | None = None
+    input_task: asyncio.Task[None] | None = None
+    try:
+        await client.connect(session_id)
+        await ui_events.put(("notice", "Turning Good Agent。输入 /exit 退出；/stop 停止当前任务。"))
+        receiver = asyncio.create_task(
+            _receive_cli_events(client, ui_events),
+            name="cli-gateway-receiver",
+        )
+        input_task = asyncio.create_task(
+            _receive_terminal_input(reader, ui_events, input_consumed),
+            name="cli-terminal-input",
+        )
+        while True:
+            event_type, payload = await ui_events.get()
+            if event_type == "notice":
+                renderer(str(payload), True)
+                continue
+            if event_type == "gateway":
+                event = payload
+                assert isinstance(event, dict)
+                if event["type"] == "approval.requested":
+                    approval_id = event.get("approval_id")
+                    if isinstance(approval_id, str) and approval_id:
+                        approvals.append(event)
+                        renderer(_approval_prompt(event), True)
+                        continue
+                _render_event(event, renderer, streamed)
+                continue
+            if event_type == "gateway.error":
+                renderer(f"[错误] {payload}", True)
+                return
+            if event_type == "input.closed":
+                return
+            assert event_type == "input"
+            content = str(payload).strip()
+            input_consumed.set()
+            if content == "/exit":
+                return
+            if approvals:
+                approval = approvals.pop(0)
+                await client.resolve_approval(
+                    str(approval["approval_id"]),
+                    approved=_is_approval(content),
+                )
+                continue
+            if not content:
+                continue
+            if content == "/stop":
+                await client.request_stop()
+                continue
+            await client.send_message(content)
+    finally:
+        for task in (receiver, input_task):
+            if task is not None:
+                task.cancel()
+        if receiver is not None or input_task is not None:
+            with suppress(asyncio.CancelledError):
+                await asyncio.gather(
+                    *(task for task in (receiver, input_task) if task is not None),
+                )
+        await client.close()
+
+
+async def _receive_cli_events(
+    client: GatewayCliClient,
+    ui_events: asyncio.Queue[tuple[str, object]],
+) -> None:
+    try:
+        while True:
+            await ui_events.put(("gateway", await client.receive_event()))
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        await ui_events.put(("gateway.error", str(exc)))
+
+
+async def _receive_terminal_input(
+    reader: ContentReader,
+    ui_events: asyncio.Queue[tuple[str, object]],
+    input_consumed: asyncio.Event,
+) -> None:
+    try:
+        while True:
+            await ui_events.put(("input", await reader()))
+            await input_consumed.wait()
+            input_consumed.clear()
+    except asyncio.CancelledError:
+        raise
+    except (EOFError, KeyboardInterrupt):
+        await ui_events.put(("input.closed", None))
+
+
+def _render_event(event: dict[str, object], render: Renderer, streamed: set[str]) -> None:
+    event_type = str(event["type"])
+    content = str(event.get("content", ""))
+    request_id = str(event.get("request_id", ""))
+    if event_type == "response.delta":
+        render(content, False)
+        if request_id:
+            streamed.add(request_id)
+        return
+    if event_type in {"response.completed", "response.error"}:
+        if request_id in streamed:
+            render("", True)
+            streamed.discard(request_id)
+        else:
+            render(content, True)
+        return
+    if event_type == "tool.started":
+        tool_name = str(event.get("tool_name", "未知工具"))
+        render(f"[工具] 开始 {tool_name} {_argument_summary(event.get('args'))}", True)
+        return
+    if event_type == "tool.finished":
+        tool_name = str(event.get("tool_name", "未知工具"))
+        state = "失败" if event.get("failed") is True else "完成"
+        render(f"[工具] {state} {tool_name}", True)
+        return
+    if event_type.startswith("proactive."):
+        render(f"[主动提醒] {content}", True)
+        return
+    if event_type == "error":
+        render(f"[错误] {event.get('message', content)}", True)
+        return
+    if event_type in {"message.accepted", "task.stopping", "approval.resolved"}:
+        return
+    render(f"[系统] {content}", True)
+
+
+def _approval_prompt(event: dict[str, object]) -> str:
+    tool_name = str(event.get("tool_name", "未知工具"))
+    return f"[审批] 允许执行 {tool_name} {_argument_summary(event.get('args'))}？[y/N]"
+
+
+def _argument_summary(arguments: object, *, limit: int = 180) -> str:
+    try:
+        rendered = json.dumps(arguments if arguments is not None else {}, ensure_ascii=False, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        rendered = "{}"
+    return rendered if len(rendered) <= limit else f"{rendered[: limit - 1]}…"
+
+
+def _is_approval(content: str) -> bool:
+    return content.strip() in {"y", "Y"}
+
+
+def _terminal_io() -> tuple[ContentReader, Renderer]:
+    interactive = supports_prompt_toolkit()
+    if interactive:
         from prompt_toolkit import PromptSession
+        from prompt_toolkit.patch_stdout import patch_stdout
+        from prompt_toolkit import print_formatted_text
 
         prompt = PromptSession()
 
-    runtime.channel_router.register(
-        settings.channel,
-        lambda message: CliChannelAdapter(
-            bus,
-            message.session_id,
-            prompt=prompt,
-            request_id=message.id,
-        ),
-    )
-    dispatcher = CliBusDispatcher(bus, runtime)
-    proactive_lifecycle = CliProactiveLifecycle(
-        runtime,
-        bus,
-        target_channel=settings.channel,
-        active_session_id=lambda: active_session_id,
-        active_inbound_message=lambda: active_inbound_message,
-    )
-    renderer = asyncio.create_task(
-        _render_cli_outbound(bus, interactive=interactive_terminal),
-        name="cli-outbound-renderer",
-    )
-    await dispatcher.start()
-    await runtime.start()
-    await proactive_lifecycle.start()
-    await bus.publish_outbound(OutboundMessage.new(active_session_id, settings.channel, "Turning Good Agent。输入 /exit 退出。"))
+        async def read_content() -> str:
+            with patch_stdout(raw=True):
+                return await prompt.prompt_async("> ")
+
+        def render(content: str, newline: bool) -> None:
+            print_formatted_text(content, end="\n" if newline else "")
+
+        return read_content, render
 
     async def read_content() -> str:
-        """读取一条用户输入。"""
-        if prompt is not None:
-            return await prompt.prompt_async("> ")
         return await asyncio.to_thread(input, "> ")
 
-    async def run_input_loop() -> None:
-        """循环读取并分发用户输入。"""
-        nonlocal active_inbound_message, active_session_id
-        while True:
-            try:
-                content = (await read_content()).strip()
-            except (EOFError, KeyboardInterrupt):
-                return
-            if not content:
-                continue
-            msg = InboundMessage.new(content, active_session_id, settings.user_id, settings.channel)
-            active_inbound_message = msg
-            try:
-                await dispatcher.send_and_wait(msg)
-            finally:
-                active_inbound_message = None
-            if content == "/exit":
-                return
-            if content == "/new":
-                active_session_id = resolve_cli_session_id(None)
+    def render(content: str, newline: bool) -> None:
+        print(content, end="\n" if newline else "", flush=True)
 
+    return read_content, render
+
+
+async def _connect_websocket(url: str, headers: dict[str, str]) -> GatewaySocket:
     try:
-        if prompt is None:
-            await run_input_loop()
-        else:
-            from prompt_toolkit.patch_stdout import patch_stdout
-
-            with patch_stdout(raw=True):
-                await run_input_loop()
-    finally:
-        await proactive_lifecycle.stop()
-        await dispatcher.close()
-        renderer.cancel()
-        with suppress(asyncio.CancelledError):
-            await renderer
-        close = getattr(runtime, "close", None)
-        if callable(close):
-            await close()
+        from websockets.asyncio.client import connect
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("缺少 websockets 依赖；请重新安装 Turning Good Agent") from exc
+    return await connect(url, additional_headers=headers)
 
 
-async def _render_cli_outbound(bus: AsyncMessageBus, *, interactive: bool) -> None:
-    """由唯一 CLI 消费者显示普通回复、状态与后台主动通知。"""
-    if interactive:
-        from prompt_toolkit import print_formatted_text
-
-        def render(content: str, *, end: str = "\n") -> None:
-            """渲染文本到终端。"""
-            print_formatted_text(content, end=end)
-
-    else:
-
-        def render(content: str, *, end: str = "\n") -> None:
-            """渲染文本到终端。"""
-            print(content, end=end, flush=True)
-
-    streamed: set[str] = set()
-    while True:
-        outbound = await bus.consume_outbound()
-        if outbound.target_channel != "cli":
-            continue
-        request_id = str(outbound.metadata.get("request_id", ""))
-        if outbound.event_type == "response.delta":
-            render(outbound.content, end="")
-            if request_id:
-                streamed.add(request_id)
-            continue
-        if outbound.event_type in {"response.completed", "response.error"}:
-            if request_id in streamed:
-                render("")
-                streamed.discard(request_id)
-            else:
-                render(outbound.content)
-            continue
-        if outbound.event_type.startswith("proactive."):
-            render(f"[主动提醒] {outbound.content}")
-            continue
-        render(f"[系统] {outbound.content}")
+def _gateway_url(host: str, port: int) -> str:
+    rendered_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    return f"ws://{rendered_host}:{port}/ws/cli"
 
 
-def web(host: str | None, port: int | None) -> None:
-    """启动复用现有 Runtime 的本机 Web Host。"""
+def gateway(*, host: str | None = None, port: int | None = None) -> None:
+    """启动唯一 Gateway；Runtime、Bus 和主动服务只在此入口创建。"""
     import uvicorn
 
+    from .gateway.host import GatewayHost
     from .web.backend.app import create_app
 
     settings = Settings.load()
-    if host is not None:
-        settings.web.host = host
-    if port is not None:
-        settings.web.port = port
-    runtime = AgentRuntime.create_default(settings, build_llm(settings))
-    uvicorn.run(create_app(settings, runtime), host=settings.web.host, port=settings.web.port)
+    listen_host = settings.gateway.host if host is None else host
+    gateway_host = GatewayHost(settings)
+    uvicorn.run(
+        create_app(gateway_host),
+        host=listen_host,
+        port=settings.gateway.port if port is None else port,
+    )
 
 
 def main() -> None:
-    """执行 CLI 入口。"""
+    """执行 Gateway 或纯 Client CLI 入口。"""
     parser = build_parser()
     args = parser.parse_args()
     if args.command == "chat":
-        asyncio.run(chat(args.session, args.data_dir, args.llm, args.api_key, args.base_url, args.model))
+        asyncio.run(chat(args.session))
         return
-    if args.command == "web":
-        web(args.host, args.port)
+    if args.command == "gateway":
+        gateway(host=args.host, port=args.port)
         return
     parser.print_help()

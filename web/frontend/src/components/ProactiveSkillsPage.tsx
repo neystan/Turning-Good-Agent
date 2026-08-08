@@ -4,11 +4,12 @@ import ReactMarkdown from "react-markdown";
 import { proactiveApi } from "../proactive_api";
 import type { ProactiveSnapshot, SkillSnapshotData } from "../proactive_types";
 import { ProactiveCard } from "./ProactiveCard";
-import { DomainSummary, EmptyRecords, ProactiveActionError, ProactiveDeleteDialog, useProactiveActions } from "./ProactivePageSupport";
+import { DomainSummary, EmptyRecords, formatLocalDateTime, ProactiveActionError, ProactiveDeleteDialog, useProactiveActions } from "./ProactivePageSupport";
 
-export function ProactiveSkillsPage({ snapshot, writable, onSnapshot, onOpenSession }: {
+export function ProactiveSkillsPage({ snapshot, writable, timezone, onSnapshot, onOpenSession }: {
   snapshot: ProactiveSnapshot;
   writable: boolean;
+  timezone: string | null;
   onSnapshot: (snapshot: ProactiveSnapshot) => void;
   onOpenSession: (sessionId: string) => void;
 }) {
@@ -24,17 +25,17 @@ export function ProactiveSkillsPage({ snapshot, writable, onSnapshot, onOpenSess
   };
 
   return <div className="proactive-domain-page" data-proactive-page="skills">
-    <DomainSummary nextRunAt={data.next_run_at} runtimeNextRunAt={snapshot.runtime.next_run_at} running={snapshot.runtime.running} usage={data.usage} />
+    <DomainSummary nextRunAt={data.next_run_at} usage={data.usage} timezone={timezone} />
     <ProactiveActionError failure={actions.failure} />
     {data.observations.length === 0 && data.drafts.length === 0 ? <EmptyRecords>暂无 Observation 或 Draft。</EmptyRecords> : <div className="proactive-card-grid">
-      {data.observations.map((observation) => <ProactiveCard key={observation.id} card="skill-observation" id={observation.id} state={observation.kind} title="Observation" subtitle={observation.id}>
+      {data.observations.map((observation) => <ProactiveCard key={observation.id} card="skill-observation" id={observation.id} state={observation.kind} title="Observation">
         <p className="proactive-primary-content">{observation.observation}</p>
         <dl className="proactive-facts">
           <div><dt>类型</dt><dd>{observation.kind}</dd></div>
-          <div><dt>创建时间</dt><dd>{observation.created_at}</dd></div>
-          <div><dt>来源消息</dt><dd className="proactive-id-list">{observation.source_message_ids.map((id) => <code key={id}>{id}</code>)}</dd></div>
+          <div><dt>创建时间</dt><dd>{formatLocalDateTime(observation.created_at, timezone)}</dd></div>
+          <div><dt>来源消息</dt><dd>{observation.source_message_ids.length} 条消息</dd></div>
         </dl>
-        <button className="proactive-source-link" type="button" aria-label={`查看来源会话 ${observation.source_session_id}`} onClick={() => onOpenSession(observation.source_session_id)}>来源会话：{observation.source_session_id}</button>
+        <button className="proactive-source-link" type="button" aria-label={`查看来源会话 ${observation.source_session_id}`} onClick={() => onOpenSession(observation.source_session_id)}>查看来源会话</button>
       </ProactiveCard>)}
       {data.drafts.map((draft) => {
         const entry = actions.entry(`delete:${draft.name}`);

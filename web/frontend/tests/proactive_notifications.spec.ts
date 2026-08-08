@@ -41,13 +41,13 @@ async function installNoticeSocket(page: Page) {
   });
 }
 
-function notice(id: string, title: string, target: string) {
+function notice(id: string, title: string, target: string, severity: "info" | "warning" | "error" = "info") {
   return {
     type: "notice",
     id,
     domain: "incident",
     entity_id: id,
-    severity: "warning",
+    severity,
     title,
     message: `${title} 的后台结果已准备好。`,
     target,
@@ -56,7 +56,8 @@ function notice(id: string, title: string, target: string) {
   };
 }
 
-test("proactive notices persist in memory, queue after three, and navigate to their target", async ({ page }) => {
+test("proactive notices cap visible cards at three and navigate to their target", async ({ page }) => {
+  await page.clock.install();
   await installNoticeSocket(page);
   await mockAppShell(page);
   await page.goto(baseUrl);
@@ -71,12 +72,75 @@ test("proactive notices persist in memory, queue after three, and navigate to th
   }
 
   await expect(page.locator(".notice")).toHaveCount(3);
-  await expect(page.getByRole("button", { name: "查看：发现新的 Incident" })).toHaveCount(0);
+  await expect(page.locator(".conversation > .notice-region")).toHaveCount(1);
+  await expect(page.locator(".notice-content strong")).toHaveText(["Dream 已更新", "Skill Draft 已生成", "发现新的 Incident"]);
+  const [noticeRail, composer] = await Promise.all([page.locator(".notice-region--conversation").boundingBox(), page.locator(".composer").boundingBox()]);
+  expect(noticeRail?.width).toBe(composer?.width);
 
-  await page.getByRole("button", { name: "关闭提示：Cron 已完成" }).click();
+  await page.getByRole("button", { name: "关闭提示：Skill Draft 已生成" }).click();
+  await expect(page.locator(".notice.is-exiting")).toHaveCount(1);
+  await page.clock.fastForward(180);
   await expect(page.getByRole("button", { name: "查看：发现新的 Incident" })).toBeVisible();
 
   await page.getByRole("button", { name: "查看：发现新的 Incident" }).click();
   await expect(page).toHaveURL(/#proactive\/incidents$/);
   await expect(page.locator(".notice")).toHaveCount(2);
+});
+
+test("proactive notices expire by severity, pause under pointer or keyboard focus, and preserve Composer focus", async ({ page }) => {
+  await page.clock.install();
+  await installNoticeSocket(page);
+  await mockAppShell(page);
+  await page.goto(baseUrl);
+
+  const composer = page.getByRole("textbox", { name: "消息内容" });
+  await composer.focus();
+  await expect(composer).toBeFocused();
+
+  await page.evaluate((payload) => (window as unknown as { __tgaEmitProactive: (value: unknown) => void }).__tgaEmitProactive(payload), notice("notice-info", "信息提醒", "#proactive/cron"));
+  await expect(page.getByRole("button", { name: "查看：信息提醒" })).toBeVisible();
+  await expect(composer).toBeFocused();
+  await page.clock.fastForward(3_900);
+  await expect(page.getByRole("button", { name: "查看：信息提醒" })).toBeVisible();
+  await page.clock.fastForward(200);
+  await expect(page.getByRole("button", { name: "查看：信息提醒" })).toHaveCount(0);
+
+  await page.evaluate((payload) => (window as unknown as { __tgaEmitProactive: (value: unknown) => void }).__tgaEmitProactive(payload), notice("notice-error", "错误提醒", "#proactive/incidents", "error"));
+  await expect(page.getByRole("button", { name: "查看：错误提醒" })).toBeVisible();
+  await page.clock.fastForward(6_900);
+  await expect(page.getByRole("button", { name: "查看：错误提醒" })).toBeVisible();
+  await page.clock.fastForward(200);
+  await expect(page.getByRole("button", { name: "查看：错误提醒" })).toHaveCount(0);
+
+  await page.evaluate((payload) => (window as unknown as { __tgaEmitProactive: (value: unknown) => void }).__tgaEmitProactive(payload), notice("notice-warning", "警告提醒", "#proactive/breakbeat", "warning"));
+  const warningNotice = page.locator(".notice--warning", { hasText: "警告提醒" });
+  await expect(warningNotice).toBeVisible();
+  await page.clock.fastForward(3_900);
+  await expect(warningNotice).toBeVisible();
+  await page.clock.fastForward(200);
+  await expect(warningNotice).toHaveCount(0);
+
+  await page.evaluate((payload) => (window as unknown as { __tgaEmitProactive: (value: unknown) => void }).__tgaEmitProactive(payload), notice("notice-hover", "悬停时暂停", "#proactive/breakbeat"));
+  const hoverNotice = page.locator(".notice", { hasText: "悬停时暂停" });
+  await page.clock.fastForward(1_000);
+  await hoverNotice.hover();
+  await page.clock.fastForward(5_000);
+  await expect(hoverNotice).toBeVisible();
+  await page.mouse.move(0, 0);
+  await page.clock.fastForward(2_800);
+  await expect(hoverNotice).toBeVisible();
+  await page.clock.fastForward(300);
+  await expect(hoverNotice).toHaveCount(0);
+
+  await page.evaluate((payload) => (window as unknown as { __tgaEmitProactive: (value: unknown) => void }).__tgaEmitProactive(payload), notice("notice-focus", "键盘焦点暂停", "#proactive/memory"));
+  const focusAction = page.getByRole("button", { name: "查看：键盘焦点暂停" });
+  await page.clock.fastForward(1_000);
+  await focusAction.focus();
+  await page.clock.fastForward(5_000);
+  await expect(focusAction).toBeVisible();
+  await composer.focus();
+  await page.clock.fastForward(2_800);
+  await expect(focusAction).toBeVisible();
+  await page.clock.fastForward(300);
+  await expect(focusAction).toHaveCount(0);
 });

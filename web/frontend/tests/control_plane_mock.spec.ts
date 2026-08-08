@@ -302,6 +302,9 @@ test("composer keeps the immediate global approval switch", async ({ page }) => 
   await page.goto(baseUrl);
   await expect(page.getByRole("button", { name: "工具权限：默认权限" })).toBeVisible();
   await page.getByRole("button", { name: "工具权限：默认权限" }).click();
+  const permissionMenu = page.getByRole("menu");
+  await expect(permissionMenu).toBeVisible();
+  expect(await permissionMenu.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe("0px");
   await page.getByRole("menuitemradio", { name: "完全访问" }).click();
 
   await expect.poll(() => updated).toBe(true);

@@ -61,6 +61,7 @@ export type TurnStatus = "queued" | "running" | "stopping" | "completed" | "fail
 
 export type TurnState = {
   requestId: string;
+  kind?: "chat" | "catalog";
   status: TurnStatus;
   events: TaskEvent[];
   guidanceCount: number;
@@ -153,13 +154,14 @@ export type ToolCatalog = {
 
 export type CommandEntry = {
   id: string;
-  kind: "inspect" | "skill" | "mcp";
-  icon: "context" | "tools" | "skill" | "mcp";
+  kind: "inspect" | "skill" | "mcp" | "action";
+  icon: "context" | "tools" | "skill" | "mcp" | "compress" | "skill_deposit" | "dream" | "breakbeat";
   slash: string;
   label: string;
   description: string;
-  action: "open_context" | "open_tools" | "insert_text";
+  action: "open_context" | "open_tools" | "insert_text" | "execute_catalog";
   insert_text?: string;
+  catalog_action?: "compact" | "run_skill_evolution" | "run_dream:session" | "run_dream:global" | "run_breakbeat:session" | "run_breakbeat:global";
 };
 
 export type ComposerTextSegment = { type: "text"; id: string; text: string };

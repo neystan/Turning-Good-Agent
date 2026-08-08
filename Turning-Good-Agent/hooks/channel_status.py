@@ -19,11 +19,7 @@ class ChannelStatusHook(AgentHook):
     async def on_tool_started(self, call: ToolCall, channel_adapter: ChannelAdapter) -> None:
         """提示当前 Channel 即将执行的工具。"""
         self._tool_adapters[call.id] = channel_adapter
-        status = _proactive_start_status(call)
-        if status is not None:
-            await channel_adapter.on_status(status)
-            return
-        await channel_adapter.on_tool_started(call.id, call.name)
+        await channel_adapter.on_tool_started(call.id, call.name, call.args)
 
     async def after_tool_call(self, call: ToolCall, record: Mapping[str, Any]) -> dict[str, Any]:
         """提示当前 Channel 工具已经结束。"""
@@ -45,13 +41,3 @@ class ChannelStatusHook(AgentHook):
             f"压缩 {stats['compacted_token_count']} tokens，"
             f"保留最近 {stats['raw_window_token_count']} tokens 原文。"
         )
-
-
-def _proactive_start_status(call: ToolCall) -> str | None:
-    """为需要较长时间的主动审阅生成范围明确的状态。"""
-    labels = {"run_dream": "Dream", "run_breakbeat": "Breakbeat"}
-    label = labels.get(call.name)
-    if label is None:
-        return None
-    scope = "全局" if call.args.get("scope") == "global" else "本会话"
-    return f"正在执行{scope} {label} 审阅，可能需要一些时间。"

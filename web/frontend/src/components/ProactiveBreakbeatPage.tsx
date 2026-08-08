@@ -3,11 +3,12 @@ import { useState } from "react";
 import { proactiveApi } from "../proactive_api";
 import type { BreakbeatItem, BreakbeatSnapshotData, ProactiveSnapshot } from "../proactive_types";
 import { ProactiveCard } from "./ProactiveCard";
-import { DomainSummary, EmptyRecords, ProactiveActionError, ProactiveDeleteDialog, useProactiveActions } from "./ProactivePageSupport";
+import { DomainSummary, EmptyRecords, formatLocalDateTime, formatProactiveState, ProactiveActionError, ProactiveDeleteDialog, useProactiveActions } from "./ProactivePageSupport";
 
-export function ProactiveBreakbeatPage({ snapshot, writable, onSnapshot, onOpenSession }: {
+export function ProactiveBreakbeatPage({ snapshot, writable, timezone, onSnapshot, onOpenSession }: {
   snapshot: ProactiveSnapshot;
   writable: boolean;
+  timezone: string | null;
   onSnapshot: (snapshot: ProactiveSnapshot) => void;
   onOpenSession: (sessionId: string) => void;
 }) {
@@ -24,25 +25,24 @@ export function ProactiveBreakbeatPage({ snapshot, writable, onSnapshot, onOpenS
   };
 
   return <div className="proactive-domain-page" data-proactive-page="breakbeat">
-    <DomainSummary nextRunAt={data.next_run_at} runtimeNextRunAt={snapshot.runtime.next_run_at} running={snapshot.runtime.running} usage={data.usage} />
+    <DomainSummary nextRunAt={data.next_run_at} usage={data.usage} timezone={timezone} />
     <ProactiveActionError failure={actions.failure} />
     {items.length === 0 ? <EmptyRecords>暂无 Breakbeat。</EmptyRecords> : <div className="proactive-card-grid">
       {items.map((item) => {
         const completeEntry = actions.entry(`complete:${item.id}`);
         const deleteEntry = actions.entry(`delete:${item.id}`);
         const failure = completeEntry.error || deleteEntry.error;
-        return <ProactiveCard key={item.id} card="breakbeat-item" id={item.id} state={item.status} className={item.status === "completed" ? "is-completed" : undefined} actionState={completeEntry.pending || deleteEntry.pending ? "pending" : failure ? "error" : "idle"} title={item.status === "completed" ? "已完成 Breakbeat" : "进行中 Breakbeat"} subtitle={item.id} actions={<>
+        return <ProactiveCard key={item.id} card="breakbeat-item" id={item.id} state={item.status} className={item.status === "completed" ? "is-completed" : undefined} actionState={completeEntry.pending || deleteEntry.pending ? "pending" : failure ? "error" : "idle"} title={item.status === "completed" ? "已完成 Breakbeat" : "进行中 Breakbeat"} actions={<>
           {item.status === "in_progress" && <button type="button" aria-label={`完成 Breakbeat ${item.id}`} disabled={!writable || completeEntry.pending} onClick={() => void actions.run(`complete:${item.id}`, () => proactiveApi.completeBreakbeat(item.id))}>标记完成</button>}
           <button className="proactive-danger-action" type="button" aria-label={`删除 Breakbeat ${item.id}`} disabled={!writable || deleteEntry.pending} onClick={() => setDeleting(item.id)}>删除</button>
         </>}>
           <p className="proactive-primary-content">{item.todo}</p>
           <dl className="proactive-facts">
-            <div><dt>状态</dt><dd>{item.status}</dd></div>
-            <div><dt>原始截止时间</dt><dd>{item.deadline || "未提供截止时间"}</dd></div>
-            <div><dt>创建时间</dt><dd>{item.created_at}</dd></div>
-            <div><dt>更新时间</dt><dd>{item.updated_at}</dd></div>
+            <div><dt>状态</dt><dd>{formatProactiveState(item.status)}</dd></div>
+            <div><dt>创建时间</dt><dd>{formatLocalDateTime(item.created_at, timezone)}</dd></div>
+            <div><dt>更新时间</dt><dd>{formatLocalDateTime(item.updated_at, timezone)}</dd></div>
           </dl>
-          <button className="proactive-source-link" type="button" aria-label={`查看来源会话 ${item.source_session_id}`} onClick={() => onOpenSession(item.source_session_id)}>来源会话：{item.source_session_id}</button>
+          <button className="proactive-source-link" type="button" aria-label={`查看来源会话 ${item.source_session_id}`} onClick={() => onOpenSession(item.source_session_id)}>查看来源会话</button>
         </ProactiveCard>;
       })}
     </div>}

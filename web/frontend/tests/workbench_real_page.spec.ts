@@ -139,20 +139,24 @@ test.describe("live workbench review", () => {
     await page.setViewportSize({ width: 1440, height: 980 });
     await page.goto(`${baseUrl}/#settings`, { waitUntil: "domcontentloaded" });
 
-    const clearKey = page.locator(".settings-clear-api-key");
+    const clearKey = page.locator(".settings-clear-api-key").filter({
+      has: page.getByText("清除已配置 API Key", { exact: true }),
+    });
     const applyBar = page.locator(".settings-apply-bar");
     await expect(clearKey).toBeVisible();
     await expect(page.getByText("清除已配置 API Key")).toBeVisible();
 
-    const geometry = await page.evaluate(() => {
-      const rect = (selector: string) => {
-        const element = document.querySelector<HTMLElement>(selector);
-        if (!element) throw new Error(`${selector} is missing`);
+    const [clearKeyGeometry, applyBarGeometry] = await Promise.all([
+      clearKey.evaluate((element) => {
         const box = element.getBoundingClientRect();
         return { top: box.top, bottom: box.bottom };
-      };
-      return { clearKey: rect(".settings-clear-api-key"), applyBar: rect(".settings-apply-bar") };
-    });
+      }),
+      applyBar.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return { top: box.top, bottom: box.bottom };
+      }),
+    ]);
+    const geometry = { clearKey: clearKeyGeometry, applyBar: applyBarGeometry };
 
     expect(geometry.clearKey.bottom, JSON.stringify(geometry)).toBeLessThanOrEqual(geometry.applyBar.top);
 
@@ -221,5 +225,17 @@ test.describe("live workbench review", () => {
       return { display: styles.display, height: styles.height, copyWhiteSpace: getComputedStyle(copy).whiteSpace };
     });
     expect(rowStyles).toEqual({ display: "grid", height: "44px", copyWhiteSpace: "nowrap" });
+  });
+
+  test("real Cron presents one local next execution without implementation timestamps", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 980 });
+    await page.goto(`${baseUrl}/#proactive/cron`, { waitUntil: "domcontentloaded" });
+
+    const cronCards = page.locator('[data-proactive-card="cron-job"]');
+    test.skip(await cronCards.count() === 0, "The live proactive workspace has no Cron jobs.");
+    await expect(cronCards.first()).toContainText("下次执行");
+    await expect(page.getByText("运行投影", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("配置时区", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("原始下次执行", { exact: true })).toHaveCount(0);
   });
 });

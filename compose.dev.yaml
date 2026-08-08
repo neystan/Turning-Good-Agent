@@ -8,10 +8,6 @@ services:
       uvicorn Turning-Good-Agent.web.backend.dev:create_development_app
       --factory --host 0.0.0.0 --port 8000 --reload
       --reload-dir /app/Turning-Good-Agent
-    environment:
-      TGA_PROACTIVE_BRIDGE_HOST: backend
-      TGA_PROACTIVE_BRIDGE_BIND_HOST: 0.0.0.0
-      TGA_PROACTIVE_BRIDGE_ALLOW_NON_LOOPBACK: "1"
     volumes:
       - ./Turning-Good-Agent:/app/Turning-Good-Agent
       - ./.skills:/app/.skills

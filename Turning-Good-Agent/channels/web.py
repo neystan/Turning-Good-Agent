@@ -1,21 +1,68 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any
 from uuid import uuid4
 
-from ..bus.messages import OutboundMessage
+from ..bus.messages import ChannelRoute, OutboundMessage, Recipient
 from ..bus.queue import AsyncMessageBus
 from ..llm.types import ToolCall
 from ..web.backend.coordinator import WebTurnControl
 
 
+class WebChannelTransport:
+    """由 Gateway 定向调用的 Web Chat 与主动面板传输层。"""
+
+    name = "web"
+
+    def __init__(
+        self,
+        coordinator: Any,
+        publish_proactive_notice: Callable[[OutboundMessage], Awaitable[object] | object],
+    ) -> None:
+        self._coordinator = coordinator
+        self._publish_proactive_notice = publish_proactive_notice
+
+    async def start(self) -> None:
+        """WebSocket 路由由 FastAPI 管理，无需独立连接。"""
+
+    async def close(self) -> None:
+        """WebSocket 路由由 FastAPI 管理，无需独立连接。"""
+
+    async def send(self, message: OutboundMessage) -> bool:
+        """按 disposition 分别投影聊天事件和主动面板 notice。"""
+        if message.recipient.channel != self.name:
+            return False
+        if message.disposition == "proactive_notification":
+            result = self._publish_proactive_notice(message)
+            if inspect.isawaitable(result):
+                result = await result
+            return result is not False
+        return bool(await self._coordinator.deliver(message))
+
+
 class WebChannelAdapter:
     """将 Runtime Channel 回调转换为 Web 会话事件。"""
 
-    def __init__(self, bus: AsyncMessageBus, control: WebTurnControl) -> None:
+    def __init__(
+        self,
+        bus: AsyncMessageBus,
+        control: WebTurnControl,
+        *,
+        route: ChannelRoute | None = None,
+        execution_semaphore: asyncio.Semaphore | None = None,
+    ) -> None:
         """绑定消息队列和单轮控制器。"""
         self.bus = bus
         self.control = control
+        self.route = route or control.route
+        if self.route is None:
+            raise ValueError("Web Channel Adapter 缺少 ChannelRoute")
+        if execution_semaphore is not None:
+            self.control.bind_slot(execution_semaphore)
 
     async def on_delta(self, text: str) -> None:
         """推送 assistant 流式增量。"""
@@ -26,9 +73,17 @@ class WebChannelAdapter:
         """推送运行状态文本。"""
         await self._publish("task.status", {"content": text})
 
-    async def on_tool_started(self, tool_call_id: str, tool_name: str) -> None:
+    async def on_tool_started(
+        self,
+        tool_call_id: str,
+        tool_name: str,
+        args: Mapping[str, Any],
+    ) -> None:
         """推送工具开始状态。"""
-        await self._publish("tool.started", {"tool_call_id": tool_call_id, "tool_name": tool_name})
+        await self._publish(
+            "tool.started",
+            {"tool_call_id": tool_call_id, "tool_name": tool_name, "args": dict(args)},
+        )
 
     async def on_tool_finished(self, tool_call_id: str, tool_name: str, failed: bool) -> None:
         """推送工具完成状态。"""
@@ -70,9 +125,14 @@ class WebChannelAdapter:
             OutboundMessage(
                 str(uuid4()),
                 self.control.session_id,
-                "web",
-                content,
-                event_type,
-                {"request_id": self.control.request_id, **payload},
+                recipient=Recipient(
+                    self.route.principal_id,
+                    self.route.channel,
+                    self.route.conversation_id,
+                ),
+                content=content,
+                event_type=event_type,
+                event_id=self.control.request_id,
+                metadata={"request_id": self.control.request_id, **payload},
             )
         )

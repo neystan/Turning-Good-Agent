@@ -55,6 +55,16 @@ class WebSettings:
 
 
 @dataclass(slots=True)
+class GatewaySettings:
+    """保存唯一 Gateway 的本机监听和主体配置。"""
+
+    host: str = "127.0.0.1"
+    port: int = 8000
+    principal_id: str = "local-user"
+    auth_token: str | None = None
+
+
+@dataclass(slots=True)
 class McpServerSettings:
     """保存一个 MCP Server 的本地连接配置。"""
 
@@ -143,6 +153,7 @@ class Settings:
     sessions: SessionSettings = field(default_factory=SessionSettings)
     tool_permissions: ToolPermissionSettings = field(default_factory=ToolPermissionSettings)
     web: WebSettings = field(default_factory=WebSettings)
+    gateway: GatewaySettings = field(default_factory=GatewaySettings)
     mcp: McpSettings = field(default_factory=McpSettings)
     skills: SkillsSettings = field(default_factory=SkillsSettings)
     proactive: ProactiveSettings = field(default_factory=ProactiveSettings)
@@ -194,6 +205,7 @@ class Settings:
             if "auto_approve_tools" in tool_permissions:
                 settings.tool_permissions.auto_approve_tools = bool(tool_permissions["auto_approve_tools"])
             settings.web = _load_web_settings(payload.get("web", {}))
+            settings.gateway = _load_gateway_settings(payload.get("gateway", {}))
             settings.mcp = _load_mcp_settings(payload.get("mcp", {}))
             settings.skills = _load_skills_settings(payload.get("skills", {}))
             settings.proactive = _load_proactive_settings(payload.get("proactive", {}))
@@ -269,6 +281,17 @@ def _load_web_settings(payload: object) -> WebSettings:
             if value <= 0:
                 raise ValueError(f"web.{key} 必须大于 0")
             setattr(settings, key, value)
+    return settings
+
+
+def _load_gateway_settings(payload: object) -> GatewaySettings:
+    """解析 Gateway 配置，字段级规则留给共享 validator。"""
+    if not isinstance(payload, dict):
+        raise ValueError("gateway 必须是 object")
+    settings = GatewaySettings()
+    for key in ("host", "port", "principal_id", "auth_token"):
+        if key in payload:
+            setattr(settings, key, payload[key])
     return settings
 
 

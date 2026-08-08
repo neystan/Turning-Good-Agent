@@ -53,7 +53,7 @@
 
 .permission-trigger.is-danger { border-color: color-mix(in srgb, var(--permission-danger) 56%, var(--border)); color: var(--permission-danger); }
 
-.permission-menu { z-index: 120; width: max-content; padding: 6px; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface); box-shadow: 0 14px 32px var(--shadow); }
+.permission-menu { z-index: 120; width: max-content; padding: 6px; border: 0; border-radius: 14px; background: var(--surface); box-shadow: 0 14px 32px var(--shadow); }
 
 .permission-menu [role="menuitemradio"] { display: grid; grid-template-columns: 16px auto 16px; align-items: center; column-gap: 8px; min-height: 38px; border-radius: 10px; padding: 0 10px; outline: 0; color: var(--text); cursor: pointer; white-space: nowrap; }
 

@@ -3,7 +3,7 @@ name = "Turning-Good-Agent"
 version = "0.1.0"
 description = "A lightweight runtime-first general agent MVP."
 requires-python = ">=3.11"
-dependencies = ["openai>=1.0.0", "tiktoken>=0.7.0", "mcp>=1.26.0,<2.0.0", "fastapi>=0.115.0", "uvicorn>=0.30.0", "tzdata>=2024.1", "prompt_toolkit>=3.0.0"]
+dependencies = ["openai>=1.0.0", "tiktoken>=0.7.0", "mcp>=1.26.0,<2.0.0", "fastapi>=0.115.0", "uvicorn>=0.30.0", "websockets>=14.0,<16.0", "tzdata>=2024.1", "prompt_toolkit>=3.0.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

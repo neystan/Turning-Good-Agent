@@ -31,6 +31,8 @@ class Session:
     uncompacted_history: list[MessageRecord]
     created_at: str
     updated_at: str
+    principal_id: str = ""
+    conversation_id: str = ""
 
 
 @dataclass(slots=True)

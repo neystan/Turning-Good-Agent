@@ -37,7 +37,13 @@ from .state import (
     save_remaining_traces,
     save_trace_metadata,
 )
-from .turn_context import TurnContext
+from .turn_context import (
+    TurnContext,
+    reset_current_inbound,
+    reset_current_route,
+    set_current_inbound,
+    set_current_route,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,9 +137,13 @@ class AgentRuntime:
     ) -> OutboundMessage:
         """执行一轮消息处理，并在整个排队/运行期间标记 Runtime 非空闲。"""
         await self._begin_turn()
+        route_token = set_current_route(msg.route)
+        inbound_token = set_current_inbound(msg)
         try:
             return await self._run_turn(msg)
         finally:
+            reset_current_inbound(inbound_token)
+            reset_current_route(route_token)
             await self._end_turn()
 
     async def _run_turn(

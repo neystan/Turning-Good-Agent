@@ -1,4 +1,4 @@
-from ..bus.messages import InboundMessage
+from ..bus.messages import ChannelRoute, InboundMessage
 from ..config.settings import Settings
 from ..context.session_context import build_session_context, count_message_tokens
 from .locks import SessionLocks
@@ -26,12 +26,27 @@ class SessionManager:
         self.settings = settings
         self.locks = SessionLocks()
 
-    async def load_or_create(self, session_id: str, user_id: str, channel: str) -> Session:
+    async def load_or_create(
+        self,
+        session_id: str | ChannelRoute,
+        user_id: str | None = None,
+        channel: str | None = None,
+        conversation_id: str | None = None,
+    ) -> Session:
         """加载已有会话，不存在时创建。"""
-        session = await self.store.load_session(session_id)
+        route = self._coerce_route(session_id, user_id, channel, conversation_id)
+        session = await self.store.load_session(route.session_id)
         if session is not None:
+            if (session.principal_id, session.channel, session.conversation_id) != (
+                route.principal_id,
+                route.channel,
+                route.conversation_id,
+            ):
+                raise ValueError("existing session route 不一致")
             return session
-        return await self.store.create_session(session_id, user_id, channel)
+        if self.store.has_session_record(route.session_id):
+            raise ValueError("existing session 缺少有效 route")
+        return await self.store.create_session(route.session_id, route)
 
     async def handle_inbound_command(self, session_id: str, msg: InboundMessage) -> str | None:
         """按 session_id 处理 slash command，避免空命令创建会话。"""
@@ -159,9 +174,37 @@ class SessionManager:
         """读取最近消息。"""
         return await self.store.recent_messages(session_id, limit)
 
-    async def list_sessions(self, archived: bool | None = None) -> list[Session]:
+    async def list_sessions(
+        self,
+        archived: bool | None = None,
+        *,
+        channel: str | None = None,
+        principal_id: str | None = None,
+    ) -> list[Session]:
         """列出会话，供主动审阅按原始消息建立独立快照。"""
-        return await self.store.list_sessions(archived)
+        if channel is None and principal_id is None:
+            return await self.store.list_sessions(archived)
+        return await self.store.list_sessions(
+            archived,
+            channel=channel,
+            principal_id=principal_id,
+        )
+
+    @staticmethod
+    def _coerce_route(
+        session_id: str | ChannelRoute,
+        user_id: str | None,
+        channel: str | None,
+        conversation_id: str | None,
+    ) -> ChannelRoute:
+        """兼容旧 session/user/channel 参数并得到完整路由。"""
+        if isinstance(session_id, ChannelRoute):
+            if any(value is not None for value in (user_id, channel, conversation_id)):
+                raise ValueError("route 与旧身份参数不可混用")
+            return session_id
+        if user_id is None or channel is None:
+            raise TypeError("user_id 和 channel 为必填")
+        return ChannelRoute(user_id, channel, conversation_id or session_id, session_id)
 
     async def all_messages(self, session_id: str) -> list[MessageRecord]:
         """读取当前会话全部消息。"""

@@ -31,6 +31,11 @@
     "max_concurrent_sessions": 6,
     "event_buffer_size": 512
   },
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 8000,
+    "principal_id": "local-user"
+  },
   "mcp": {
     "resource_context_token_limit": 8000,
     "prompt_context_token_limit": 4000,

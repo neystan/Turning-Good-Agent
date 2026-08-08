@@ -1,10 +1,45 @@
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
-from ..bus.messages import InboundMessage, OutboundMessage
+from ..bus.messages import ChannelRoute, InboundMessage, OutboundMessage
 from ..channels.base import ChannelAdapter, SilentChannelAdapter
 from .state import TurnState
+
+
+_current_route: ContextVar[ChannelRoute | None] = ContextVar("current_channel_route", default=None)
+_current_inbound: ContextVar[InboundMessage | None] = ContextVar("current_inbound_message", default=None)
+
+
+def current_route() -> ChannelRoute | None:
+    """返回当前任务上下文的 ChannelRoute。"""
+    return _current_route.get()
+
+
+def set_current_route(route: ChannelRoute) -> Token[ChannelRoute | None]:
+    """设置当前任务的路由，并返回供调用方复位的 token。"""
+    return _current_route.set(route)
+
+
+def reset_current_route(token: Token[ChannelRoute | None]) -> None:
+    """复位当前任务的路由，避免跨 turn 泄漏。"""
+    _current_route.reset(token)
+
+
+def current_inbound() -> InboundMessage | None:
+    """返回当前 turn 尚未保存的入站消息。"""
+    return _current_inbound.get()
+
+
+def set_current_inbound(message: InboundMessage) -> Token[InboundMessage | None]:
+    """绑定当前 turn 的入站消息，并返回供调用方复位的 token。"""
+    return _current_inbound.set(message)
+
+
+def reset_current_inbound(token: Token[InboundMessage | None]) -> None:
+    """复位当前 turn 的入站消息，避免跨 turn 泄漏。"""
+    _current_inbound.reset(token)
 
 
 @dataclass(slots=True)

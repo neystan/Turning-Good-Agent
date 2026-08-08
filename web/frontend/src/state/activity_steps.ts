@@ -9,10 +9,12 @@ export type ActivityStep = {
 
 /** 将可证明的任务事件转换为面向用户的活动步骤。 */
 export function buildActivitySteps(events: Pick<TaskEvent, "event_id" | "type" | "payload">[]): ActivityStep[] {
-  return events.flatMap((event, index) => {
+  const steps = new Map<string, ActivityStep>();
+  events.forEach((event, index) => {
     const step = toActivityStep(event, index);
-    return step ? [step] : [];
+    if (step) steps.set(step.key, step);
   });
+  return [...steps.values()];
 }
 
 /** 构建展开区域需要的过程步骤，隐藏摘要和审批卡已表达的事件。 */
@@ -36,11 +38,15 @@ export function latestActivityStep(events: Pick<TaskEvent, "event_id" | "type" |
 
 /** 映射单个白名单事件，未知事件一律不展示。 */
 function toActivityStep(event: Pick<TaskEvent, "event_id" | "type" | "payload">, index: number): ActivityStep | null {
-  const key = `${event.event_id ?? index}-${event.type}`;
+  const toolCallId = String(event.payload.tool_call_id || "");
+  const key = event.type === "tool.started" || event.type === "tool.finished"
+    ? `tool-${toolCallId || String(event.event_id ?? index)}`
+    : `${event.event_id ?? index}-${event.type}`;
   if (event.type === "task.status" && event.payload.content === "已加入运行中引导") return { key, label: "已引导", tone: "done" };
-  if (event.type === "task.status" && String(event.payload.content || "").includes("压缩")) return { key, label: "正在整理上下文", tone: "running" };
+  if (event.type === "task.status" && String(event.payload.content || "").startsWith("正在压缩")) return { key, label: "正在压缩上下文", tone: "running" };
+  if (event.type === "task.status" && String(event.payload.content || "").startsWith("压缩完成")) return { key, label: "上下文压缩完成", tone: "done" };
   if (event.type === "tool.started") return toolStartedStep(key, String(event.payload.tool_name || "工具"));
-  if (event.type === "tool.finished") return null;
+  if (event.type === "tool.finished") return toolFinishedStep(key, String(event.payload.tool_name || "工具"), Boolean(event.payload.failed));
   if (event.type === "approval.requested") return { key, label: "等待你的批准", detail: String(event.payload.tool_name || "工具"), tone: "waiting" };
   if (event.type === "approval.resolved") return { key, label: event.payload.approved ? "已允许本次工具调用" : "已拒绝本次工具调用", tone: "done" };
   if (event.type === "task.stopping") return { key, label: "已请求停止", tone: "stopped" };
@@ -60,4 +66,14 @@ function toolStartedStep(key: string, toolName: string): ActivityStep {
   if (toolName === "load_skill") return { key, label: "正在加载 Skill", tone: "running" };
   if (toolName.includes("mcp") || toolName.includes("__")) return { key, label: "正在调用 MCP", tone: "running" };
   return { key, label: "正在调用工具", detail: toolName, tone: "running" };
+}
+
+/** 将同一工具调用的终态投影为完成或失败，而不暴露内部推理。 */
+function toolFinishedStep(key: string, toolName: string, failed: boolean): ActivityStep {
+  return {
+    key,
+    label: failed ? "工具调用失败" : "工具调用完成",
+    detail: toolName,
+    tone: failed ? "failed" : "done",
+  };
 }

@@ -1,8 +1,16 @@
-from collections.abc import Callable
-from typing import Protocol
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from typing import Any, Protocol
 
-from ..bus.messages import InboundMessage
+from ..bus.messages import InboundMessage, OutboundMessage
 from ..llm.types import ToolCall
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelCapabilities:
+    """声明一个 Channel 在 Gateway 服务端支持的交互能力。"""
+
+    supports_guidance: bool = False
 
 
 class TurnControl(Protocol):
@@ -24,7 +32,12 @@ class ChannelAdapter(Protocol):
     async def on_status(self, text: str) -> None:
         """处理任务中间状态。"""
 
-    async def on_tool_started(self, tool_call_id: str, tool_name: str) -> None:
+    async def on_tool_started(
+        self,
+        tool_call_id: str,
+        tool_name: str,
+        args: Mapping[str, Any],
+    ) -> None:
         """处理工具开始事件。"""
 
     async def on_tool_finished(self, tool_call_id: str, tool_name: str, failed: bool) -> None:
@@ -46,6 +59,22 @@ class ChannelAdapter(Protocol):
         """返回当前任务是否需要停止。"""
 
 
+class ChannelTransport(Protocol):
+    """定义 Gateway 持有的长生命周期 Channel 传输层。"""
+
+    name: str
+    capabilities: ChannelCapabilities
+
+    async def start(self) -> None:
+        """启动 Channel 连接或订阅。"""
+
+    async def close(self) -> None:
+        """停止 Channel 连接或订阅。"""
+
+    async def send(self, message: OutboundMessage) -> bool:
+        """向已明确的收件人发送消息，并返回 Adapter 是否已接受。"""
+
+
 class SilentChannelAdapter:
     """忽略中间输出并拒绝工具审批。"""
 
@@ -57,9 +86,14 @@ class SilentChannelAdapter:
         """忽略任务状态。"""
         del text
 
-    async def on_tool_started(self, tool_call_id: str, tool_name: str) -> None:
+    async def on_tool_started(
+        self,
+        tool_call_id: str,
+        tool_name: str,
+        args: Mapping[str, Any],
+    ) -> None:
         """忽略工具开始事件。"""
-        del tool_call_id, tool_name
+        del tool_call_id, tool_name, args
 
     async def on_tool_finished(self, tool_call_id: str, tool_name: str, failed: bool) -> None:
         """忽略工具结束事件。"""

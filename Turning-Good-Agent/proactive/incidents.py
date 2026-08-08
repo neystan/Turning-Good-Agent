@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from copy import deepcopy
-from typing import Any
+from typing import Any, Protocol
 
 from ..tools.base import ToolResult
-from .delivery import DeliveryGate
 from .types import Incident, new_id, utc_now_iso
 from .store import ProactiveStore
+
+
+class IncidentNotificationPublisher(Protocol):
+    """Incident 所需的 Gateway 主动结果发布接口。"""
+
+    async def enqueue(self, **payload: Any) -> Any:
+        """发布一次结果事件，由 Gateway 决定 Fanout 与投递。"""
 
 
 class IncidentMonitor:
@@ -17,21 +22,22 @@ class IncidentMonitor:
     def __init__(
         self,
         store: ProactiveStore,
-        delivery_gate: DeliveryGate,
+        notification_publisher: IncidentNotificationPublisher,
         *,
-        target_channel: str,
         state_changed: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """初始化对象状态。"""
         self._store = store
-        self._delivery_gate = delivery_gate
-        self._target_channel = target_channel
+        self._notification_publisher = notification_publisher
         self._state_changed = state_changed
         self._lock = asyncio.Lock()
 
-    async def report_failure(self, *, fingerprint: str, source: str, message: str) -> bool:
+    async def report_failure(
+        self, *, fingerprint: str, source: str, message: str, notify: bool = True
+    ) -> bool:
         """记录失败；仅从健康或已恢复状态进入失败时通知。"""
         changed = False
+        publish_error: Exception | None = None
         async with self._lock:
             incidents = self._load_incidents()
             index = self._index_for_fingerprint(incidents, fingerprint)
@@ -44,7 +50,6 @@ class IncidentMonitor:
                 changed = True
                 should_notify = False
             else:
-                previous = deepcopy(incidents)
                 if index is None:
                     incident: dict[str, Any] = {
                         "id": new_id("incident"),
@@ -66,25 +71,30 @@ class IncidentMonitor:
                     incident["message"] = message
                     incident["history"].append(self._history_entry("open", now, message))
                 self._save_incidents(incidents)
-                try:
-                    await self._delivery_gate.enqueue(
-                        target_channel=self._target_channel,
-                        event_type="proactive.incident.opened",
-                        content=f"系统异常：{message}",
-                        source_id=fingerprint,
-                    )
-                except Exception:
-                    self._save_incidents(previous)
-                    raise
+                if notify:
+                    try:
+                        await self._notification_publisher.enqueue(
+                            event_type="proactive.incident.opened",
+                            content=f"系统异常：{message}",
+                            source_id=fingerprint,
+                            notification_scope="all_subscribed",
+                        )
+                    except Exception as error:
+                        publish_error = error
                 changed = True
                 should_notify = True
         if changed:
             await self._notify_state_changed()
+        if publish_error is not None:
+            raise publish_error
         return should_notify
 
-    async def report_recovery(self, *, fingerprint: str, source: str, message: str) -> bool:
+    async def report_recovery(
+        self, *, fingerprint: str, source: str, message: str, notify: bool = True
+    ) -> bool:
         """记录恢复；仅关闭仍处于 open 的同一 incident。"""
         changed = False
+        publish_error: Exception | None = None
         async with self._lock:
             incidents = self._load_incidents()
             index = self._index_for_fingerprint(incidents, fingerprint)
@@ -93,26 +103,27 @@ class IncidentMonitor:
             incident = incidents[index]
             if incident["state"] == "resolved":
                 return False
-            previous = deepcopy(incidents)
             now = utc_now_iso()
             incident["state"] = "resolved"
             incident["last_detected_at"] = now
             incident["message"] = message
             incident["history"].append(self._history_entry("resolved", now, message))
             self._save_incidents(incidents)
-            try:
-                await self._delivery_gate.enqueue(
-                    target_channel=self._target_channel,
-                    event_type="proactive.incident.resolved",
-                    content=f"系统已恢复：{message}",
-                    source_id=fingerprint,
-                )
-            except Exception:
-                self._save_incidents(previous)
-                raise
+            if notify:
+                try:
+                    await self._notification_publisher.enqueue(
+                        event_type="proactive.incident.resolved",
+                        content=f"系统已恢复：{message}",
+                        source_id=fingerprint,
+                        notification_scope="all_subscribed",
+                    )
+                except Exception as error:
+                    publish_error = error
             changed = True
         if changed:
             await self._notify_state_changed()
+        if publish_error is not None:
+            raise publish_error
         return True
 
     def list_incidents(self, state: str | None = None) -> list[Incident]:

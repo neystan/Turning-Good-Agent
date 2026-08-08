@@ -5,6 +5,10 @@ import inspectIcon from "../assets/slash-icons/inspect.svg";
 import mcpIcon from "../assets/slash-icons/mcp.svg";
 import skillIcon from "../assets/slash-icons/skill.svg";
 import toolsIcon from "../assets/slash-icons/tools.svg";
+import breakbeatIcon from "../assets/slash-icons/breakbeat.svg";
+import compressIcon from "../assets/slash-icons/compress.svg";
+import dreamIcon from "../assets/slash-icons/dream.svg";
+import skillDepositIcon from "../assets/slash-icons/skill-deposit.svg";
 import { ScrollArea } from "./ScrollArea";
 import type { CommandEntry } from "../types";
 
@@ -48,9 +52,15 @@ export function SlashCommandMenu({ slashToken, onSelect }: { slashToken: string 
   }, [entries, dismissedDraft, slashToken, visible]);
 
   useLayoutEffect(() => {
-    if (!panelVisible || !filtered.length) return;
+    if (!panelVisible) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(document.activeElement instanceof HTMLElement) || document.activeElement.getAttribute("aria-label") !== "消息内容") return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setDismissedDraft(slashToken);
+        return;
+      }
+      if (!filtered.length) return;
       if (event.key === "ArrowDown") {
         event.preventDefault();
         setActiveIndex((index) => (index + 1) % filtered.length);
@@ -65,10 +75,6 @@ export function SlashCommandMenu({ slashToken, onSelect }: { slashToken: string 
         event.preventDefault();
         onSelect(filtered[activeIndex]);
         return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setDismissedDraft(slashToken);
       }
     };
     document.addEventListener("keydown", onKeyDown, true);
@@ -108,6 +114,10 @@ const commandIconAssets: Record<CommandEntry["icon"], string> = {
   mcp: mcpIcon,
   skill: skillIcon,
   tools: toolsIcon,
+  breakbeat: breakbeatIcon,
+  compress: compressIcon,
+  dream: dreamIcon,
+  skill_deposit: skillDepositIcon,
 };
 
 function CommandIcon({ icon }: { icon: CommandEntry["icon"] }) {

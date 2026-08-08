@@ -20,11 +20,10 @@ import { createTextSegment, serializeComposerContent } from "./state/composer_se
 import { proactiveRouteFromHash, routeDomain, routeDomainForWire } from "./proactive_types";
 import type { ChatMessage, CommandEntry, ComposerSegment, ConnectionState, ContextWindow, Observability, Session, SessionContextReadModel, TaskEvent, ToolCallPage } from "./types";
 import type { Notice } from "./components/NoticeRegion";
-import type { ProactiveDomain, ProactiveNotice, ProactiveSnapshot, ProactiveState } from "./proactive_types";
+import type { ProactiveDomain, ProactiveNotice, ProactiveRoute, ProactiveSnapshot, ProactiveState } from "./proactive_types";
 
 type SocketMessage = Partial<TaskEvent> & { type: string; client_action_id?: string; message?: string; session_id?: string; request_id?: string };
-type ProactiveHealth = { state: "idle" | "active" | "incident" | "readonly" | "unavailable"; label: string };
-
+type ProactiveHealth = { state: "idle" | "active" | "incident" | "unavailable"; label: string };
 const emptyStateStarters = [
   "整理需求，生成可执行的任务清单",
   "分析一份文件，提取关键结论",
@@ -52,7 +51,7 @@ export function App() {
   const [contextWindow, setContextWindow] = useState<ContextWindow | null>(null);
   const [autoApprove, setAutoApprove] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(() => window.location.hash === "#settings");
-  const [proactiveDomain, setProactiveDomain] = useState<ProactiveDomain | null>(() => proactiveRouteFromHash());
+  const [proactiveDomain, setProactiveDomain] = useState<ProactiveRoute | null>(() => proactiveRouteFromHash());
   const [theme, setTheme] = useState<"dark" | "light">(() => localStorage.getItem("tga-theme") === "light" ? "light" : "dark");
   const [mobileMenu, setMobileMenu] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -106,7 +105,7 @@ export function App() {
   /** 添加短暂可关闭的操作错误提示。 */
   const addNotice = useCallback((message: string) => {
     const notice = `${Date.now()}-${message}`;
-    setNotices((items) => items.some((item) => item.message === message) ? items : [...items, { id: notice, message }]);
+    setNotices((items) => items.some((item) => item.message === message) ? items : [...items, { id: notice, message, severity: "error" }]);
   }, []);
 
   /** 接受某个领域的完整快照；较旧领域 revision 不得覆盖当前页面。 */
@@ -132,6 +131,7 @@ export function App() {
       title: notice.title,
       message: notice.message,
       target: notice.target,
+      severity: notice.severity,
     }]);
   }, []);
 
@@ -151,7 +151,7 @@ export function App() {
   }, []);
 
   /** 打开可深链接的主动领域页面，不复用聊天会话连接。 */
-  const openProactive = useCallback((domain: ProactiveDomain = "cron") => {
+  const openProactive = useCallback((domain: ProactiveRoute = "cron") => {
     const target = routeDomain(domain);
     if (window.location.hash !== target) window.location.hash = target.slice(1);
     setSettingsOpen(false);
@@ -184,6 +184,7 @@ export function App() {
       void refreshSessions().catch((error: unknown) => addNotice(error instanceof Error ? error.message : "刷新会话失败"));
       return;
     }
+    if (event.type === "catalog.accepted") return;
     if (!event.session_id || event.session_id !== sessionIdRef.current) {
       void refreshSessions().catch((error: unknown) => addNotice(error instanceof Error ? error.message : "刷新会话失败"));
       return;
@@ -272,9 +273,15 @@ export function App() {
 
   useEffect(() => {
     const syncWorkspaceView = () => {
-      setSettingsOpen(window.location.hash === "#settings");
-      setProactiveDomain(proactiveRouteFromHash());
+      const hash = window.location.hash;
+      const domain = proactiveRouteFromHash(hash);
+      if (hash === "#proactive" || hash === "#proactive/") {
+        window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}${routeDomain("cron")}`);
+      }
+      setSettingsOpen(hash === "#settings");
+      setProactiveDomain(domain);
     };
+    syncWorkspaceView();
     window.addEventListener("hashchange", syncWorkspaceView);
     return () => window.removeEventListener("hashchange", syncWorkspaceView);
   }, []);
@@ -467,6 +474,20 @@ export function App() {
   };
 
   const openSlashRead = (entry: CommandEntry) => {
+    if (entry.action === "execute_catalog") {
+      if (!sessionId) {
+        addNotice("请先发送一条消息创建会话");
+        return;
+      }
+      if (!entry.catalog_action || connection !== "connected") {
+        addNotice("Catalog 操作当前不可用");
+        return;
+      }
+      if (!socketRef.current?.send({ type: "catalog.execute", session_id: sessionId, catalog_action: entry.catalog_action, client_action_id: crypto.randomUUID() })) {
+        addNotice("连接尚未建立");
+      }
+      return;
+    }
     if (!sessionId) return;
     const requestVersion = ++controlInspectionRequestVersion.current;
     const inspectedSessionId = sessionId;
@@ -490,8 +511,14 @@ export function App() {
 
   const current = useMemo(() => [...sessions, ...archived].find((item) => item.id === sessionId), [archived, sessionId, sessions]);
   const currentTurnCount = Object.values(sessionState.turns).reduce((count, turn) => count + turn.events.length, 0);
-  const proactiveHealth = proactiveHealthFor(proactiveState);
-
+  const catalogRunning = Object.values(sessionState.turns).some((turn) => turn.kind === "catalog" && ["queued", "running", "stopping"].includes(turn.status));
+  const proactiveHealth: Record<ProactiveDomain, ProactiveHealth> = {
+    cron: proactiveHealthForDomain("cron", proactiveState),
+    breakbeat: proactiveHealthForDomain("breakbeat", proactiveState),
+    memory: proactiveHealthForDomain("memory", proactiveState),
+    skills: proactiveHealthForDomain("skills", proactiveState),
+    incidents: proactiveHealthForDomain("incidents", proactiveState),
+  };
   /** 点击主动通知仅切换工作面，并从内存通知队列移除该项。 */
   const navigateProactiveNotice = useCallback((notice: Notice) => {
     dismissNotice(notice.id);
@@ -507,7 +534,7 @@ export function App() {
     setRestoreFocusVersion((version) => version + 1);
   };
 
-  const sidebar = <SessionSidebar active={sessions} archived={archived} currentId={sessionId} mobileOpen={mobileMenu} collapsed={sidebarCollapsed} onCollapseChange={setSidebarCollapsed} onCloseMobile={() => setMobileMenu(false)} onNew={() => navigate(null)} onOpenSearch={() => setSearchOpen(true)} onOpenSettings={() => { window.location.hash = "settings"; }} onOpenProactive={() => openProactive()} proactiveHealth={proactiveHealth} onSelect={navigate} onUpdate={updateSession} onDelete={deleteSession} onError={addNotice} />;
+  const sidebar = <SessionSidebar active={sessions} archived={archived} currentId={sessionId} mobileOpen={mobileMenu} collapsed={sidebarCollapsed} onCollapseChange={setSidebarCollapsed} onCloseMobile={() => setMobileMenu(false)} onNew={() => navigate(null)} onOpenSearch={() => setSearchOpen(true)} onOpenSettings={() => { window.location.hash = "settings"; }} activeProactiveRoute={proactiveDomain} onOpenProactive={openProactive} proactiveHealth={proactiveHealth} onSelect={navigate} onUpdate={updateSession} onDelete={deleteSession} onError={addNotice} />;
 
   if (settingsOpen) return <>
     <SettingsWorkspace onReturnToChat={returnToChat} />
@@ -518,7 +545,7 @@ export function App() {
     <a className="skip-link" href="#main-content">跳到主动能力</a>
     {sidebar}
     {mobileMenu && <button className="scrim" aria-label="关闭会话栏" onClick={() => setMobileMenu(false)} />}
-    <ProactiveWorkspace domain={proactiveDomain} snapshots={proactiveState.snapshots} owner={proactiveState.owner} connection={proactiveState.connection} onSelectDomain={openProactive} onReturnToChat={returnToChat} onSnapshot={receiveProactiveSnapshot} onOpenSession={(id) => navigate(id)} />
+    <ProactiveWorkspace route={proactiveDomain} state={proactiveState} onReturnToChat={returnToChat} onSnapshot={receiveProactiveSnapshot} onOpenSession={(id) => navigate(id)} />
     <SessionSearchDialog open={searchOpen} sessions={[...sessions, ...archived]} currentId={sessionId} onClose={() => setSearchOpen(false)} onSelect={navigate} />
     <NoticeRegion notices={notices} onDismiss={dismissNotice} onNavigate={navigateProactiveNotice} />
   </div>;
@@ -536,11 +563,11 @@ export function App() {
       <ChatTimeline sessionId={sessionId} messages={sessionState.messages} turns={sessionState.turns} contentVersion={currentTurnCount} composerRef={composerRef} retryEnabled={connection === "connected"} onRetry={retryMessage} renderTurn={(turn) => <ActivityCluster key={turn.requestId} turn={turn} actionsEnabled={connection === "connected"} onResolveApproval={resolveApproval} />}>
         {!sessionId && sessionState.messages.length === 0 && <div className="empty-state"><span className="empty-kicker">准备就绪</span><h2>开始一个工作会话</h2><p>描述目标、提供上下文，或直接粘贴内容。首条消息发送后会创建本地会话记录。</p><div className="empty-examples" aria-label="任务起步示例"><span>选择一个起点</span><ul>{emptyStateStarters.map((starter) => <li key={starter}><button type="button" onClick={() => useEmptyStateStarter(starter)}>{starter}</button></li>)}</ul></div></div>}
       </ChatTimeline>
-      <Composer rootRef={composerRef} session={current} running={sessionState.running} actionsEnabled={connection === "connected"} segments={composerSegments.some((segment) => segment.type === "guidance" || Boolean(segment.text)) || !sessionState.pendingDraft ? composerSegments : [createTextSegment(sessionState.pendingDraft)]} autoApprove={autoApprove} contextWindow={contextWindow} restoreFocusVersion={restoreFocusVersion} onSegmentsChange={changeSegments} onSend={() => send()} onStop={stop} onRestore={restoreSession} onAutoApproveChange={(enabled) => void setApproval(enabled)} onSlashRead={openSlashRead} />
+      <NoticeRegion placement="conversation" notices={notices} onDismiss={dismissNotice} onNavigate={navigateProactiveNotice} />
+      <Composer rootRef={composerRef} session={current} running={sessionState.running} actionsEnabled={connection === "connected" && !catalogRunning} segments={composerSegments.some((segment) => segment.type === "guidance" || Boolean(segment.text)) || !sessionState.pendingDraft ? composerSegments : [createTextSegment(sessionState.pendingDraft)]} autoApprove={autoApprove} contextWindow={contextWindow} restoreFocusVersion={restoreFocusVersion} onSegmentsChange={changeSegments} onSend={() => send()} onStop={stop} onRestore={restoreSession} onAutoApproveChange={(enabled) => void setApproval(enabled)} onSlashRead={openSlashRead} />
       <InspectorLayer open={inspectorOpen} closing={inspectorClosing} data={inspector} control={controlInspection} onClose={closeInspector} />
     </main>
     <SessionSearchDialog open={searchOpen} sessions={[...sessions, ...archived]} currentId={sessionId} onClose={() => setSearchOpen(false)} onSelect={navigate} />
-    <NoticeRegion notices={notices} onDismiss={dismissNotice} onNavigate={navigateProactiveNotice} />
     </div>;
 }
 
@@ -555,21 +582,20 @@ function connectionLabel(state: ConnectionState): string {
   return { connecting: "正在连接", connected: "已连接", reconnecting: "正在重连", disconnected: "已断开" }[state];
 }
 
-/** 将主动领域的独立快照折叠为侧栏可读的全局健康状态。 */
-function proactiveHealthFor(state: ProactiveState): ProactiveHealth {
+/** 将某个领域的快照折叠为侧栏中的独立健康状态。 */
+function proactiveHealthForDomain(domain: ProactiveDomain, state: ProactiveState): ProactiveHealth {
   if (state.connection !== "connected") return { state: "unavailable", label: "连接中" };
-  if (!state.owner?.writable) {
-    return state.owner?.owner_id
-      ? { state: "readonly", label: "只读" }
-      : { state: "unavailable", label: "已停用" };
+  if (!state.owner?.writable) return { state: "unavailable", label: state.owner?.owner_id ? "只读" : "已停用" };
+  const snapshot = state.snapshots[domain];
+  if (!snapshot) return { state: "unavailable", label: "等待" };
+  const runtimeStates = Object.values(snapshot.runtime.entity_states);
+  if (runtimeStates.some((status) => status === "failed" || status === "error")) return { state: "incident", label: "异常" };
+  if (domain === "incidents") {
+    const incidents = snapshot.data.incidents;
+    if (Array.isArray(incidents) && incidents.some((item) => Boolean(item) && typeof item === "object" && (item as { state?: unknown }).state === "open")) {
+      return { state: "incident", label: "异常" };
+    }
   }
-  const incidents = state.snapshots.incidents?.data.incidents;
-  if (Array.isArray(incidents) && incidents.some((item) => Boolean(item) && typeof item === "object" && (item as { state?: unknown }).state === "open")) {
-    return { state: "incident", label: "存在异常" };
-  }
-  const running = Object.values(state.snapshots).some((snapshot) => {
-    if (!snapshot) return false;
-    return snapshot.runtime.running || Object.values(snapshot.runtime.entity_states).some((status) => status === "queued" || status === "running");
-  });
-  return running ? { state: "active", label: "运行中" } : { state: "idle", label: "空闲" };
+  if (snapshot.runtime.running || runtimeStates.some((status) => status === "queued" || status === "running")) return { state: "active", label: "运行中" };
+  return { state: "idle", label: "正常" };
 }

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from ..channels.base import SilentChannelAdapter
+from ..llm.client import LLMProvider
 from ..llm.types import LLMUsage
 
 
@@ -18,6 +19,8 @@ class BackgroundAgentLoop(Protocol):
         auto_approve_tools: bool,
         *,
         allowed_tool_names: frozenset[str] | None = None,
+        llm_override: LLMProvider | None = None,
+        streaming_enabled: bool | None = None,
     ) -> Any:
         """运行既有模型和 Tool 执行链。"""
 
@@ -41,10 +44,14 @@ class ProactiveExecutor:
         agent_loop: BackgroundAgentLoop,
         *,
         approval_required_tool_names: frozenset[str] = frozenset(),
+        proactive_tool_names: Callable[[], frozenset[str]] | None = None,
+        review_llm: LLMProvider | None = None,
     ) -> None:
         """初始化模型入口和配置审批名单。"""
         self._agent_loop = agent_loop
         self._approval_required_tool_names = approval_required_tool_names
+        self._proactive_tool_names = proactive_tool_names
+        self._review_llm = review_llm
 
     async def run(
         self,
@@ -52,6 +59,7 @@ class ProactiveExecutor:
         prompt: str,
         *,
         allowed_tool_names: frozenset[str] | None = None,
+        use_review_model: bool = False,
     ) -> ProactiveExecutionResult:
         """以后台安全白名单执行一次主动任务。"""
         safe_tool_names = self._safe_tool_names(allowed_tool_names)
@@ -60,12 +68,22 @@ class ProactiveExecutor:
             {"role": "user", "content": prompt},
         ]
         try:
-            loop_result = await self._agent_loop.run(
-                messages,
-                SilentChannelAdapter(),
-                auto_approve_tools=False,
-                allowed_tool_names=safe_tool_names,
-            )
+            if use_review_model and self._review_llm is not None:
+                loop_result = await self._agent_loop.run(
+                    messages,
+                    SilentChannelAdapter(),
+                    auto_approve_tools=False,
+                    allowed_tool_names=safe_tool_names,
+                    llm_override=self._review_llm,
+                    streaming_enabled=False,
+                )
+            else:
+                loop_result = await self._agent_loop.run(
+                    messages,
+                    SilentChannelAdapter(),
+                    auto_approve_tools=False,
+                    allowed_tool_names=safe_tool_names,
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -100,6 +118,8 @@ class ProactiveExecutor:
         names = set(requested or ())
         names.intersection_update(getattr(registry, "tool_names", []))
         names.difference_update(_PROACTIVE_CONTROL_TOOL_NAMES)
+        if self._proactive_tool_names is not None:
+            names.difference_update(self._proactive_tool_names())
         names.difference_update(self._approval_required_tool_names)
         for name in tuple(names):
             tool = registry.get(name)

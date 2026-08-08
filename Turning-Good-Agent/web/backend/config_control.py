@@ -267,7 +267,15 @@ class WebConfigControlService:
 
     @staticmethod
     def _revision(raw: dict[str, object]) -> str:
-        canonical = json.dumps(raw, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        revision_input = dict(raw)
+        gateway = revision_input.get("gateway")
+        if isinstance(gateway, dict):
+            retained_gateway = {key: value for key, value in gateway.items() if key != "auth_token"}
+            if retained_gateway:
+                revision_input["gateway"] = retained_gateway
+            else:
+                revision_input.pop("gateway")
+        canonical = json.dumps(revision_input, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
 
     @staticmethod

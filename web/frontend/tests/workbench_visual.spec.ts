@@ -133,14 +133,17 @@ test("proactive card walls stay natural-height, two-column, token-themed, and na
     owner,
   };
   await page.addInitScript((snapshots) => {
+    const urls: string[] = [];
     class FakeWebSocket {
       static OPEN = 1;
+      static CONNECTING = 0;
       readyState = 1;
       onopen: ((event: Event) => void) | null = null;
       onmessage: ((event: MessageEvent<string>) => void) | null = null;
       onclose: ((event: CloseEvent) => void) | null = null;
       onerror: ((event: Event) => void) | null = null;
       constructor(readonly url: string) {
+        urls.push(url);
         queueMicrotask(() => {
           this.onopen?.(new Event("open"));
           if (url.includes("/ws/proactive")) snapshots.forEach((payload) => this.onmessage?.({ data: JSON.stringify(payload) } as MessageEvent<string>));
@@ -149,12 +152,22 @@ test("proactive card walls stay natural-height, two-column, token-themed, and na
       send() {}
       close() {}
     }
-    Object.assign(window, { WebSocket: FakeWebSocket });
+    Object.assign(window, { WebSocket: FakeWebSocket, __tgaSocketUrls: () => urls });
   }, [cron, empty("breakbeat"), empty("dream"), empty("skill"), empty("incident")]);
   await page.route(/\/api\/sessions\?archived=(?:false|true)$/, (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
   await page.route("**/api/settings/ui", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ auto_approve_tools: false }) }));
 
   await page.goto(`${baseUrl}/#proactive/cron`);
+  const socketUrls = await page.evaluate(() => (window as typeof window & { __tgaSocketUrls: () => string[] }).__tgaSocketUrls());
+  expect(socketUrls.some((url) => url.endsWith("/ws/web"))).toBe(true);
+  expect(socketUrls.some((url) => url.endsWith("/ws"))).toBe(false);
+  await expect(page.locator('[data-proactive-domain="cron"]')).toBeVisible();
+  await testInfo.attach("proactive-cron-dark", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+
+  await page.getByRole("button", { name: "隐藏会话栏" }).click();
+  const sidebar = page.getByRole("complementary", { name: "会话管理" });
+  await expect(sidebar.getByRole("button", { name: "打开 Cron", exact: true })).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: "打开 Incidents", exact: true })).toBeVisible();
   const desktop = await page.locator('.proactive-card-grid').evaluate((grid) => {
     const cards = [...grid.children] as HTMLElement[];
     return {

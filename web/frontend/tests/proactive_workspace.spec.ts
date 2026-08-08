@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const baseUrl = process.env.TGA_WEB_URL || "http://127.0.0.1:8000";
 
@@ -45,14 +45,22 @@ function snapshot(
   };
 }
 
-async function mockAppShell(page: Page) {
-  await page.route(/\/api\/sessions\?archived=false$/, (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+async function mockAppShell(page: Page, activeSessions: Array<Record<string, unknown>> = []) {
+  await page.route(/\/api\/sessions\?archived=false$/, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(activeSessions) }));
   await page.route(/\/api\/sessions\?archived=true$/, (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
   await page.route("**/api/settings/ui", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ auto_approve_tools: false }) }));
   await page.route("**/api/control/config", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(controlConfig()) }));
   await page.route("**/api/control/tools", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ active_revision: "active", tools: [], unavailable_approval_required: [] }) }));
   await page.route(/\/api\/sessions\/[^/]+\/messages$/, (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
   await page.route(/\/api\/sessions\/[^/]+\/context-window$/, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ used_tokens: 0, max_tokens: 300000, remaining_tokens: 300000 }) }));
+}
+
+async function expectSoftHoverElevation(control: Locator) {
+  const restingShadow = await control.evaluate((element) => getComputedStyle(element).boxShadow);
+  expect(restingShadow).not.toBe("none");
+  await control.hover();
+  const hoverShadow = await control.evaluate((element) => getComputedStyle(element).boxShadow);
+  expect(hoverShadow).not.toBe(restingShadow);
 }
 
 async function installProactiveSocket(page: Page, initialSnapshots = [snapshot("cron"), snapshot("breakbeat"), snapshot("dream"), snapshot("skill"), snapshot("incident")]) {
@@ -95,11 +103,11 @@ async function installProactiveSocket(page: Page, initialSnapshots = [snapshot("
   }, initialSnapshots);
 }
 
-test("Cron cards show complete schedules and update only from the confirmed delete response", async ({ page }) => {
+test("Cron cards show one locally formatted next execution and update only from the confirmed delete response", async ({ page }) => {
   const cron = snapshot("cron", 3, {
     data: {
       jobs: [
-        { id: "cron-recurring", cron: "0 9 * * 1", created_at: "2026-08-01T08:00:00+08:00", prompt: "每周检查所有部署记录，并将异常汇总到 Incident。", recurring: true, delivery_channels: ["cli", "web"], updated_at: "2026-08-02T08:00:00+08:00", next_run_at: "2026-08-03T09:00:00+08:00" },
+        { id: "cron-recurring", cron: "0 9 * * 1", created_at: "2026-08-01T08:00:00+08:00", prompt: "每周检查所有部署记录，并将异常、需要人工跟进的事项和下一步建议整理为清晰摘要，再投递到对应的主动能力工作面。", recurring: true, delivery_channels: ["cli", "web"], updated_at: "2026-08-02T08:00:00+08:00", next_run_at: "2026-08-03T09:00:00+08:00" },
         { id: "cron-once", cron: null, created_at: "2026-08-01T09:00:00+08:00", prompt: "一次性检查发布状态。", recurring: false, delivery_channels: ["cli"], updated_at: "2026-08-01T09:00:00+08:00", next_run_at: "2026-08-04T15:30:00+08:00" },
       ],
       usage: { calls: 4, input_tokens: 21, output_tokens: 13, total_tokens: 34 },
@@ -120,10 +128,28 @@ test("Cron cards show complete schedules and update only from the confirmed dele
   });
 
   await page.goto(`${baseUrl}/#proactive/cron`);
-  await expect(page.locator('[data-proactive-id="cron-recurring"]')).toContainText("每周检查所有部署记录，并将异常汇总到 Incident。");
+  await expect(page.locator('[data-proactive-id="cron-recurring"]')).toContainText("每周检查所有部署记录，并将异常、需要人工跟进的事项和下一步建议整理为清晰摘要，再投递到对应的主动能力工作面。");
   await expect(page.locator('[data-proactive-id="cron-recurring"]')).toContainText("0 9 * * 1");
-  await expect(page.locator('[data-proactive-id="cron-once"]')).toContainText("2026-08-04T15:30:00+08:00");
+  await expect(page.locator('[data-proactive-id="cron-recurring"]')).not.toContainText("cron-recurring");
+  await expect(page.locator('[data-proactive-id="cron-once"]')).toContainText("下次执行");
+  await expect(page.locator('[data-proactive-id="cron-once"]')).toContainText("2026年8月4日 15:30");
+  await expect(page.locator('[data-proactive-id="cron-once"]')).not.toContainText("2026-08-04T15:30:00+08:00");
+  await expect(page.locator('[data-proactive-id="cron-recurring"]')).toContainText("创建时间");
+  await expect(page.locator('[data-proactive-id="cron-recurring"]')).toContainText("2026年8月1日 08:00");
+  await expect(page.locator('[data-proactive-id="cron-recurring"]')).toContainText("更新时间");
+  await expect(page.locator('[data-proactive-id="cron-recurring"]')).toContainText("2026年8月2日 08:00");
+  await expect(page.locator('[data-proactive-id="cron-recurring"]')).not.toContainText("2026-08-01T08:00:00+08:00");
+  await expect(page.getByText("数据计划", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("运行投影", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("配置时区", { exact: true })).toHaveCount(0);
   await expect(page.locator('[data-proactive-id="cron-recurring"]')).toHaveAttribute("data-proactive-state", "running");
+
+  const actionBottomOffsets = await page.locator('[data-proactive-card="cron-job"]').evaluateAll((cards) => cards.map((card) => {
+    const action = card.querySelector<HTMLElement>(".proactive-card-actions");
+    return card.getBoundingClientRect().bottom - (action?.getBoundingClientRect().bottom || 0);
+  }));
+  expect(actionBottomOffsets).toHaveLength(2);
+  expect(Math.abs(actionBottomOffsets[0] - actionBottomOffsets[1])).toBeLessThanOrEqual(1);
 
   await page.getByRole("button", { name: "删除 Cron cron-recurring" }).click();
   await expect(page.getByRole("alertdialog")).toContainText("cron-recurring");
@@ -131,6 +157,30 @@ test("Cron cards show complete schedules and update only from the confirmed dele
   await expect(page.locator('[data-proactive-id="cron-recurring"]')).toHaveCount(0);
   expect(actionRequests).toBe(1);
   expect(domainGets).toBe(0);
+});
+
+test("destructive controls retain a modest visible hover elevation", async ({ page }) => {
+  const cron = snapshot("cron", 3, {
+    data: {
+      jobs: [{ id: "cron-hover", cron: "0 9 * * *", created_at: "2026-08-01T08:00:00+08:00", prompt: "检查删除操作的悬浮层级。", recurring: true, delivery_channels: ["web"], updated_at: "2026-08-01T08:00:00+08:00", next_run_at: "2026-08-03T09:00:00+08:00" }],
+      usage: { calls: 51, input_tokens: 157822, output_tokens: 11593, total_tokens: 169415 },
+    },
+  });
+  await installProactiveSocket(page, [cron, snapshot("breakbeat"), snapshot("dream"), snapshot("skill"), snapshot("incident")]);
+  await mockAppShell(page, [{ id: "session-hover", channel: "web", title: "阴影验收会话", pinned: false, archived: false, created_at: "2026-08-01T08:00:00+08:00", updated_at: "2026-08-01T08:00:00+08:00" }]);
+
+  await page.goto(`${baseUrl}/#proactive/cron`);
+  const cronDelete = page.getByRole("button", { name: "删除 Cron cron-hover" });
+  await expectSoftHoverElevation(cronDelete);
+  await cronDelete.click();
+  const confirmDelete = page.getByRole("button", { name: "确认删除 Cron" });
+  await expectSoftHoverElevation(confirmDelete);
+  await page.getByRole("button", { name: "取消" }).click();
+
+  const sessionRow = page.locator(".session-row").filter({ hasText: "阴影验收会话" });
+  await sessionRow.hover();
+  await page.getByRole("button", { name: "阴影验收会话 会话操作" }).click();
+  await expectSoftHoverElevation(page.getByRole("menuitem", { name: "删除", exact: true }));
 });
 
 test("Cron action failures preserve card data and expose status with readable detail", async ({ page }) => {
@@ -209,8 +259,17 @@ test("Breakbeat cards sort active work first, complete directly, and navigate to
 
   await page.goto(`${baseUrl}/#proactive/breakbeat`);
   await expect(page.locator('[data-proactive-card="breakbeat-item"]').first()).toHaveAttribute("data-proactive-id", "active-new");
-  await expect(page.locator('[data-proactive-id="active-new"]')).toContainText("2026-08-04 09:30 Asia/Shanghai");
-  await expect(page.locator('[data-proactive-id="done-old"]')).toContainText("未提供截止时间");
+  await expect(page.locator('[data-proactive-id="active-new"]')).toContainText("进行中");
+  await expect(page.locator('[data-proactive-id="active-new"]')).not.toContainText("in_progress");
+  await expect(page.locator('[data-proactive-id="active-new"]')).not.toContainText("active-new");
+  await expect(page.locator('[data-proactive-id="active-new"]')).not.toContainText("session-source");
+  await expect(page.locator('[data-proactive-id="active-new"] .proactive-facts')).toHaveCSS("grid-template-columns", /\S+\s+\S+/);
+  await expect(page.locator('[data-proactive-id="active-new"]')).toContainText("创建时间");
+  await expect(page.locator('[data-proactive-id="active-new"]')).toContainText("2026年8月2日 08:00");
+  await expect(page.locator('[data-proactive-id="active-new"]')).toContainText("更新时间");
+  await expect(page.locator('[data-proactive-id="active-new"]')).toContainText("2026年8月3日 08:00");
+  await expect(page.locator('[data-proactive-id="active-new"]')).not.toContainText("2026-08-04 09:30 Asia/Shanghai");
+  await expect(page.getByText("原始截止时间", { exact: true })).toHaveCount(0);
   await expect(page.getByText("hidden-cursor")).toHaveCount(0);
 
   await page.getByRole("button", { name: "完成 Breakbeat active-new" }).click();
@@ -219,7 +278,7 @@ test("Breakbeat cards sort active work first, complete directly, and navigate to
   await expect(page).toHaveURL(/\/sessions\/session-source$/);
 });
 
-test("Memory shows exact server token budgets, configured timezone, and complete read-only documents", async ({ page }) => {
+test("Memory shows one locally formatted next execution, exact token budgets, and complete read-only documents", async ({ page }) => {
   const dream = snapshot("dream", 4, {
     data: {
       cursors: { internal: { message_id: "hidden-memory-message", created_at: "2026-08-03T08:00:00+08:00" } },
@@ -241,7 +300,10 @@ test("Memory shows exact server token budgets, configured timezone, and complete
   await expect(page.getByText("321 / 12000 tokens")).toBeVisible();
   await expect(page.getByText("123 / 4000 tokens")).toBeVisible();
   await expect(page.getByText("444 / 16000 tokens")).toBeVisible();
-  await expect(page.getByText("America/New_York")).toBeVisible();
+  await expect(page.getByText("下次执行", { exact: true })).toBeVisible();
+  await expect(page.getByText("2026年8月4日 09:00", { exact: true })).toBeVisible();
+  await expect(page.getByText("时区：America/New_York", { exact: true })).toHaveCount(1);
+  await expect(page.getByText("运行投影下次运行", { exact: true })).toHaveCount(0);
   await expect(page.getByText("hidden-memory-message")).toHaveCount(0);
   await expect(page.locator('[data-proactive-page="memory"] button').filter({ hasText: /编辑|运行 Dream|删除/ })).toHaveCount(0);
 });
@@ -266,8 +328,12 @@ test("Skill cards expose complete observation evidence and Markdown draft conten
 
   await page.goto(`${baseUrl}/#proactive/skills`);
   await expect(page.locator('[data-proactive-id="obs-1"]')).toContainText("复现失败后先保存完整 traceback。");
-  await expect(page.locator('[data-proactive-id="obs-1"]')).toContainText("message-a");
-  await expect(page.locator('[data-proactive-id="obs-1"]')).toContainText("message-b");
+  await expect(page.locator('[data-proactive-id="obs-1"]')).toContainText("2026年8月3日 08:00");
+  await expect(page.locator('[data-proactive-id="obs-1"]')).not.toContainText("2026-08-03T08:00:00+08:00");
+  await expect(page.locator('[data-proactive-id="obs-1"]')).toContainText("2 条消息");
+  await expect(page.locator('[data-proactive-id="obs-1"]')).not.toContainText("message-a");
+  await expect(page.locator('[data-proactive-id="obs-1"]')).not.toContainText("message-b");
+  await expect(page.locator('[data-proactive-id="obs-1"]')).not.toContainText("obs-1");
   await expect(page.locator('[data-proactive-card="skill-observation"]')).toHaveCount(4);
   await expect(page.locator('[data-proactive-id="focused-review"]')).toContainText("执行聚焦代码评审");
   await expect(page.locator('[data-proactive-id="focused-review"]')).toContainText("pytest -q");
@@ -291,15 +357,20 @@ test("Incident filters default open and action snapshots preserve complete resol
 
   await page.goto(`${baseUrl}/#proactive/incidents`);
   await expect(page.locator('[data-proactive-id="incident-open"]')).toBeVisible();
+  await expect(page.locator('[data-proactive-id="incident-open"]')).toContainText("未解决");
+  await expect(page.locator('[data-proactive-id="incident-open"]')).not.toContainText("cron:timeout");
+  await expect(page.locator('[data-proactive-id="incident-open"]')).toContainText("2026年8月1日 08:00");
+  await expect(page.locator('[data-proactive-id="incident-open"]')).toContainText("2026年8月3日 08:00");
+  await expect(page.locator('[data-proactive-id="incident-open"]')).not.toContainText("2026-08-01T08:00:00+08:00");
   await expect(page.locator('[data-proactive-id="incident-resolved"]')).toHaveCount(0);
   await expect(page.locator('[data-proactive-id="incident-open"] [data-proactive-history-item]')).toHaveCount(2);
 
   await page.getByRole("button", { name: "全部 Incident" }).click();
   await expect(page.locator('[data-proactive-card="incident"]')).toHaveCount(2);
-  await page.getByRole("button", { name: "open Incident" }).click();
+  await page.getByRole("button", { name: "筛选未解决 Incident" }).click();
   await page.getByRole("button", { name: "标记 Incident 已解决 cron:timeout" }).click();
-  await expect(page.getByText("暂无 open Incident。")).toBeVisible();
-  await page.getByRole("button", { name: "resolved Incident" }).click();
+  await expect(page.getByText("暂无未解决 Incident。")).toBeVisible();
+  await page.getByRole("button", { name: "筛选已解决 Incident" }).click();
   await expect(page.locator('[data-proactive-id="incident-open"]')).toContainText("用户在 Web 中标记已解决");
   await expect(page.locator('[data-proactive-id="incident-open"] [data-proactive-history-item]')).toHaveCount(3);
 });
@@ -339,52 +410,142 @@ test("Breakbeat and Incident hard deletes require confirmation and consume their
   await expect(page.locator('[data-proactive-id="delete-incident"]')).toHaveCount(0);
 });
 
-test("proactive workspace deep-links all five domains and retains the selected page after reload", async ({ page }) => {
-  await installProactiveSocket(page);
+test("sidebar exposes the five proactive workspaces below new session without an overview", async ({ page }) => {
+  await installProactiveSocket(page, [
+    snapshot("cron", 1, { data: { jobs: [
+      { id: "cron-a", cron: "0 9 * * *", created_at: "2026-08-01T08:00:00+08:00", prompt: "检查状态", recurring: true, delivery_channels: ["web"], updated_at: "2026-08-01T08:00:00+08:00", next_run_at: "2026-08-06T09:00:00+08:00" },
+      { id: "cron-b", cron: null, created_at: "2026-08-01T08:00:00+08:00", prompt: "发送提醒", recurring: false, delivery_channels: ["cli"], updated_at: "2026-08-01T08:00:00+08:00", next_run_at: "2026-08-06T10:00:00+08:00" },
+    ], usage: { calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 } } }),
+    snapshot("breakbeat", 1, { data: { items: [
+      { id: "todo", todo: "待办", deadline: null, source_session_id: "session-a", status: "in_progress", created_at: "2026-08-01T08:00:00+08:00", updated_at: "2026-08-01T08:00:00+08:00" },
+      { id: "done", todo: "完成", deadline: null, source_session_id: "session-b", status: "completed", created_at: "2026-08-01T08:00:00+08:00", updated_at: "2026-08-01T08:00:00+08:00" },
+    ], cursors: {}, next_run_at: null, usage: { calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 } } }),
+    snapshot("dream", 1, { data: { cursors: {}, next_run_at: null, usage: { calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 }, memory: { user: "", soul: "" }, memory_tokens: { user_tokens: 4, soul_tokens: 2, total_tokens: 6 }, profile_limits: { user_profile_token_limit: 12000, soul_profile_token_limit: 4000, profile_total_token_limit: 16000 }, timezone: "Asia/Shanghai" } }),
+    snapshot("skill", 1, { data: { observations: [
+      { id: "one", created_at: "2026-08-01T08:00:00+08:00", kind: "workflow", observation: "观察一", source_session_id: "session-a", source_message_ids: [] },
+      { id: "two", created_at: "2026-08-01T08:00:00+08:00", kind: "tool_procedure", observation: "观察二", source_session_id: "session-b", source_message_ids: [] },
+    ], drafts: [{ name: "draft", description: "草稿", body: "# Draft" }], next_run_at: null, usage: { calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 } } }),
+    snapshot("incident", 1, { data: { incidents: [
+      { id: "open", fingerprint: "cron:open", source: "cron", state: "open", first_detected_at: "2026-08-01T08:00:00+08:00", last_detected_at: "2026-08-01T08:00:00+08:00", occurrence_count: 1, message: "待处理", history: [] },
+      { id: "resolved", fingerprint: "cron:resolved", source: "cron", state: "resolved", first_detected_at: "2026-08-01T08:00:00+08:00", last_detected_at: "2026-08-01T08:00:00+08:00", occurrence_count: 1, message: "已处理", history: [] },
+    ] } }),
+  ]);
   await mockAppShell(page);
 
-  await page.goto(baseUrl);
-  await page.getByRole("button", { name: "打开主动能力" }).click();
+  await page.goto(`${baseUrl}/#proactive`);
+  const sidebar = page.getByRole("complementary", { name: "会话管理" });
   await expect(page).toHaveURL(/#proactive\/cron$/);
+  await expect(page.locator("[data-proactive-domain]")).toHaveAttribute("data-proactive-domain", "cron");
+  await expect(sidebar.getByRole("button", { name: "打开主动能力概览" })).toHaveCount(0);
+  await expect(sidebar.getByRole("region", { name: "主动能力" })).toHaveCount(0);
+  await expect(sidebar.getByRole("status", { name: "主动能力状态" })).toHaveCount(0);
+  for (const [label, status] of [["Cron", "正常"], ["Breakbeat", "正常"], ["长期记忆与 Dream", "正常"], ["Skill 自进化", "正常"], ["Incidents", "异常"]] as const) {
+    await expect(sidebar.getByRole("status", { name: `${label} 健康状态` })).toHaveText(status);
+  }
+  const sidebarButtons = await sidebar.locator(".sidebar-body > .sidebar-commands > button, .sidebar-body > .sidebar-proactive-section > .sidebar-proactive-domains > button, .sidebar-body > .session-section > button").evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label") || element.textContent?.trim()));
+  expect(sidebarButtons).toEqual(["新建会话", "搜索", "打开 Cron", "打开 Breakbeat", "打开 长期记忆与 Dream", "打开 Skill 自进化", "打开 Incidents", expect.stringMatching(/^会话/)]);
+  expect(sidebarButtons.indexOf("新建会话")).toBeLessThan(sidebarButtons.indexOf("搜索"));
+  expect(sidebarButtons.indexOf("搜索")).toBeLessThan(sidebarButtons.indexOf("打开 Cron"));
+  expect(sidebarButtons.indexOf("打开 Incidents")).toBeLessThan(sidebarButtons.findIndex((label) => label?.startsWith("会话")));
+  const primaryControls = sidebar.locator(".sidebar-primary-action, .sidebar-proactive-domain");
+  await expect(primaryControls).toHaveCount(7);
+  const controlHeights = await primaryControls.evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().height));
+  expect(controlHeights).toEqual([36, 36, 36, 36, 36, 36, 36]);
+  await expect(sidebar.locator(".section-title").first()).toHaveJSProperty("offsetHeight", 28);
 
-  for (const [domain, label] of [["cron", "Cron"], ["breakbeat", "Breakbeat"], ["memory", "长期记忆与 Dream"], ["skills", "Skill 演进与 Draft"], ["incidents", "Incidents"]] as const) {
-    await page.goto(`${baseUrl}/#proactive/${domain}`);
+  const newSession = sidebar.getByRole("button", { name: "新建会话", exact: true });
+  const searchSessions = sidebar.getByRole("button", { name: "搜索", exact: true });
+  const breakbeat = sidebar.getByRole("button", { name: "打开 Breakbeat", exact: true });
+  const backgroundColor = async (locator: typeof newSession) => locator.evaluate((element) => getComputedStyle(element).backgroundColor);
+  expect(await backgroundColor(newSession)).toBe("rgba(0, 0, 0, 0)");
+  expect(await backgroundColor(searchSessions)).toBe("rgba(0, 0, 0, 0)");
+  expect(await backgroundColor(breakbeat)).toBe("rgba(0, 0, 0, 0)");
+  await newSession.hover();
+  await expect.poll(() => backgroundColor(newSession)).not.toBe("rgba(0, 0, 0, 0)");
+  await searchSessions.hover();
+  await expect.poll(() => backgroundColor(searchSessions)).not.toBe("rgba(0, 0, 0, 0)");
+  await breakbeat.hover();
+  await expect.poll(() => backgroundColor(breakbeat)).not.toBe("rgba(0, 0, 0, 0)");
+
+  for (const [domain, label] of [["cron", "Cron"], ["breakbeat", "Breakbeat"], ["memory", "长期记忆与 Dream"], ["skills", "Skill 自进化"], ["incidents", "Incidents"]] as const) {
+    const entry = sidebar.getByRole("button", { name: `打开 ${label}`, exact: true });
+    await entry.click();
+    await expect(page).toHaveURL(new RegExp(`#proactive/${domain}$`));
     await expect(page.getByRole("heading", { name: "主动能力", exact: true })).toBeVisible();
-    await expect(page.getByRole("tab", { name: label })).toHaveAttribute("aria-selected", "true");
+    await expect(entry).toHaveAttribute("aria-current", "page");
     await expect(page.locator("[data-proactive-domain]")).toHaveAttribute("data-proactive-domain", domain);
+    await expect(page.getByText("时区：Asia/Shanghai", { exact: true })).toHaveCount(1);
     await expect(page.locator(".message")).toHaveCount(0);
   }
 
+  await sidebar.getByRole("button", { name: "打开 Incidents", exact: true }).click();
   await page.reload();
-  await expect(page.getByRole("tab", { name: "Incidents" })).toHaveAttribute("aria-selected", "true");
+  await expect(sidebar.getByRole("button", { name: "打开 Incidents", exact: true })).toHaveAttribute("aria-current", "page");
   await expect(page.locator("[data-proactive-domain]")).toHaveAttribute("data-proactive-domain", "incidents");
 });
 
-test("proactive tabs use roving focus, labeled panels, and Arrow navigation updates the hash", async ({ page }) => {
+test("proactive header keeps only the title and an aligned return action", async ({ page }) => {
   await installProactiveSocket(page);
   await mockAppShell(page);
   await page.goto(`${baseUrl}/#proactive/cron`);
 
-  const cronTab = page.getByRole("tab", { name: "Cron" });
-  const breakbeatTab = page.getByRole("tab", { name: "Breakbeat" });
-  await expect(cronTab).toHaveAttribute("id", "proactive-tab-cron");
-  await expect(cronTab).toHaveAttribute("aria-controls", "proactive-panel-cron");
-  await expect(cronTab).toHaveAttribute("tabindex", "0");
-  await expect(breakbeatTab).toHaveAttribute("tabindex", "-1");
-  const cronPanel = page.getByRole("tabpanel", { name: "Cron" });
-  await expect(cronPanel).toHaveAttribute("id", "proactive-panel-cron");
-  await expect(cronPanel).toHaveAttribute("aria-labelledby", "proactive-tab-cron");
+  const header = page.locator(".proactive-header");
+  const inner = page.locator(".proactive-header-inner");
+  const panel = page.locator(".proactive-panel");
+  await expect(header).toContainText("主动能力");
+  await expect(header).not.toContainText("部署级工作面");
+  await expect(header).not.toContainText("后台结果仅在此处更新，不会写入聊天会话。");
+  const returnButton = inner.getByRole("button", { name: "返回聊天" });
+  await expect(returnButton).toBeVisible();
 
-  await cronTab.focus();
-  await cronTab.press("ArrowRight");
-  await expect(breakbeatTab).toBeFocused();
-  await expect(breakbeatTab).toHaveAttribute("aria-selected", "true");
-  await expect(page).toHaveURL(/#proactive\/breakbeat$/);
-  await expect(page.getByRole("tabpanel", { name: "Breakbeat" })).toHaveAttribute("aria-labelledby", "proactive-tab-breakbeat");
+  const axes = await Promise.all([inner, panel].map((locator) => locator.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    return { left: box.left, right: box.right };
+  })));
+  expect(Math.abs(axes[0].left - axes[1].left)).toBeLessThanOrEqual(1);
+  expect(Math.abs(axes[0].right - axes[1].right)).toBeLessThanOrEqual(1);
+  const titleBox = await header.getByRole("heading", { name: "主动能力" }).boundingBox();
+  const innerBox = await inner.boundingBox();
+  const returnBox = await returnButton.boundingBox();
+  expect(titleBox).not.toBeNull();
+  expect(innerBox).not.toBeNull();
+  expect(returnBox).not.toBeNull();
+  expect(Math.abs(titleBox!.x - innerBox!.x)).toBeLessThanOrEqual(1);
+  expect(returnBox!.x).toBeLessThan(innerBox!.x);
 
-  await breakbeatTab.press("ArrowLeft");
-  await expect(cronTab).toBeFocused();
+  await returnButton.hover();
+  await page.mouse.down();
+  const pressedTransform = await returnButton.evaluate((element) => getComputedStyle(element).transform);
+  await page.mouse.up();
+  const pressedY = Number(pressedTransform.match(/matrix\([^,]+,[^,]+,[^,]+,[^,]+,[^,]+,\s*(-?[\d.]+)\)/)?.[1] || 0);
+  expect(Math.abs(pressedY)).toBeGreaterThan(10);
+});
+
+test("collapsed sidebar keeps direct proactive names without a tab or roving-focus contract", async ({ page }) => {
+  await installProactiveSocket(page);
+  await mockAppShell(page);
+  await page.goto(`${baseUrl}/#proactive/cron`);
+
+  const sidebar = page.getByRole("complementary", { name: "会话管理" });
+  await expect(page.getByRole("tablist")).toHaveCount(0);
+  await expect(page.getByRole("tab")).toHaveCount(0);
+  await expect(page.getByRole("tabpanel")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "隐藏会话栏" }).click();
+  for (const name of ["打开 Cron", "打开 Breakbeat", "打开 长期记忆与 Dream", "打开 Skill 自进化", "打开 Incidents"]) {
+    const entry = sidebar.getByRole("button", { name, exact: true });
+    await expect(entry).toBeVisible();
+    expect(await entry.evaluate((element) => (element as HTMLButtonElement).tabIndex)).toBe(0);
+  }
+
+  const cronEntry = sidebar.getByRole("button", { name: "打开 Cron", exact: true });
+  await cronEntry.focus();
+  await cronEntry.press("ArrowRight");
+  await expect(cronEntry).toBeFocused();
   await expect(page).toHaveURL(/#proactive\/cron$/);
+
+  await sidebar.getByRole("button", { name: "打开 Breakbeat", exact: true }).click();
+  await expect(page).toHaveURL(/#proactive\/breakbeat$/);
 });
 
 test("proactive socket receives complete snapshots, maps wire domains, and remains app-lifetime", async ({ page }) => {
@@ -402,24 +563,24 @@ test("proactive socket receives complete snapshots, maps wire domains, and remai
   await expect.poll(() => page.evaluate(() => (window as unknown as { __tgaProactiveConnections: () => number }).__tgaProactiveConnections())).toBe(1);
 });
 
-test("sidebar health lamp reports idle, active, readonly, and reconnecting states in text", async ({ page }) => {
+test("sidebar health chips report normal, active, readonly, and reconnecting states in text", async ({ page }) => {
   await installProactiveSocket(page);
   await mockAppShell(page);
   await page.goto(baseUrl);
 
-  const lamp = page.getByLabel("主动能力状态");
-  await expect(lamp).toHaveAttribute("data-state", "idle");
-  await expect(lamp).toContainText("空闲");
+  const cronHealth = page.getByRole("status", { name: "Cron 健康状态" });
+  await expect(cronHealth).toHaveAttribute("data-state", "idle");
+  await expect(cronHealth).toContainText("正常");
 
   await page.evaluate((payload) => (window as unknown as { __tgaEmitProactive: (value: unknown) => void }).__tgaEmitProactive(payload), snapshot("cron", 2, { runtime: { running: true, next_run_at: null, entity_states: { "cron-1": "running" } } }));
-  await expect(lamp).toHaveAttribute("data-state", "active");
-  await expect(lamp).toContainText("运行中");
+  await expect(cronHealth).toHaveAttribute("data-state", "active");
+  await expect(cronHealth).toContainText("运行中");
 
   await page.evaluate((payload) => (window as unknown as { __tgaEmitProactive: (value: unknown) => void }).__tgaEmitProactive(payload), snapshot("incident", 3, { owner: { mode: "readonly", writable: false, owner_id: "cli-owner", owner_kind: "cli", owner_pid: 99 } }));
-  await expect(lamp).toHaveAttribute("data-state", "readonly");
-  await expect(lamp).toContainText("只读");
+  await expect(cronHealth).toHaveAttribute("data-state", "unavailable");
+  await expect(cronHealth).toContainText("只读");
 
   await page.evaluate(() => (window as unknown as { __tgaCloseProactive: () => void }).__tgaCloseProactive());
-  await expect(lamp).toHaveAttribute("data-state", "unavailable");
-  await expect(lamp).toContainText("连接中");
+  await expect(cronHealth).toHaveAttribute("data-state", "unavailable");
+  await expect(cronHealth).toContainText("连接中");
 });
