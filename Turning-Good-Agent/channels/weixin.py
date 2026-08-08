@@ -717,5 +717,6 @@ def _parse_event(event: object) -> tuple[str, str, bool, str, dict[str, object]]
 def _is_private_chat(event: dict[str, object]) -> bool:
     chat_type = event.get("chat_type", event.get("conversation_type"))
     if not isinstance(chat_type, (str, int)) or str(chat_type) == "":
-        return False
+        sender = event.get("from_user_id", event.get("fromUserId"))
+        return isinstance(sender, str) and bool(sender) and not sender.endswith("@chatroom")
     return str(chat_type).lower() in {"p2p", "private", "direct", "single", "1"}
