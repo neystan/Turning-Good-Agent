@@ -148,7 +148,7 @@ test("settings keeps IM controls in the editor scroll area and clears sensitive 
   await expect(scroll.getByRole("heading", { name: "IM Channels" })).toBeVisible();
   await expect(page.getByText("app_secret", { exact: false })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "订阅通知" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "撤销账号" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "停用并保留" })).toBeVisible();
   await expect(page.getByRole("button", { name: "轮换凭据" })).toBeVisible();
   await expect(page.getByRole("button", { name: "设置 Owner 验证码" })).toBeVisible();
 
@@ -217,6 +217,181 @@ test("settings can restart an expired Weixin binding and show its new QR", async
 
   await expect.poll(() => rescanCalled).toBe(true);
   await expect(page.getByAltText("微信登录二维码")).toBeVisible();
+});
+
+test("settings identifies IM roles and keeps a busy permanent-delete dialog open", async ({ page }) => {
+  const busyMessage = "该 Binding 正在处理消息或等待回复投递，暂时不能删除。请等待本轮完成后再试";
+  const integrityMessage = "独立主体数据关联异常，无法安全删除";
+  const ownerWeixin = { id: "owner-weixin", platform: "weixin", principal_id: "opaque-owner", principal_kind: "owner", status: "active", enabled: true, subscribed: true, credential_state: "configured", connected: true };
+  const independentWeixin = { id: "independent-weixin", platform: "weixin", principal_id: "opaque-independent", principal_kind: "independent", status: "active", enabled: true, subscribed: false, credential_state: "configured", connected: true };
+  const ownerFeishu = { id: "owner-feishu", platform: "feishu", principal_id: "opaque-owner", principal_kind: "owner", status: "active", enabled: true, subscribed: false, credential_state: "configured", connected: true, app_id_masked: "cli••••mo" };
+  let deleteAttempts = 0;
+  let delayNextList = false;
+  let staleListStarted = false;
+  let releaseStaleList = () => {};
+  const staleListGate = new Promise<void>((resolve) => { releaseStaleList = resolve; });
+  await page.route("**/api/control/config", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(controlConfig()) });
+  });
+  await page.route("**/api/control/tools", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(toolCatalog()) });
+  });
+  await page.route("**/api/control/channels", async (route) => {
+    if (delayNextList) {
+      delayNextList = false;
+      staleListStarted = true;
+      await staleListGate;
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ accounts: [ownerFeishu, ownerWeixin, independentWeixin] }) });
+  });
+  await page.route("**/api/control/channels/weixin/independent-weixin", async (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    deleteAttempts += 1;
+    if (deleteAttempts === 1) {
+      await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: { code: "binding_busy", message: busyMessage } }) });
+      return;
+    }
+    if (deleteAttempts === 2) {
+      await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: { code: "independent_principal_integrity_error", message: integrityMessage } }) });
+      return;
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ deleted: true, account_id: independentWeixin.id, platform: independentWeixin.platform }) });
+  });
+
+  await page.goto(`${baseUrl}/#settings`);
+  await expect(page.getByText("飞书 Bot · Owner", { exact: true })).toBeVisible();
+  await expect(page.getByText("微信 Owner Binding · Owner", { exact: true })).toBeVisible();
+  await expect(page.getByText("微信独立主体 Binding · 独立主体", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "微信 Owner Binding" })).toBeDisabled();
+  await expect(page.getByText("已有 Owner Binding；请重新扫码或永久删除现有 Owner Binding 后再新建", { exact: true })).toBeVisible();
+
+  const independentRow = page.locator(".channel-account-row").filter({ hasText: "微信独立主体 Binding · 独立主体" });
+  delayNextList = true;
+  await page.getByRole("button", { name: "刷新 IM 账号" }).click();
+  await expect.poll(() => staleListStarted).toBe(true);
+  await independentRow.getByRole("button", { name: "永久删除" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await dialog.getByRole("button", { name: "确认永久删除" }).click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(busyMessage, { exact: true })).toBeVisible();
+  await expect(independentRow).toBeVisible();
+
+  await dialog.getByRole("button", { name: "确认永久删除" }).click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(integrityMessage, { exact: true })).toBeVisible();
+  await expect(dialog.getByText(busyMessage, { exact: true })).toHaveCount(0);
+
+  await dialog.getByRole("button", { name: "确认永久删除" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(independentRow).toHaveCount(0);
+  releaseStaleList();
+  await page.waitForTimeout(250);
+  await expect(independentRow).toHaveCount(0);
+  await expect(page.getByText("微信 Owner Binding · Owner", { exact: true })).toBeVisible();
+});
+
+test("settings follows an active Weixin candidate from QR through first-DM ownership", async ({ page }) => {
+  const pending = { id: "active-rebind", platform: "weixin", principal_id: "opaque-owner", principal_kind: "owner", status: "active", enabled: true, subscribed: true, credential_state: "configured", connected: true, rebind_state: "pending_qr" };
+  const waiting = { ...pending, rebind_state: "waiting_for_idle" };
+  const awaiting = { ...pending, status: "awaiting_first_dm", connected: false, rebind_state: undefined };
+  const candidateStartedAt = Date.now();
+  let firstQrAt = 0;
+  let detailCalls = 0;
+  await page.route("**/api/control/config", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(controlConfig()) });
+  });
+  await page.route("**/api/control/tools", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(toolCatalog()) });
+  });
+  await page.route("**/api/control/channels", async (route) => {
+    const candidateVisible = Date.now() - candidateStartedAt < 900;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ accounts: [candidateVisible ? pending : waiting] }) });
+  });
+  await page.route("**/api/control/channels/weixin/active-rebind/qr", async (route) => {
+    if (!firstQrAt) firstQrAt = Date.now();
+    const candidateVisible = Date.now() - firstQrAt < 900;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ binding_id: pending.id, status: "active", qr_content: candidateVisible ? "https://ilink.example/scan?token=candidate" : null, expires_at: candidateVisible ? Math.floor(Date.now() / 1000) + 300 : null }),
+    });
+  });
+  await page.route("**/api/control/channels/weixin/active-rebind", async (route) => {
+    detailCalls += 1;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(detailCalls === 1 ? waiting : awaiting) });
+  });
+
+  await page.goto(`${baseUrl}/#settings`);
+  await expect(page.getByAltText("微信登录二维码")).toBeVisible();
+  await expect(page.getByRole("button", { name: "重新扫码并转移使用者" })).toBeVisible();
+  await expect(page.getByText("候选凭据已就绪，正在等待当前回复结束", { exact: true })).toBeVisible({ timeout: 6_000 });
+  await expect.poll(() => detailCalls).toBe(1);
+  await page.waitForTimeout(700);
+  expect(detailCalls).toBe(1);
+  await expect(page.getByText("新使用者请发送第一条有效私聊，以完成 Binding 归属锁定。", { exact: true })).toBeVisible({ timeout: 6_000 });
+  expect(detailCalls).toBe(2);
+});
+
+test("settings rejects stale list and late detail failure across a successful rescan", async ({ page }) => {
+  const waiting = { id: "rebind-race", platform: "weixin", principal_id: "opaque-owner", principal_kind: "owner", status: "active", enabled: true, subscribed: true, credential_state: "configured", connected: true, rebind_state: "waiting_for_idle" };
+  const pending = { ...waiting, rebind_state: "pending_qr" };
+  let holdNextList = false;
+  let heldListStarted = false;
+  let releaseHeldList = () => {};
+  const heldListGate = new Promise<void>((resolve) => { releaseHeldList = resolve; });
+  await page.addInitScript(() => {
+    const nativeFetch = window.fetch.bind(window);
+    const rejectors: Array<(reason?: unknown) => void> = [];
+    const controls = window as unknown as { __tgaOldDetailsStarted: number; __tgaRejectOldDetails: () => void };
+    controls.__tgaOldDetailsStarted = 0;
+    controls.__tgaRejectOldDetails = () => {
+      rejectors.splice(0).forEach((reject) => reject(new Error("late old detail failure")));
+    };
+    window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+      const method = (init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
+      if (method === "GET" && url.endsWith("/api/control/channels/weixin/rebind-race")) {
+        controls.__tgaOldDetailsStarted += 1;
+        return new Promise<Response>((_resolve, reject) => { rejectors.push(reject); });
+      }
+      return nativeFetch(input, init);
+    };
+  });
+  await page.route("**/api/control/config", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(controlConfig()) });
+  });
+  await page.route("**/api/control/tools", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(toolCatalog()) });
+  });
+  await page.route("**/api/control/channels", async (route) => {
+    if (holdNextList) {
+      holdNextList = false;
+      heldListStarted = true;
+      await heldListGate;
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ accounts: [waiting] }) });
+  });
+  await page.route("**/api/control/channels/weixin/rebind-race/rescan", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(pending) });
+  });
+  await page.route("**/api/control/channels/weixin/rebind-race/qr", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ binding_id: pending.id, status: "active", qr_content: "https://ilink.example/scan?token=new-candidate", expires_at: Math.floor(Date.now() / 1000) + 300 }) });
+  });
+
+  await page.goto(`${baseUrl}/#settings`);
+  await expect(page.getByText("候选凭据已就绪，正在等待当前回复结束", { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __tgaOldDetailsStarted: number }).__tgaOldDetailsStarted)).toBeGreaterThan(0);
+  holdNextList = true;
+  await page.getByRole("button", { name: "刷新 IM 账号" }).click();
+  await expect.poll(() => heldListStarted).toBe(true);
+  await page.getByRole("button", { name: "重新扫码并转移使用者" }).click();
+  await expect(page.getByAltText("微信登录二维码")).toBeVisible();
+
+  releaseHeldList();
+  await page.evaluate(() => (window as unknown as { __tgaRejectOldDetails: () => void }).__tgaRejectOldDetails());
+  await page.waitForTimeout(250);
+  await expect(page.getByAltText("微信登录二维码")).toBeVisible();
+  await expect(page.getByText("候选凭据已就绪，正在等待当前回复结束", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("微信 Binding 状态暂不可用", { exact: true })).toHaveCount(0);
 });
 
 test("settings tests only editable LLM fields and uses text inputs with switches", async ({ page }) => {

@@ -5,11 +5,15 @@
 
 .settings-navigation h1, .settings-content h2, .settings-content h3 { margin: 0; letter-spacing: -.02em; }
 
-.settings-return, .settings-nav-current { min-height: 40px; display: flex; align-items: center; gap: 8px; border: 0; border-radius: var(--radius-control); padding: 0 10px; background: transparent; color: var(--muted); font: inherit; text-align: left; }
+.settings-return, .settings-nav-item { min-height: 40px; display: flex; align-items: center; gap: 8px; border: 0; outline: 0; border-radius: var(--radius-control); padding: 0 10px; background: transparent; color: var(--muted); font: inherit; text-align: left; }
 
 .settings-return { cursor: pointer; }
 
-.settings-return:hover, .settings-return:focus-visible, .settings-nav-current { background: var(--surface-hover); color: var(--text); }
+.settings-return:hover, .settings-return:focus-visible, .settings-nav-item:hover, .settings-nav-item:focus-visible, .settings-nav-item[aria-pressed="true"] { background: var(--surface-hover); color: var(--text); }
+
+.settings-nav-list { display: grid; gap: 4px; }
+
+.settings-nav-item { width: 100%; cursor: pointer; }
 
 .settings-content { min-height: 0; overflow: auto; padding: clamp(28px, 6vw, 72px) 28px 110px; }
 
@@ -149,7 +153,7 @@
 
 .settings-test-result { min-width: 0; color: var(--muted); font-size: .8125rem; }
 
-.channel-account-settings { margin-top: 28px; padding-top: 24px; }
+.channel-account-settings { margin: 0; padding: 0 0 24px; }
 .channel-account-heading, .channel-account-actions, .channel-feishu-form, .channel-account-row, .channel-account-controls { display: flex; align-items: center; gap: 10px; }
 .channel-account-heading { justify-content: space-between; }
 .channel-account-heading h3 { margin: 0; }
@@ -160,13 +164,18 @@
 .channel-account-action-help { flex: 1 1 100%; color: var(--muted); font-size: .75rem; line-height: 1.5; }
 .channel-feishu-form { flex-wrap: wrap; align-items: end; }
 .channel-feishu-form label { flex: 1 1 10rem; display: grid; gap: 5px; color: var(--muted); font-size: .75rem; }
-.channel-feishu-form input { min-height: 34px; border: 0; border-radius: var(--radius-control); padding: 0 9px; background: var(--surface-raised); color: var(--text); }
+.channel-feishu-form input { min-height: 34px; border: 0; outline: 0; box-shadow: none; border-radius: var(--radius-control); padding: 0 9px; background: var(--surface-raised); color: var(--text); }
+.channel-feishu-form input:focus-visible { outline: 0; box-shadow: none; background: var(--surface-hover); }
+.channel-account-actions button:focus-visible, .channel-feishu-form button:focus-visible, .channel-account-row button:focus-visible, .settings-icon-button:focus-visible { outline: 0; box-shadow: none; background: var(--surface-hover); }
 .channel-feishu-owner-help { flex: 1 1 100%; color: var(--muted); font-size: .75rem; line-height: 1.5; }
 .channel-account-list { display: grid; gap: 2px; margin-top: 16px; }
+.channel-account-list-section { display: grid; gap: 0; margin-top: 28px; }
+.channel-account-list-section h3 { margin: 0; }
 .channel-account-row { justify-content: space-between; min-height: 44px; padding: 6px 0; }
 .channel-account-row { align-items: flex-start; flex-wrap: wrap; }
 .channel-account-controls { flex-wrap: wrap; justify-content: flex-end; }
-.channel-account-controls input { min-height: 34px; width: 7rem; }
+.channel-account-controls input { min-height: 34px; width: 7rem; border: 0; outline: 0; box-shadow: none; border-radius: var(--radius-control); padding: 0 9px; background: var(--surface-raised); color: var(--text); }
+.channel-account-controls input:focus-visible { outline: 0; box-shadow: none; background: var(--surface-hover); }
 .channel-account-controls .channel-delete-trigger { background: color-mix(in srgb, var(--danger) 10%, var(--surface-raised)); color: var(--danger); }
 .channel-account-controls .channel-delete-trigger:hover, .channel-account-controls .channel-delete-trigger:focus-visible { outline: 0; background: color-mix(in srgb, var(--danger) 17%, var(--surface-hover)); box-shadow: 0 2px 7px color-mix(in srgb, var(--shadow) 28%, transparent); }
 .channel-rotation-form { width: 100%; padding: 8px 0; }
@@ -184,6 +193,10 @@
 .channel-rebind-state { width: 100%; margin: 4px 0 2px 23px; border-radius: var(--radius-control); padding: 9px 11px; background: var(--surface-raised); color: var(--muted); font-size: .75rem; }
 .channel-delete-dialog .channel-delete-binding { margin: -7px 0 14px; border-radius: var(--radius-control); padding: 8px 10px; background: var(--surface-raised); color: var(--muted); font: .75rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .channel-delete-dialog .channel-delete-error { margin: 0 0 12px; border-radius: var(--radius-control); padding: 9px 10px; background: color-mix(in srgb, var(--danger) 10%, var(--surface-raised)); color: var(--danger); font-size: .8125rem; line-height: 1.5; }
+
+.settings-channel-scroll { min-height: 0; }
+
+.settings-channel-scroll .scroll-area-viewport { padding: 0 8px 24px 0; }
 
 @media (max-width: 720px) { .channel-feishu-form { align-items: stretch; flex-direction: column; }.channel-feishu-form label, .channel-feishu-form button { width: 100%; }.channel-weixin-qr { align-items: flex-start; padding-left: 0; }.channel-rebind-state { margin-left: 0; } }
 
@@ -262,4 +275,20 @@
 
 .tool-permission-copy span {
   text-align: right;
+}
+
+@media (max-width: 720px) {
+  .settings-workspace { grid-template-columns: minmax(0, 1fr); }
+
+  .settings-navigation { flex-direction: row; align-items: center; padding: 10px 12px; }
+
+  .settings-navigation h1 { display: none; }
+
+  .settings-nav-list { min-width: 0; display: flex; gap: 4px; margin-left: auto; }
+
+  .settings-nav-item { width: auto; padding-inline: 8px; }
+
+  .settings-content { padding: 28px 16px 72px; }
+
+  .channel-feishu-form label, .channel-feishu-form button { flex: 0 0 auto; }
 }
