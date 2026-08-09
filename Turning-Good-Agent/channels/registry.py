@@ -53,6 +53,14 @@ class ChannelAccount:
     private: dict[str, object] = field(repr=False)
 
 
+class ChannelConflictError(ValueError):
+    """表示违反已持久化的账号 Binding 身份约束。"""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 @dataclass(frozen=True, slots=True)
 class ChannelAccountView:
     """供本机控制面使用的脱敏账号视图。"""
@@ -60,6 +68,7 @@ class ChannelAccountView:
     id: str
     platform: Platform
     principal_id: str
+    principal_kind: Literal["owner", "independent"]
     status: str
     enabled: bool
     subscribed: bool
@@ -94,6 +103,17 @@ class ChannelAccountRegistry:
             private={"credential_state": "pending", "inbound_ids": []},
         )
         with self._directory_lock():
+            for other in self.list_accounts(platform="weixin"):
+                if other.principal_id != resolved_principal:
+                    continue
+                if resolved_principal == self.owner_principal_id:
+                    raise ChannelConflictError(
+                        "owner_binding_exists", "owner_binding_exists"
+                    )
+                if principal_id is not None:
+                    raise ChannelConflictError(
+                        "principal_binding_exists", "principal_binding_exists"
+                    )
             self._write_account(account)
         return account
 
@@ -162,6 +182,18 @@ class ChannelAccountRegistry:
     def list_views(self) -> tuple[ChannelAccountView, ...]:
         """返回不含凭据、二维码、cursor 或外部身份的账号视图。"""
         return tuple(self._view(account) for account in self.list_accounts())
+
+    def delete(self, platform: Platform, account_id: str) -> ChannelAccount:
+        """删除一条明确指定的本地账号记录。"""
+        platform = _validate_platform(platform)
+        account_id = _validate_account_id(account_id)
+        with self._directory_lock():
+            with self._record_lock(platform, account_id):
+                current = self._read_account(platform, account_id)
+                if current is None:
+                    raise ValueError("账号不存在")
+                self._account_path(platform, account_id, create_directory=False).unlink()
+                return current
 
     def update(
         self,
@@ -263,15 +295,48 @@ class ChannelAccountRegistry:
         """停止指定账号的收发，但不移除其稳定记录。"""
         platform = _validate_platform(platform)
         account_id = _validate_account_id(account_id)
-        with self._record_lock(platform, account_id):
-            account = self._read_account(platform, account_id)
-            if account is None:
+        with self._directory_lock():
+            with self._record_lock(platform, account_id):
+                account = self._read_account(platform, account_id)
+                if account is None:
+                    raise ValueError("账号不存在")
+                if account.status == "revoked":
+                    return account
+                return self.update(
+                    replace(account, status="revoked", enabled=False, subscribed=False)
+                )
+
+    def claim_weixin_first_sender(
+        self, account_id: str, sender: str, context_token: str
+    ) -> tuple[ChannelAccount, bool]:
+        """原子绑定首个微信私信发送者，避免多个首信竞争同一 Binding。"""
+        account_id = _validate_account_id(account_id)
+        sender = _validate_protocol_value(sender, field_name="sender")
+        context_token = _validate_protocol_value(context_token, field_name="context_token")
+        with self._record_lock("weixin", account_id):
+            current = self._read_account("weixin", account_id)
+            if current is None:
                 raise ValueError("账号不存在")
-            if account.status == "revoked":
-                return account
-            return self.update(
-                replace(account, status="revoked", enabled=False, subscribed=False)
+            locked = current.private.get("from_user_id")
+            if isinstance(locked, str) and locked:
+                return current, locked == sender
+            if current.status != "awaiting_first_dm":
+                return current, False
+            private = {
+                **current.private,
+                "from_user_id": sender,
+                "context_token": context_token,
+                "conversation_id": current.id,
+                "connected": True,
+            }
+            updated = replace(
+                current,
+                status="active",
+                private=private,
+                updated_at=_utc_now(),
             )
+            self._write_account(updated)
+            return updated, True
 
     def claim_inbound(self, platform: Platform, account_id: str, inbound_id: str) -> bool:
         """持久化声明平台入站 ID，防止重复事件再次进入 Gateway。"""
@@ -517,13 +582,14 @@ class ChannelAccountRegistry:
                 "pending_qr", "awaiting_first_dm", "awaiting_owner_code", "connecting", "active",
                 "disabled", "expired", "failed", "revoked"
             },
-            "revoked": {"revoked", "pending_qr", "awaiting_owner_code"},
+            "revoked": {
+                "revoked", "pending_qr", "awaiting_first_dm", "awaiting_owner_code"
+            },
         }
         if target not in allowed[current]:
             raise ValueError("账号状态转换无效")
 
-    @staticmethod
-    def _view(account: ChannelAccount) -> ChannelAccountView:
+    def _view(self, account: ChannelAccount) -> ChannelAccountView:
         raw_credential_state = account.private.get("credential_state")
         credential_state = (
             raw_credential_state
@@ -545,6 +611,11 @@ class ChannelAccountRegistry:
             id=account.id,
             platform=account.platform,
             principal_id=account.principal_id,
+            principal_kind=(
+                "owner"
+                if account.principal_id == self.owner_principal_id
+                else "independent"
+            ),
             status=account.status,
             enabled=account.enabled,
             subscribed=account.subscribed,

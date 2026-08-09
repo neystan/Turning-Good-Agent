@@ -7,6 +7,7 @@ from typing import Any
 
 from ..bus.messages import ChannelRoute, InboundMessage, OutboundMessage, Recipient
 from ..bus.queue import AsyncMessageBus
+from ..gateway.binding_lifecycle import BindingRouteReservation, BindingRouteScope
 from ..llm.types import ToolCall
 
 
@@ -106,11 +107,13 @@ class ImGatewayCoordinator:
     ) -> None:
         """初始化共享 Bus 边界；可传入协调器或其两个回调。"""
         self._bus = bus
+        self._turn_coordinator = None
         if turn_coordinator is not None:
             if callable(turn_coordinator):
                 if submit is None:
                     submit = turn_coordinator
             else:
+                self._turn_coordinator = turn_coordinator
                 if submit is None:
                     submit = turn_coordinator.submit
                 if complete_route_turn is None:
@@ -219,3 +222,24 @@ class ImGatewayCoordinator:
     def is_globally_idle(self) -> bool:
         """报告是否没有尚未收到终态的 IM turn。"""
         return not self._controls
+
+    def is_scope_busy(self, scope: BindingRouteScope) -> bool:
+        """报告范围内是否仍有等待终态投递释放的 IM turn。"""
+        if not isinstance(scope, BindingRouteScope):
+            raise TypeError("scope 必须是 BindingRouteScope")
+        return any(scope.matches(control.route) for control in self._controls.values())
+
+    async def reserve_scope_if_idle(
+        self,
+        scope: BindingRouteScope,
+    ) -> BindingRouteReservation | None:
+        """在 IM 控制状态与普通 route 同时空闲时原子取得预留。"""
+        if not isinstance(scope, BindingRouteScope):
+            raise TypeError("scope 必须是 BindingRouteScope")
+        coordinator = self._turn_coordinator
+        if coordinator is None:
+            raise RuntimeError("IM 协调器未绑定 GatewayTurnCoordinator")
+        async with self._action_lock:
+            if any(scope.matches(control.route) for control in self._controls.values()):
+                return None
+            return await coordinator.reserve_scope_if_idle(scope)

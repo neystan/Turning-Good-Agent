@@ -1,5 +1,6 @@
 import json
 import shutil
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,22 @@ class JsonlSessionStore:
         session_dir = self._find_session_dir(session_id)
         if session_dir.exists():
             shutil.rmtree(session_dir)
+
+    async def clear_matching_sessions(
+        self,
+        predicate: Callable[[Session], bool],
+    ) -> list[str]:
+        """删除所有满足谓词的完整会话目录，并返回其 Session ID。"""
+        if not callable(predicate):
+            raise TypeError("predicate 必须可调用")
+        matched: list[tuple[str, Path]] = []
+        for session_dir in self._all_session_dirs():
+            session = self._read_session_file(session_dir / "session.json")
+            if session is not None and predicate(session):
+                matched.append((session.id, session_dir))
+        for _session_id, session_dir in matched:
+            shutil.rmtree(session_dir)
+        return [session_id for session_id, _session_dir in matched]
 
     async def cleanup_expired_sessions(self, retention_days: int) -> int:
         """删除超出保留期的会话目录。"""

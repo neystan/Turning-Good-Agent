@@ -57,6 +57,15 @@ class GatewayPrincipalResolver:
         """更新后续主体 Context 使用的工具策略。"""
         self._policy = policy
 
+    def forget_non_owner(self, principal_id: str) -> Path:
+        """忘记独立主体缓存并返回其 opaque 数据根。"""
+        if not isinstance(principal_id, str) or not principal_id:
+            raise ValueError("principal_id 不能为空")
+        if principal_id == self.owner_principal_id:
+            raise ValueError("Owner 主体数据根不可移除")
+        bundle = self._bundles.pop(principal_id, None)
+        return bundle.data_root if bundle is not None else self._non_owner_root(principal_id)
+
     def resolve(self, route: ChannelRoute) -> PrincipalRuntimeContext:
         """根据可信路由返回主体专属 Context。"""
         if not isinstance(route, ChannelRoute) or not route.principal_id:

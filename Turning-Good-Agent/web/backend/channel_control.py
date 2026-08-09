@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import replace
 from typing import Any
 
 from ...channels.registry import ChannelAccount, ChannelAccountRegistry, ChannelAccountView, Platform
+from ...gateway.binding_lifecycle import ChannelDeletionResult
 
 
 class ChannelControlService:
@@ -17,11 +19,19 @@ class ChannelControlService:
         *,
         weixin_transport: Any | None = None,
         feishu_transport: Any | None = None,
+        delete_binding: Callable[[Platform, str], Awaitable[ChannelDeletionResult]] | None = None,
+        binding_lifecycle_guard: Callable[
+            [Platform, str],
+            AbstractAsyncContextManager[None],
+        ]
+        | None = None,
         owner_principal_id: str | None = None,
     ) -> None:
         self.registry = registry
         self.weixin_transport = weixin_transport
         self.feishu_transport = feishu_transport
+        self._delete_binding = delete_binding
+        self._binding_lifecycle_guard = binding_lifecycle_guard
         self.owner_principal_id = owner_principal_id or registry.owner_principal_id
 
     def list_views(self) -> tuple[ChannelAccountView, ...]:
@@ -35,7 +45,11 @@ class ChannelControlService:
 
     def safe_details(self, view: ChannelAccountView) -> dict[str, object]:
         """返回控制面允许展示的非秘密平台摘要。"""
-        if view.platform != "feishu":
+        if view.platform == "weixin":
+            getter = getattr(self.weixin_transport, "get_rebind_state", None)
+            state = getter(view.id) if getter is not None else None
+            if state in {"pending_qr", "waiting_for_idle"}:
+                return {"rebind_state": state}
             return {}
         account = self.registry.get("feishu", view.id)
         if account is None:
@@ -73,7 +87,9 @@ class ChannelControlService:
         else:
             raise ValueError("principal 必须是 owner 或 new")
         try:
-            await self._transport_call("weixin", "enable_account", account.id)
+            async with self._binding_lifecycle("weixin", account.id):
+                account = self._account("weixin", account.id)
+                await self._transport_call("weixin", "enable_account", account.id)
         except Exception as exc:
             raise ValueError("微信 Binding 初始化失败") from exc
         return _view_for(account, self.registry)
@@ -84,90 +100,129 @@ class ChannelControlService:
             app_secret=_required_text(app_secret, "app_secret"),
             domain=_required_text(domain, "domain"),
         )
-        await self._reload_feishu(account.id)
-        return _view_for(account, self.registry)
+        async with self._binding_lifecycle("feishu", account.id):
+            account = self._account("feishu", account.id)
+            await self._reload_feishu(account.id)
+            return _view_for(account, self.registry)
 
     async def set_feishu_owner_code(self, account_id: str, code: str) -> ChannelAccountView:
-        account = self._account("feishu", account_id)
         if not code.isascii() or not code.isdecimal() or len(code) != 6:
             raise ValueError("验证码必须是六位数字")
-        transport = self.feishu_transport
-        issuer = getattr(transport, "issue_owner_code", None)
-        if issuer is None:
-            raise ValueError("飞书 Transport 尚未启动")
-        result = issuer(account.id, code=code)
-        if inspect.isawaitable(result):
-            result = await result
-        if not isinstance(result, str):
-            raise ValueError("验证码生成失败")
-        return _view_for(account, self.registry)
+        async with self._binding_lifecycle("feishu", account_id):
+            account = self._account("feishu", account_id)
+            transport = self.feishu_transport
+            issuer = getattr(transport, "issue_owner_code", None)
+            if issuer is None:
+                raise ValueError("飞书 Transport 尚未启动")
+            result = issuer(account.id, code=code)
+            if inspect.isawaitable(result):
+                result = await result
+            if not isinstance(result, str):
+                raise ValueError("验证码生成失败")
+            return _view_for(account, self.registry)
 
     async def subscribe(self, platform: str, account_id: str) -> ChannelAccountView:
-        account = self._account(_platform(platform), account_id)
-        if account.status == "revoked":
-            raise ValueError("已撤销账号不能订阅")
-        updated = self.registry.update(replace(account, subscribed=True))
-        return _view_for(updated, self.registry)
+        item_platform = _platform(platform)
+        async with self._binding_lifecycle(item_platform, account_id):
+            account = self._account(item_platform, account_id)
+            if account.status == "revoked":
+                raise ValueError("已撤销账号不能订阅")
+            updated = self.registry.update(replace(account, subscribed=True))
+            return _view_for(updated, self.registry)
 
     async def unsubscribe(self, platform: str, account_id: str) -> ChannelAccountView:
-        account = self._account(_platform(platform), account_id)
-        updated = self.registry.update(replace(account, subscribed=False))
-        return _view_for(updated, self.registry)
+        item_platform = _platform(platform)
+        async with self._binding_lifecycle(item_platform, account_id):
+            account = self._account(item_platform, account_id)
+            updated = self.registry.update(replace(account, subscribed=False))
+            return _view_for(updated, self.registry)
 
     async def enable(self, platform: str, account_id: str) -> ChannelAccountView:
         item_platform = _platform(platform)
-        account = self._account(item_platform, account_id)
-        if account.status == "revoked":
-            raise ValueError("已撤销账号不能直接启用")
-        if account.status == "expired" and item_platform == "weixin":
-            raise ValueError("微信 Binding 已过期，请重新扫码")
-        if item_platform == "weixin":
-            if account.private.get("from_user_id"):
-                status = "active"
-            elif account.private.get("bot_token") and account.private.get("ilink_bot_id"):
-                status = "awaiting_first_dm"
+        async with self._binding_lifecycle(item_platform, account_id):
+            account = self._account(item_platform, account_id)
+            if account.status == "revoked":
+                raise ValueError("已撤销账号不能直接启用")
+            if account.status == "expired" and item_platform == "weixin":
+                raise ValueError("微信 Binding 已过期，请重新扫码")
+            if item_platform == "weixin":
+                if account.private.get("from_user_id"):
+                    status = "active"
+                elif account.private.get("bot_token") and account.private.get("ilink_bot_id"):
+                    status = "awaiting_first_dm"
+                else:
+                    status = "pending_qr"
             else:
-                status = "pending_qr"
-        else:
-            status = "active" if account.private.get("owner_open_id") else "awaiting_owner_code"
-        updated = self.registry.update(replace(account, enabled=True, status=status))
-        await self._transport_call(item_platform, "enable_account", updated.id)
-        return _view_for(updated, self.registry)
+                status = (
+                    "active"
+                    if account.private.get("owner_open_id")
+                    else "awaiting_owner_code"
+                )
+            updated = self.registry.update(replace(account, enabled=True, status=status))
+            await self._transport_call(item_platform, "enable_account", updated.id)
+            return _view_for(updated, self.registry)
 
     async def rescan_weixin_binding(self, account_id: str) -> ChannelAccountView:
-        account = self._account("weixin", account_id)
-        if account.status not in {"expired", "revoked"}:
-            raise ValueError("微信 Binding 当前不需要重新扫码")
-        await self._transport_call("weixin", "disable_account", account.id)
-        private = {
-            "credential_state": "pending",
-            "connected": False,
-            "inbound_ids": list(account.private.get("inbound_ids", [])),
-        }
-        for field_name in ("conversation_id", "base_url"):
-            value = account.private.get(field_name)
-            if isinstance(value, str) and value:
-                private[field_name] = value
-        candidate = replace(account, status="pending_qr", enabled=True, private=private)
-        updated = self.registry.replace_private_state(candidate)
-        await self._transport_call("weixin", "enable_account", updated.id)
-        return _view_for(updated, self.registry)
+        async with self._binding_lifecycle("weixin", account_id):
+            account = self._account("weixin", account_id)
+            transport = self.weixin_transport
+            callback = (
+                getattr(transport, "start_rebind", None)
+                if transport is not None
+                else None
+            )
+            if callback is None:
+                raise ValueError("微信 Transport 尚未支持重新扫码")
+            result = callback(account.id)
+            if inspect.isawaitable(result):
+                await result
+            current = self._account("weixin", account.id)
+            return _view_for(current, self.registry)
+
+    async def delete(self, platform: str, account_id: str) -> ChannelDeletionResult:
+        """仅将永久删除委托给 GatewayHost；控制面不直接修改持久状态。"""
+        item_platform = _platform(platform)
+        callback = self._delete_binding
+        if callback is None:
+            raise ValueError("Binding 永久删除不可用")
+        result = callback(item_platform, account_id)
+        if inspect.isawaitable(result):
+            result = await result
+        return result
 
     async def disable(self, platform: str, account_id: str) -> ChannelAccountView:
         item_platform = _platform(platform)
-        account = self._account(item_platform, account_id)
-        if account.status == "revoked":
-            return _view_for(account, self.registry)
-        updated = self.registry.update(replace(account, enabled=False, status="disabled"))
-        await self._transport_call(item_platform, "disable_account", updated.id)
-        return _view_for(updated, self.registry)
+        async with self._binding_lifecycle(item_platform, account_id):
+            account = self._account(item_platform, account_id)
+            if item_platform == "weixin":
+                transition = getattr(self.weixin_transport, "disable_binding", None)
+                if transition is not None:
+                    updated = transition(account.id)
+                    if inspect.isawaitable(updated):
+                        updated = await updated
+                    return _view_for(updated, self.registry)
+            if account.status == "revoked":
+                return _view_for(account, self.registry)
+            updated = self.registry.update(
+                replace(account, enabled=False, status="disabled")
+            )
+            await self._transport_call(item_platform, "disable_account", updated.id)
+            return _view_for(updated, self.registry)
 
     async def revoke(self, platform: str, account_id: str) -> ChannelAccountView:
         item_platform = _platform(platform)
-        account = self._account(item_platform, account_id)
-        updated = self.registry.revoke(item_platform, account.id)
-        await self._transport_call(item_platform, "disable_account", updated.id)
-        return _view_for(updated, self.registry)
+        async with self._binding_lifecycle(item_platform, account_id):
+            account = self._account(item_platform, account_id)
+            if item_platform == "weixin":
+                transition = getattr(self.weixin_transport, "revoke_binding", None)
+                if transition is not None:
+                    updated = transition(account.id)
+                    if inspect.isawaitable(updated):
+                        updated = await updated
+                    return _view_for(updated, self.registry)
+            updated = self.registry.revoke(item_platform, account.id)
+            await self._transport_call(item_platform, "disable_account", updated.id)
+            return _view_for(updated, self.registry)
 
     async def update_feishu_credentials(
         self,
@@ -177,39 +232,53 @@ class ChannelControlService:
         app_secret: str,
         domain: str,
     ) -> ChannelAccountView:
-        account = self._account("feishu", account_id)
-        next_app_id = _required_text(app_id, "app_id")
-        next_app_secret = _required_text(app_secret, "app_secret")
-        next_domain = _required_text(domain, "domain")
-        private = dict(account.private)
-        private.pop("cardkit_enabled", None)
-        private.update(
-            {
-                "app_id": next_app_id,
-                "app_secret": next_app_secret,
-                "domain": next_domain,
-                "credential_state": "configured",
-            }
-        )
-        app_identity_changed = private.get("app_id") != account.private.get("app_id")
-        if app_identity_changed:
-            for field_name in (
-                "owner_open_id",
-                "conversation_id",
-                "owner_code_hash",
-                "owner_code_expires_at",
-            ):
-                private.pop(field_name, None)
-            private["connected"] = False
-        candidate = replace(
-            account,
-            status="awaiting_owner_code" if app_identity_changed else account.status,
-            private=private,
-        )
-        self.registry.validate_update(candidate)
-        await self._reload_feishu(account.id, candidate)
-        updated = self._account("feishu", account.id)
-        return _view_for(updated, self.registry)
+        async with self._binding_lifecycle("feishu", account_id):
+            account = self._account("feishu", account_id)
+            next_app_id = _required_text(app_id, "app_id")
+            next_app_secret = _required_text(app_secret, "app_secret")
+            next_domain = _required_text(domain, "domain")
+            private = dict(account.private)
+            private.pop("cardkit_enabled", None)
+            private.update(
+                {
+                    "app_id": next_app_id,
+                    "app_secret": next_app_secret,
+                    "domain": next_domain,
+                    "credential_state": "configured",
+                }
+            )
+            app_identity_changed = private.get("app_id") != account.private.get("app_id")
+            if app_identity_changed:
+                for field_name in (
+                    "owner_open_id",
+                    "conversation_id",
+                    "owner_code_hash",
+                    "owner_code_expires_at",
+                ):
+                    private.pop(field_name, None)
+                private["connected"] = False
+            candidate = replace(
+                account,
+                status="awaiting_owner_code" if app_identity_changed else account.status,
+                private=private,
+            )
+            self.registry.validate_update(candidate)
+            await self._reload_feishu(account.id, candidate)
+            updated = self._account("feishu", account.id)
+            return _view_for(updated, self.registry)
+
+    @asynccontextmanager
+    async def _binding_lifecycle(
+        self,
+        platform: Platform,
+        account_id: str,
+    ) -> AsyncIterator[None]:
+        guard = self._binding_lifecycle_guard
+        if guard is None:
+            yield
+            return
+        async with guard(platform, account_id):
+            yield
 
     def _account(self, platform: Platform, account_id: str) -> ChannelAccount:
         account = self.registry.get(platform, account_id)

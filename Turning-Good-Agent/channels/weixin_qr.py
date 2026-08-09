@@ -20,7 +20,7 @@ _IMAGE_SUFFIXES = {
     "image/png": ".png",
 }
 QrViewer = Callable[[Path], Awaitable[None]]
-QrClosedCallback = Callable[[str], Awaitable[None] | None]
+QrClosedCallback = Callable[[str, int | None], Awaitable[None] | None]
 
 
 class LocalIlinkQrPresenter:
@@ -46,7 +46,12 @@ class LocalIlinkQrPresenter:
         task = self._presentations.get(binding_id)
         return task is not None and not task.done()
 
-    async def present(self, binding_id: str, qr_content: str) -> bool:
+    async def present(
+        self,
+        binding_id: str,
+        qr_content: str,
+        generation: int | None = None,
+    ) -> bool:
         if self._closed:
             return False
         image = _decode_qr_image(qr_content)
@@ -82,12 +87,17 @@ class LocalIlinkQrPresenter:
                 shutil.rmtree(directory, ignore_errors=True)
                 return False
             task = asyncio.create_task(
-                self._wait_for_local_window(binding_id, image_path, process),
+                self._wait_for_local_window(
+                    binding_id,
+                    image_path,
+                    process,
+                    generation,
+                ),
                 name=f"weixin-qr-{binding_id}",
             )
         else:
             task = asyncio.create_task(
-                self._present_image(binding_id, image_path),
+                self._present_image(binding_id, image_path, generation),
                 name=f"weixin-qr-{binding_id}",
             )
         self._presentations[binding_id] = task
@@ -106,7 +116,12 @@ class LocalIlinkQrPresenter:
             *(self.dismiss(binding_id) for binding_id in tuple(self._presentations)),
         )
 
-    async def _present_image(self, binding_id: str, image_path: Path) -> None:
+    async def _present_image(
+        self,
+        binding_id: str,
+        image_path: Path,
+        generation: int | None,
+    ) -> None:
         notify_closed = True
         try:
             assert self._viewer is not None
@@ -119,13 +134,14 @@ class LocalIlinkQrPresenter:
         finally:
             self._remove_presentation(binding_id, image_path)
             if notify_closed:
-                await self._notify_closed(binding_id)
+                await self._notify_closed(binding_id, generation)
 
     async def _wait_for_local_window(
         self,
         binding_id: str,
         image_path: Path,
         process: asyncio.subprocess.Process,
+        generation: int | None,
     ) -> None:
         notify_closed = True
         try:
@@ -139,19 +155,24 @@ class LocalIlinkQrPresenter:
                 process.stdin.close()
             self._remove_presentation(binding_id, image_path)
             if notify_closed:
-                await self._notify_closed(binding_id)
+                await self._notify_closed(binding_id, generation)
 
     def _remove_presentation(self, binding_id: str, image_path: Path) -> None:
         if self._presentations.get(binding_id) is asyncio.current_task():
             self._presentations.pop(binding_id, None)
         shutil.rmtree(image_path.parent, ignore_errors=True)
 
-    async def _notify_closed(self, binding_id: str) -> None:
+    async def _notify_closed(self, binding_id: str, generation: int | None) -> None:
         callback = self._on_closed
         if callback is None:
             return
         try:
-            result = callback(binding_id)
+            try:
+                inspect.signature(callback).bind(binding_id, generation)
+            except (TypeError, ValueError):
+                result = callback(binding_id)  # type: ignore[call-arg]
+            else:
+                result = callback(binding_id, generation)
             if inspect.isawaitable(result):
                 await result
         except asyncio.CancelledError:

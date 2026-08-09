@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from ..bus.messages import ChannelRoute, InboundMessage, OutboundMessage, Recipient
 from ..bus.queue import AsyncMessageBus
+from .binding_lifecycle import BindingRouteReservation, BindingRouteScope
 
 
 RuntimeProvider = Callable[[], Any | Awaitable[Any]]
@@ -42,6 +43,7 @@ class GatewayTurnCoordinator:
         self._terminal: OrderedDict[str, OutboundMessage] = OrderedDict()
         self._active_routes: dict[RouteKey, str] = {}
         self._pending_routes: dict[RouteKey, deque[tuple[InboundMessage, TurnDispatch]]] = {}
+        self._reserved_scopes: dict[str, BindingRouteScope] = {}
         self._lock = asyncio.Lock()
         self._closed = False
 
@@ -69,6 +71,7 @@ class GatewayTurnCoordinator:
             self._inflight.clear()
             self._active_routes.clear()
             self._pending_routes.clear()
+            self._reserved_scopes.clear()
 
     async def submit(self, message: InboundMessage, *, dispatch: TurnDispatch) -> bool:
         """接收一条 Adapter 输入；重复 request-id 不会重新执行。"""
@@ -76,6 +79,8 @@ class GatewayTurnCoordinator:
         async with self._lock:
             if self._closed:
                 raise RuntimeError("Gateway 已关闭")
+            if any(scope.matches(message.route) for scope in self._reserved_scopes.values()):
+                return False
             if message.id in self._inflight or message.id in self._terminal:
                 return False
             self._inflight.add(message.id)
@@ -85,6 +90,50 @@ class GatewayTurnCoordinator:
             self._active_routes[route_key] = message.id
         await self._dispatch(message, dispatch)
         return True
+
+    async def reserve_scope(self, scope: BindingRouteScope) -> BindingRouteReservation:
+        """原子预留一个 Binding 路由范围，并阻止后续匹配提交。"""
+        if not isinstance(scope, BindingRouteScope):
+            raise TypeError("scope 必须是 BindingRouteScope")
+        reservation_id = str(uuid4())
+        async with self._lock:
+            if self._closed:
+                raise RuntimeError("Gateway 已关闭")
+            self._reserved_scopes[reservation_id] = scope
+        return BindingRouteReservation(reservation_id, self._release_scope_reservation)
+
+    async def reserve_scope_if_idle(
+        self,
+        scope: BindingRouteScope,
+    ) -> BindingRouteReservation | None:
+        """仅当范围内没有 active/pending turn 时才原子加入预留。"""
+        if not isinstance(scope, BindingRouteScope):
+            raise TypeError("scope 必须是 BindingRouteScope")
+        reservation_id = str(uuid4())
+        async with self._lock:
+            if self._closed:
+                raise RuntimeError("Gateway 已关闭")
+            if scope in self._reserved_scopes.values() or any(
+                self._scope_matches_route_key(scope, route_key)
+                for route_key in (*self._active_routes, *self._pending_routes)
+            ):
+                return None
+            self._reserved_scopes[reservation_id] = scope
+        return BindingRouteReservation(reservation_id, self._release_scope_reservation)
+
+    async def _release_scope_reservation(self, reservation_id: str) -> None:
+        """释放一个由当前协调器签发的路由预留。"""
+        async with self._lock:
+            self._reserved_scopes.pop(reservation_id, None)
+
+    def is_scope_busy(self, scope: BindingRouteScope) -> bool:
+        """检查范围内是否有已激活或 FIFO 等待的普通消息。"""
+        if not isinstance(scope, BindingRouteScope):
+            raise TypeError("scope 必须是 BindingRouteScope")
+        return any(
+            self._scope_matches_route_key(scope, route_key)
+            for route_key in (*self._active_routes, *self._pending_routes)
+        )
 
     async def complete_route_turn(self, route: ChannelRoute, request_id: str) -> None:
         """完成一个 Route 的当前 turn，并按 FIFO 调度下一条普通消息。"""
@@ -209,3 +258,16 @@ class GatewayTurnCoordinator:
     @staticmethod
     def _route_key(route: ChannelRoute) -> RouteKey:
         return route.principal_id, route.channel, route.conversation_id
+
+    @staticmethod
+    def _scope_matches_route_key(scope: BindingRouteScope, route_key: RouteKey) -> bool:
+        principal_id, channel, conversation_id = route_key
+        return (
+            principal_id == scope.principal_id
+            and channel == scope.channel
+            and (
+                conversation_id.startswith(scope.conversation_id)
+                if scope.prefix
+                else conversation_id == scope.conversation_id
+            )
+        )

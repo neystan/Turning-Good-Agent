@@ -149,21 +149,26 @@
 
 .settings-test-result { min-width: 0; color: var(--muted); font-size: .8125rem; }
 
-.channel-account-settings { margin-top: 28px; padding-top: 24px; border-top: 1px solid color-mix(in srgb, var(--border) 42%, transparent); }
+.channel-account-settings { margin-top: 28px; padding-top: 24px; }
 .channel-account-heading, .channel-account-actions, .channel-feishu-form, .channel-account-row, .channel-account-controls { display: flex; align-items: center; gap: 10px; }
 .channel-account-heading { justify-content: space-between; }
 .channel-account-heading h3 { margin: 0; }
 .channel-account-heading p { margin: 5px 0 0; color: var(--muted); font-size: .8125rem; }
 .channel-account-actions { flex-wrap: wrap; margin: 16px 0; }
 .channel-account-actions button, .channel-feishu-form button, .channel-account-row button, .settings-icon-button { min-height: 34px; display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: var(--radius-control); padding: 0 10px; background: var(--surface-raised); color: var(--text); cursor: pointer; font: inherit; }
+.channel-account-actions button:disabled, .channel-feishu-form button:disabled, .channel-account-row button:disabled, .settings-icon-button:disabled { cursor: not-allowed; opacity: .48; }
+.channel-account-action-help { flex: 1 1 100%; color: var(--muted); font-size: .75rem; line-height: 1.5; }
 .channel-feishu-form { flex-wrap: wrap; align-items: end; }
 .channel-feishu-form label { flex: 1 1 10rem; display: grid; gap: 5px; color: var(--muted); font-size: .75rem; }
 .channel-feishu-form input { min-height: 34px; border: 0; border-radius: var(--radius-control); padding: 0 9px; background: var(--surface-raised); color: var(--text); }
+.channel-feishu-owner-help { flex: 1 1 100%; color: var(--muted); font-size: .75rem; line-height: 1.5; }
 .channel-account-list { display: grid; gap: 2px; margin-top: 16px; }
 .channel-account-row { justify-content: space-between; min-height: 44px; padding: 6px 0; }
 .channel-account-row { align-items: flex-start; flex-wrap: wrap; }
 .channel-account-controls { flex-wrap: wrap; justify-content: flex-end; }
 .channel-account-controls input { min-height: 34px; width: 7rem; }
+.channel-account-controls .channel-delete-trigger { background: color-mix(in srgb, var(--danger) 10%, var(--surface-raised)); color: var(--danger); }
+.channel-account-controls .channel-delete-trigger:hover, .channel-account-controls .channel-delete-trigger:focus-visible { outline: 0; background: color-mix(in srgb, var(--danger) 17%, var(--surface-hover)); box-shadow: 0 2px 7px color-mix(in srgb, var(--shadow) 28%, transparent); }
 .channel-rotation-form { width: 100%; padding: 8px 0; }
 .channel-account-copy { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .channel-account-copy strong { font-size: .8125rem; }
@@ -176,8 +181,11 @@
 .channel-weixin-qr-copy strong { font-size: .8125rem; }
 .channel-weixin-qr-copy span { color: var(--muted); font-size: .75rem; }
 .channel-weixin-qr-binding { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.channel-rebind-state { width: 100%; margin: 4px 0 2px 23px; border-radius: var(--radius-control); padding: 9px 11px; background: var(--surface-raised); color: var(--muted); font-size: .75rem; }
+.channel-delete-dialog .channel-delete-binding { margin: -7px 0 14px; border-radius: var(--radius-control); padding: 8px 10px; background: var(--surface-raised); color: var(--muted); font: .75rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.channel-delete-dialog .channel-delete-error { margin: 0 0 12px; border-radius: var(--radius-control); padding: 9px 10px; background: color-mix(in srgb, var(--danger) 10%, var(--surface-raised)); color: var(--danger); font-size: .8125rem; line-height: 1.5; }
 
-@media (max-width: 720px) { .channel-feishu-form { align-items: stretch; flex-direction: column; }.channel-feishu-form label, .channel-feishu-form button { width: 100%; }.channel-weixin-qr { align-items: flex-start; padding-left: 0; } }
+@media (max-width: 720px) { .channel-feishu-form { align-items: stretch; flex-direction: column; }.channel-feishu-form label, .channel-feishu-form button { width: 100%; }.channel-weixin-qr { align-items: flex-start; padding-left: 0; }.channel-rebind-state { margin-left: 0; } }
 
 @media (max-width: 720px) { .settings-field { grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 9px 0; }.settings-field-error { grid-column: 1; margin-top: 0; }.settings-switch { justify-self: start; } }
 
