@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Generic, TypeVar
 
@@ -47,32 +45,11 @@ class RuntimeSupervisor(Generic[RuntimeT]):
         self._ready = asyncio.Event()
         self._ready.set()
         self._replace_lock = asyncio.Lock()
-        self._activation_lock = asyncio.Lock()
-        self._lifecycle_operations = 0
         self._closing = False
 
     @property
     def current_runtime(self) -> RuntimeT:
         return self._runtime
-
-    @property
-    def lifecycle_busy(self) -> bool:
-        """报告是否有会改变 Runtime 可见持久状态的 Host 操作。"""
-        return self._lifecycle_operations > 0
-
-    @asynccontextmanager
-    async def reserve_lifecycle_transition(self) -> AsyncIterator[None]:
-        """阻止 Runtime 激活跨越 Binding 的 Registry/Transport 转换边界。"""
-        self._lifecycle_operations += 1
-        acquired = False
-        try:
-            await self._activation_lock.acquire()
-            acquired = True
-            yield
-        finally:
-            self._lifecycle_operations -= 1
-            if acquired:
-                self._activation_lock.release()
 
     async def start(self) -> None:
         """保留与 FastAPI lifespan 一致的监督器启动入口。"""
@@ -106,19 +83,14 @@ class RuntimeSupervisor(Generic[RuntimeT]):
         self._desired_revision = revision
         self._desired_runtime_factory = runtime_factory or self._runtime_factory
         self._last_apply_error = None
-        if self.lifecycle_busy or not self._idle_probe():
+        if not self._idle_probe():
             self._state = "pending"
             return self.status()
         await self._reload()
         return self.status()
 
     async def notify_idle(self) -> None:
-        if (
-            not self._closing
-            and self._state == "pending"
-            and not self.lifecycle_busy
-            and self._idle_probe()
-        ):
+        if not self._closing and self._state == "pending" and self._idle_probe():
             await self._reload()
 
     def status(self) -> RuntimeStatus:
@@ -128,7 +100,7 @@ class RuntimeSupervisor(Generic[RuntimeT]):
         async with self._replace_lock:
             if self._closing:
                 return
-            if self.lifecycle_busy or not self._idle_probe():
+            if not self._idle_probe():
                 self._state = "pending"
                 return
             replacement_revision = self._desired_revision
@@ -141,45 +113,35 @@ class RuntimeSupervisor(Generic[RuntimeT]):
                 replacement = await replacement_factory()
                 if await self._discard_if_closing(replacement):
                     return
-                if self.lifecycle_busy or not self._idle_probe():
+                if not self._idle_probe():
                     self._state = "pending"
                     await _close_failed_candidate(replacement)
                     replacement = None
                     return
-                async with self._activation_lock:
-                    if self.lifecycle_busy or not self._idle_probe():
-                        self._state = "pending"
-                        await _close_failed_candidate(replacement)
-                        replacement = None
-                        return
-                    if self._on_prepare is not None:
-                        await _await_if_needed(self._on_prepare(replacement))
-                    if await self._discard_if_closing(replacement):
-                        return
-                    start = getattr(replacement, "start", None)
-                    if callable(start):
-                        await start()
-                    if await self._discard_if_closing(replacement):
-                        return
-                    if self.lifecycle_busy or not self._idle_probe():
-                        self._state = "pending"
-                        await _close_failed_candidate(replacement)
-                        replacement = None
-                        return
-                    if self._on_activate is not None:
-                        await _await_if_needed(self._on_activate(replacement))
-                    if await self._discard_if_closing(replacement):
-                        return
-                    previous = self._runtime
-                    self._runtime = replacement
-                    activated = True
-                    self._active_revision = replacement_revision
-                    self._state = (
-                        "active"
-                        if self._desired_revision == replacement_revision
-                        else "pending"
-                    )
-                    await _close_previous_after_commit(previous)
+                if self._on_prepare is not None:
+                    await _await_if_needed(self._on_prepare(replacement))
+                if await self._discard_if_closing(replacement):
+                    return
+                start = getattr(replacement, "start", None)
+                if callable(start):
+                    await start()
+                if await self._discard_if_closing(replacement):
+                    return
+                if not self._idle_probe():
+                    self._state = "pending"
+                    await _close_failed_candidate(replacement)
+                    replacement = None
+                    return
+                if self._on_activate is not None:
+                    await _await_if_needed(self._on_activate(replacement))
+                if await self._discard_if_closing(replacement):
+                    return
+                previous = self._runtime
+                self._runtime = replacement
+                activated = True
+                self._active_revision = replacement_revision
+                self._state = "active" if self._desired_revision == replacement_revision else "pending"
+                await _close_previous_after_commit(previous)
             except asyncio.CancelledError:
                 if replacement is not None and not activated:
                     await _close_failed_candidate(replacement)

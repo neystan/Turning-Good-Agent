@@ -7,7 +7,7 @@ from typing import Any
 
 from ..bus.messages import ChannelRoute, InboundMessage, OutboundMessage, Recipient
 from ..bus.queue import AsyncMessageBus
-from ..gateway.binding_lifecycle import BindingRouteReservation, BindingRouteScope
+from ..gateway.turns import RouteBlock, RouteMatcher
 from ..llm.types import ToolCall
 
 
@@ -223,23 +223,32 @@ class ImGatewayCoordinator:
         """报告是否没有尚未收到终态的 IM turn。"""
         return not self._controls
 
-    def is_scope_busy(self, scope: BindingRouteScope) -> bool:
-        """报告范围内是否仍有等待终态投递释放的 IM turn。"""
-        if not isinstance(scope, BindingRouteScope):
-            raise TypeError("scope 必须是 BindingRouteScope")
-        return any(scope.matches(control.route) for control in self._controls.values())
-
-    async def reserve_scope_if_idle(
+    async def reserve_matching_routes_if_idle(
         self,
-        scope: BindingRouteScope,
-    ) -> BindingRouteReservation | None:
-        """在 IM 控制状态与普通 route 同时空闲时原子取得预留。"""
-        if not isinstance(scope, BindingRouteScope):
-            raise TypeError("scope 必须是 BindingRouteScope")
+        matcher: RouteMatcher,
+    ) -> RouteBlock | None:
+        """永久删除专用：将 IM 终态投递与普通 FIFO 一起原子检查。"""
+        if not callable(matcher):
+            raise TypeError("matcher 必须可调用")
         coordinator = self._turn_coordinator
         if coordinator is None:
             raise RuntimeError("IM 协调器未绑定 GatewayTurnCoordinator")
         async with self._action_lock:
-            if any(scope.matches(control.route) for control in self._controls.values()):
+            if any(
+                matcher(
+                    (
+                        control.route.principal_id,
+                        control.route.channel,
+                        control.route.conversation_id,
+                    )
+                )
+                for control in self._controls.values()
+            ):
                 return None
-            return await coordinator.reserve_scope_if_idle(scope)
+            return await coordinator.reserve_matching_routes_if_idle(matcher)
+
+    async def release_route_block(self, block: RouteBlock) -> None:
+        coordinator = self._turn_coordinator
+        if coordinator is None:
+            raise RuntimeError("IM 协调器未绑定 GatewayTurnCoordinator")
+        await coordinator.release_route_block(block)

@@ -63,13 +63,8 @@ def create_app(gateway: "GatewayHost") -> FastAPI:
             channel_registry,
             weixin_transport=getattr(gateway, "weixin_transport", None),
             feishu_transport=getattr(gateway, "feishu_transport", None),
-            delete_binding=getattr(gateway, "delete_channel_binding", None),
-            binding_lifecycle_guard=getattr(
-                gateway,
-                "channel_binding_lifecycle",
-                None,
-            ),
             owner_principal_id=getattr(getattr(settings, "gateway", None), "principal_id", None),
+            delete_binding=getattr(gateway, "delete_channel_binding", None),
         )
         if channel_registry is not None
         else None
@@ -365,6 +360,18 @@ def create_app(gateway: "GatewayHost") -> FastAPI:
         except (KeyError, ValueError) as exc:
             raise channel_error(exc) from exc
 
+    @app.delete("/api/control/channels/{platform}/{account_id}")
+    async def delete_control_channel(platform: str, account_id: str) -> dict[str, object]:
+        try:
+            result = await require_channel_control().delete(platform, account_id)
+            return {
+                "deleted": True,
+                "platform": result.platform,
+                "account_id": result.account_id,
+            }
+        except (KeyError, ValueError) as exc:
+            raise channel_error(exc) from exc
+
     @app.post("/api/control/channels/{platform}/{account_id}/disable")
     async def disable_control_channel(platform: str, account_id: str) -> dict[str, object]:
         try:
@@ -376,18 +383,6 @@ def create_app(gateway: "GatewayHost") -> FastAPI:
     async def revoke_control_channel(platform: str, account_id: str) -> dict[str, object]:
         try:
             return channel_view(await require_channel_control().revoke(platform, account_id))
-        except (KeyError, ValueError) as exc:
-            raise channel_error(exc) from exc
-
-    @app.delete("/api/control/channels/{platform}/{account_id}")
-    async def delete_control_channel(platform: str, account_id: str) -> dict[str, object]:
-        try:
-            result = await require_channel_control().delete(platform, account_id)
-            return {
-                "deleted": True,
-                "account_id": result.account_id,
-                "platform": result.platform,
-            }
         except (KeyError, ValueError) as exc:
             raise channel_error(exc) from exc
 

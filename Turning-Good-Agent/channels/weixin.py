@@ -4,9 +4,9 @@ import asyncio
 import inspect
 import logging
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 
 from ..bus.messages import ChannelRoute, InboundMessage, OutboundMessage, Recipient
 from ..gateway.routing import derive_session_id
@@ -57,7 +57,6 @@ def split_utf8_chunks(text: str, *, max_bytes: int = _DEFAULT_MAX_MESSAGE_BYTES)
 
 
 ClientFactory = Callable[[ChannelAccount], IlinkClient]
-RebindCommitRequester = Callable[[str], Awaitable[bool]]
 
 
 class IlinkQrPresenter(Protocol):
@@ -72,10 +71,7 @@ class IlinkQrPresenter(Protocol):
 
     async def close(self) -> None: ...
 
-    def set_closed_callback(
-        self,
-        callback: Callable[[str, int | None], object],
-    ) -> None: ...
+    def set_closed_callback(self, callback: Callable[[str, int | None], object]) -> None: ...
 
     def is_presenting(self, binding_id: str) -> bool: ...
 
@@ -143,12 +139,12 @@ class InMemoryIlinkQrCache:
 
 @dataclass(slots=True)
 class _PendingRebind:
-    generation: int
+    """只存在于 Transport 内存中的一次微信候选登录。"""
+
+    attempt_id: int
     candidate: ChannelAccount
     baseline_status: str
-    baseline_enabled: bool
-    state: Literal["pending_qr", "waiting_for_idle"] = "pending_qr"
-    commit_request_task: asyncio.Task[object] | None = None
+    task: asyncio.Task[None] | None = None
 
 
 class WeixinTransport(ChannelTransport):
@@ -166,7 +162,6 @@ class WeixinTransport(ChannelTransport):
         client_factory: ClientFactory | None = None,
         qr_presenter: IlinkQrPresenter | None = None,
         qr_cache: IlinkQrCache | None = None,
-        request_rebind_commit: RebindCommitRequester | None = None,
         poll_interval_seconds: float = _DEFAULT_POLL_INTERVAL_SECONDS,
         max_message_bytes: int = _DEFAULT_MAX_MESSAGE_BYTES,
     ) -> None:
@@ -187,15 +182,15 @@ class WeixinTransport(ChannelTransport):
         self.max_message_bytes = max_message_bytes
         self._qr_presenter = qr_presenter
         self._qr_cache = qr_cache
-        self._request_rebind_commit = request_rebind_commit
         self._configure_qr_presenter()
         self._clients: dict[str, IlinkClient] = {}
+        # 通过工厂或默认 HTTP 客户端创建的连接由本 Transport 关闭；显式注入的
+        # 共享 client 只移除引用，不能被某个 Binding 的删除误关。
         self._owned_clients: dict[int, IlinkClient] = {}
         self._poll_tasks: dict[str, asyncio.Task[None]] = {}
         self._binding_locks: dict[str, asyncio.Lock] = {}
         self._pending_rebinds: dict[str, _PendingRebind] = {}
-        self._rebind_tasks: dict[str, asyncio.Task[None]] = {}
-        self._rebind_generation = 0
+        self._rebind_attempt = 0
         self._started = False
         self._closed = False
 
@@ -211,8 +206,11 @@ class WeixinTransport(ChannelTransport):
     async def close(self) -> None:
         self._closed = True
         self._started = False
-        rebind_tasks = tuple(self._rebind_tasks.values())
-        self._rebind_tasks.clear()
+        rebind_tasks = tuple(
+            pending.task
+            for pending in self._pending_rebinds.values()
+            if pending.task is not None
+        )
         self._pending_rebinds.clear()
         for task in rebind_tasks:
             task.cancel()
@@ -239,9 +237,6 @@ class WeixinTransport(ChannelTransport):
             return None
         pending = self._pending_rebinds.get(binding_id)
         if pending is not None:
-            if pending.state != "pending_qr":
-                self._clear_qr(binding_id)
-                return None
             return self._qr_cache.get(binding_id)
         account = self.registry.get("weixin", binding_id)
         if account is None or not account.enabled or account.status != "pending_qr":
@@ -249,92 +244,12 @@ class WeixinTransport(ChannelTransport):
             return None
         return self._qr_cache.get(binding_id)
 
-    def get_rebind_state(
-        self, binding_id: str
-    ) -> Literal["pending_qr", "waiting_for_idle"] | None:
-        pending = self._pending_rebinds.get(binding_id)
-        return pending.state if pending is not None else None
-
-    async def start_rebind(self, binding_id: str) -> ChannelAccount:
-        """启动内存候选登录；在 Host 批准前不改动旧 Binding。"""
-        lock = self._binding_lock(binding_id)
-        async with lock:
-            current = self.registry.get("weixin", binding_id)
-            if current is None:
-                raise ValueError("微信 Binding 不存在")
-            if current.status not in {"active", "expired", "revoked"}:
-                raise ValueError("当前微信 Binding 状态不支持重新扫码")
-            await self._discard_rebind_locked(binding_id)
-            self._rebind_generation += 1
-            private: dict[str, object] = {
-                "credential_state": "pending",
-                "inbound_ids": [],
-            }
-            base_url = current.private.get("base_url")
-            if isinstance(base_url, str) and base_url:
-                private["base_url"] = base_url
-            candidate = replace(
-                current,
-                status="pending_qr",
-                enabled=True,
-                private=private,
-            )
-            pending = _PendingRebind(
-                self._rebind_generation,
-                candidate,
-                current.status,
-                current.enabled,
-            )
-            self._pending_rebinds[binding_id] = pending
-            await self._progress_rebind_locked(binding_id, pending.generation)
-            if binding_id in self._pending_rebinds:
-                self._ensure_rebind_task(binding_id, pending.generation)
-            return current
-
-    async def try_commit_rebind(self, binding_id: str) -> bool:
-        """在 Host 已持有精确空闲保留时原子提交候选凭据。"""
-        lock = self._binding_lock(binding_id)
-        async with lock:
-            pending = self._pending_rebinds.get(binding_id)
-            if pending is None or pending.state != "waiting_for_idle":
-                return False
-            if pending.commit_request_task is not asyncio.current_task():
-                return False
-            current = self.registry.get("weixin", binding_id)
-            if current is None:
-                await self._discard_rebind_locked(binding_id, pending.generation)
-                return False
-            if current.status in {"disabled", "revoked"} and (
-                current.status != pending.baseline_status
-                or current.enabled != pending.baseline_enabled
-            ):
-                await self._discard_rebind_locked(binding_id, pending.generation)
-                return False
-            private = dict(pending.candidate.private)
-            for field_name in (
-                "from_user_id",
-                "context_token",
-                "cursor",
-                "conversation_id",
-                "qrcode",
-                "qr_status",
-            ):
-                private.pop(field_name, None)
-            private["inbound_ids"] = []
-            private["connected"] = False
-            committed = self.registry.replace_private_state(
-                replace(
-                    current,
-                    status="awaiting_first_dm",
-                    enabled=True,
-                    private=private,
-                ),
-                expected_updated_at=current.updated_at,
-            )
-            await self._discard_rebind_locked(binding_id, pending.generation)
-            if self._started:
-                self._ensure_poll_task(binding_id)
-            return committed.status == "awaiting_first_dm"
+    def is_qr_pending(self, binding_id: str) -> bool:
+        """二维码刚过期或重生成的短窗口仍应让本机控制面继续轮询。"""
+        if binding_id in self._pending_rebinds:
+            return True
+        account = self.registry.get("weixin", binding_id)
+        return bool(account is not None and account.enabled and account.status == "pending_qr")
 
     async def enable_account(self, binding_id: str) -> None:
         async with self._binding_lock(binding_id):
@@ -346,85 +261,56 @@ class WeixinTransport(ChannelTransport):
 
     async def disable_account(self, binding_id: str) -> None:
         async with self._binding_lock(binding_id):
-            await self._disable_account_locked(binding_id)
-
-    async def detach_account(self, binding_id: str) -> None:
-        """永久删除专用：移除并关闭 Transport 拥有的单 Binding client。"""
-        async with self._binding_lock(binding_id):
-            client = self._clients.pop(binding_id, None)
-            if client is None:
-                return
-            client_key = id(client)
-            if client_key not in self._owned_clients:
-                return
-            if any(other is client for other in self._clients.values()):
-                return
-            self._owned_clients.pop(client_key, None)
-            close = getattr(client, "close", None)
-            if close is None:
-                return
-            try:
-                result = close()
-                if inspect.isawaitable(result):
-                    await result
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.warning("Unable to close detached Weixin client for %s", binding_id)
-
-    async def disable_binding(self, binding_id: str) -> ChannelAccount:
-        """在 Transport 锁内让控制面禁用获胜并取消候选切换。"""
-        async with self._binding_lock(binding_id):
-            current = self.registry.get("weixin", binding_id)
-            if current is None:
-                raise ValueError("微信 Binding 不存在")
-            if current.status == "revoked":
-                await self._disable_account_locked(binding_id)
-                return current
             await self._discard_rebind_locked(binding_id)
-            updated = self.registry.update(
-                replace(current, enabled=False, status="disabled")
-            )
-            await self._disable_account_locked(binding_id, discard_rebind=False)
-            return updated
-
-    async def revoke_binding(self, binding_id: str) -> ChannelAccount:
-        """在 Transport 锁内撤销账号，使候选提交不能重新启用它。"""
-        async with self._binding_lock(binding_id):
-            current = self.registry.get("weixin", binding_id)
-            if current is None:
-                raise ValueError("微信 Binding 不存在")
-            await self._discard_rebind_locked(binding_id)
-            updated = self.registry.revoke("weixin", binding_id)
-            await self._disable_account_locked(binding_id, discard_rebind=False)
-            return updated
-
-    async def _disable_account_locked(
-        self,
-        binding_id: str,
-        *,
-        discard_rebind: bool = True,
-    ) -> None:
-        if discard_rebind:
-            await self._discard_rebind_locked(binding_id)
-        await self._dismiss_qr(binding_id)
-        task = self._poll_tasks.pop(binding_id, None)
-        if task is not None and task is not asyncio.current_task():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            await self._stop_poll_locked(binding_id)
+            await self._dismiss_qr(binding_id)
 
     async def reload_account(self, binding_id: str) -> None:
         await self.disable_account(binding_id)
-        account = self.registry.get("weixin", binding_id)
-        if account is not None and account.enabled and self._started:
-            await self._prepare_binding(account)
+        await self.enable_account(binding_id)
+
+    async def detach_account(self, binding_id: str) -> None:
+        """永久删除前释放该 Binding 的本地轮询、二维码和客户端引用。"""
+        async with self._binding_lock(binding_id):
+            await self._discard_rebind_locked(binding_id)
+            await self._stop_poll_locked(binding_id)
+            client = self._clients.pop(binding_id, None)
+            await self._close_detached_client(binding_id, client)
+            await self._dismiss_qr(binding_id)
+
+    async def start_rebind(self, binding_id: str) -> ChannelAccount:
+        """创建内存候选二维码；旧 Binding 直到候选成功前持续工作。"""
+        async with self._binding_lock(binding_id):
+            current = self.registry.get("weixin", binding_id)
+            if current is None:
+                raise ValueError("微信 Binding 不存在")
+            if current.status not in {"active", "expired", "revoked"}:
+                raise ValueError("当前微信 Binding 状态不支持重新扫码")
+            await self._discard_rebind_locked(binding_id)
+            self._rebind_attempt += 1
+            private: dict[str, object] = {
+                "credential_state": "pending",
+                "inbound_ids": [],
+            }
+            base_url = current.private.get("base_url")
+            if isinstance(base_url, str) and base_url:
+                private["base_url"] = base_url
+            pending = _PendingRebind(
+                self._rebind_attempt,
+                replace(current, status="pending_qr", enabled=True, private=private),
+                current.status,
+            )
+            self._pending_rebinds[binding_id] = pending
+            await self._progress_rebind_locked(binding_id, pending.attempt_id)
+            refreshed = self._pending_rebinds.get(binding_id)
+            if refreshed is not None:
+                refreshed.task = asyncio.create_task(
+                    self._rebind_loop(binding_id, refreshed.attempt_id),
+                    name=f"weixin-rebind-{binding_id}",
+                )
+            return current
 
     async def send(self, message: OutboundMessage) -> bool:
-        binding_id = message.recipient.conversation_id
-        async with self._binding_lock(binding_id):
-            return await self._send_locked(message)
-
-    async def _send_locked(self, message: OutboundMessage) -> bool:
         if message.recipient.channel != self.name:
             return False
         if (
@@ -441,6 +327,14 @@ class WeixinTransport(ChannelTransport):
             return False
         account = self.registry.get("weixin", message.recipient.conversation_id)
         if account is None or account.principal_id != message.recipient.principal_id:
+            return False
+        expected_epoch = message.metadata.get("binding_epoch")
+        if (
+            message.disposition == "chat_reply"
+            and isinstance(expected_epoch, int)
+            and expected_epoch != _binding_epoch(account)
+        ):
+            # 重扫后旧 turn 的最终文本不能落到新微信用户。
             return False
         if (
             account.enabled
@@ -487,23 +381,18 @@ class WeixinTransport(ChannelTransport):
 
     async def poll_once(self, binding_id: str) -> int:
         async with self._binding_lock(binding_id):
-            return await self._poll_once_locked(binding_id)
-
-    async def _poll_once_locked(self, binding_id: str) -> int:
-        pending = self._pending_rebinds.get(binding_id)
-        if pending is not None and pending.commit_request_task is not None:
-            return 0
-        account = self.registry.get("weixin", binding_id)
-        if account is not None and account.enabled and account.status == "pending_qr":
-            await self._progress_login_once_locked(binding_id)
-            return 0
-        if (
-            account is None
-            or not account.enabled
-            or account.status not in {"awaiting_first_dm", "active"}
-        ):
-            return 0
-        client = await self._client_for(account)
+            account = self.registry.get("weixin", binding_id)
+            if account is not None and account.enabled and account.status == "pending_qr":
+                await self._progress_login_locked(binding_id)
+                return 0
+            if (
+                account is None
+                or not account.enabled
+                or account.status not in {"awaiting_first_dm", "active"}
+            ):
+                return 0
+            epoch = _binding_epoch(account)
+            client = await self._client_for(account)
         try:
             result = await client.poll(account)
         except asyncio.CancelledError:
@@ -515,26 +404,25 @@ class WeixinTransport(ChannelTransport):
             logger.warning("Weixin poll failed for binding %s", account.id)
             await self._mark_disconnected(account)
             return 0
-        account = self._apply_private_update(account, result.private_update)
-        accepted = 0
-        for event in result.events:
-            if await self._handle_event(account, event):
-                accepted += 1
-            refreshed = self.registry.get("weixin", account.id)
-            if refreshed is not None:
-                account = refreshed
-        return accepted
+        async with self._binding_lock(binding_id):
+            current = self.registry.get("weixin", binding_id)
+            if current is None or _binding_epoch(current) != epoch:
+                return 0
+            account = self._apply_private_update(current, result.private_update)
+            accepted = 0
+            for event in result.events:
+                if await self._handle_event(account, event):
+                    accepted += 1
+                refreshed = self.registry.get("weixin", account.id)
+                if refreshed is not None:
+                    account = refreshed
+            return accepted
 
     async def progress_login_once(self, binding_id: str) -> str:
         async with self._binding_lock(binding_id):
-            pending = self._pending_rebinds.get(binding_id)
-            if pending is not None:
-                await self._progress_rebind_locked(binding_id, pending.generation)
-                refreshed = self._pending_rebinds.get(binding_id)
-                return refreshed.state if refreshed is not None else "failed"
-            return await self._progress_login_once_locked(binding_id)
+            return await self._progress_login_locked(binding_id)
 
-    async def _progress_login_once_locked(self, binding_id: str) -> str:
+    async def _progress_login_locked(self, binding_id: str) -> str:
         account = self.registry.get("weixin", binding_id)
         if account is None:
             raise ValueError("微信 Binding 不存在")
@@ -580,146 +468,18 @@ class WeixinTransport(ChannelTransport):
             await self._dismiss_qr(account.id)
         return account.status
 
-    async def _progress_rebind_locked(self, binding_id: str, generation: int) -> None:
-        pending = self._pending_rebinds.get(binding_id)
-        if pending is None or pending.generation != generation:
-            return
-        if self.registry.get("weixin", binding_id) is None:
-            await self._discard_rebind_locked(binding_id, generation)
-            return
-        if pending.state == "waiting_for_idle":
-            return
-        candidate = pending.candidate
-        client = await self._client_for(candidate)
-        try:
-            if candidate.private.get("qrcode"):
-                qr_available = (
-                    (self._qr_cache is not None and self._qr_cache.get(binding_id) is not None)
-                    or self._is_qr_presenting(binding_id)
-                )
-                if not qr_available:
-                    await self._discard_rebind_locked(binding_id, generation)
-                    return
-                result = await client.continue_login(candidate)
-            else:
-                result = await client.begin_login(candidate)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.warning("Weixin candidate login failed for binding %s", binding_id)
-            await self._discard_rebind_locked(binding_id, generation)
-            return
-
-        refreshed = self._pending_rebinds.get(binding_id)
-        if refreshed is None or refreshed.generation != generation:
-            return
-        private = dict(candidate.private)
-        private.update(result.private_update)
-        refreshed.candidate = replace(candidate, status=result.status, private=private)
-
-        qr_content = getattr(result, "qr_content", None)
-        if isinstance(qr_content, str) and qr_content:
-            cached = self._cache_qr(binding_id, qr_content)
-            presented = False
-            if self._qr_presenter is not None:
-                presented = await self._present_qr(
-                    binding_id,
-                    qr_content,
-                    generation=generation,
-                )
-            if not cached and not presented:
-                await self._discard_rebind_locked(binding_id, generation)
-                return
-
-        if result.status == "pending_qr":
-            qr_available = (
-                (self._qr_cache is not None and self._qr_cache.get(binding_id) is not None)
-                or self._is_qr_presenting(binding_id)
-            )
-            if not qr_available:
-                await self._discard_rebind_locked(binding_id, generation)
-            return
-        if result.status != "awaiting_first_dm":
-            await self._discard_rebind_locked(binding_id, generation)
-            return
-        refreshed.state = "waiting_for_idle"
-        await self._dismiss_qr(binding_id)
-
-    def _ensure_rebind_task(self, binding_id: str, generation: int) -> None:
-        task = self._rebind_tasks.get(binding_id)
-        if task is not None and not task.done():
-            return
-        self._rebind_tasks[binding_id] = asyncio.create_task(
-            self._rebind_loop(binding_id, generation),
-            name=f"weixin-rebind-{binding_id}",
-        )
-
-    async def _rebind_loop(self, binding_id: str, generation: int) -> None:
-        try:
-            while not self._closed:
-                await asyncio.sleep(self.poll_interval_seconds)
-                async with self._binding_lock(binding_id):
-                    pending = self._pending_rebinds.get(binding_id)
-                    if pending is None or pending.generation != generation:
-                        return
-                    if pending.state == "pending_qr":
-                        await self._progress_rebind_locked(binding_id, generation)
-                        pending = self._pending_rebinds.get(binding_id)
-                        if pending is None or pending.generation != generation:
-                            return
-                    waiting_for_idle = pending.state == "waiting_for_idle"
-                    if waiting_for_idle and self._request_rebind_commit is not None:
-                        pending.commit_request_task = asyncio.current_task()
-                if not waiting_for_idle or self._request_rebind_commit is None:
-                    continue
-                try:
-                    await self._request_rebind_commit(binding_id)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    logger.warning(
-                        "Unable to request Weixin candidate commit for binding %s",
-                        binding_id,
-                    )
-                finally:
-                    pending = self._pending_rebinds.get(binding_id)
-                    if pending is not None and pending.generation == generation:
-                        pending.commit_request_task = None
-                if binding_id not in self._pending_rebinds:
-                    return
-        finally:
-            if self._rebind_tasks.get(binding_id) is asyncio.current_task():
-                self._rebind_tasks.pop(binding_id, None)
-
-    async def _discard_rebind_locked(
-        self,
-        binding_id: str,
-        generation: int | None = None,
-    ) -> None:
-        pending = self._pending_rebinds.get(binding_id)
-        if pending is None or (generation is not None and pending.generation != generation):
-            return
-        self._pending_rebinds.pop(binding_id, None)
-        task = self._rebind_tasks.pop(binding_id, None)
-        if task is not None and task is not asyncio.current_task():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-        await self._dismiss_qr(binding_id)
-
-    def _binding_lock(self, binding_id: str) -> asyncio.Lock:
-        return self._binding_locks.setdefault(binding_id, asyncio.Lock())
-
     async def _prepare_binding(self, account: ChannelAccount) -> None:
         async with self._binding_lock(account.id):
             current = self.registry.get("weixin", account.id)
-            if current is None:
-                return
-            await self._prepare_binding_locked(current)
+            if current is not None:
+                await self._prepare_binding_locked(current)
 
     async def _prepare_binding_locked(self, account: ChannelAccount) -> None:
+        if not account.enabled:
+            return
         await self._client_for(account)
         if account.status == "pending_qr":
-            await self._progress_login_once_locked(account.id)
+            await self._progress_login_locked(account.id)
             account = self.registry.get("weixin", account.id) or account
         if account.status in {"pending_qr", "awaiting_first_dm", "active"}:
             self._ensure_poll_task(account.id)
@@ -745,7 +505,16 @@ class WeixinTransport(ChannelTransport):
                     return
                 await asyncio.sleep(self.poll_interval_seconds)
         finally:
-            self._poll_tasks.pop(binding_id, None)
+            if self._poll_tasks.get(binding_id) is asyncio.current_task():
+                self._poll_tasks.pop(binding_id, None)
+
+    async def _stop_poll_locked(self, binding_id: str) -> None:
+        task = self._poll_tasks.pop(binding_id, None)
+        if task is not None:
+            task.cancel()
+
+    def _binding_lock(self, binding_id: str) -> asyncio.Lock:
+        return self._binding_locks.setdefault(binding_id, asyncio.Lock())
 
     async def _client_for(self, account: ChannelAccount) -> IlinkClient:
         client = self._clients.get(account.id)
@@ -765,6 +534,157 @@ class WeixinTransport(ChannelTransport):
         if owned:
             self._owned_clients[id(client)] = client
         return client
+
+    async def _close_detached_client(self, binding_id: str, client: IlinkClient | None) -> None:
+        if client is None or id(client) not in self._owned_clients:
+            return
+        if any(other is client for other in self._clients.values()):
+            return
+        self._owned_clients.pop(id(client), None)
+        close = getattr(client, "close", None)
+        if close is None:
+            return
+        try:
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Unable to close detached Weixin client for %s", binding_id)
+
+    async def _progress_rebind_locked(self, binding_id: str, attempt_id: int) -> None:
+        """推进一个候选登录；候选失败绝不触碰当前 Binding。"""
+        pending = self._pending_rebinds.get(binding_id)
+        if pending is None or pending.attempt_id != attempt_id:
+            return
+        current = self.registry.get("weixin", binding_id)
+        if current is None:
+            await self._discard_rebind_locked(binding_id, attempt_id)
+            return
+        candidate = pending.candidate
+        client = await self._client_for(candidate)
+        try:
+            qr_available = (
+                self._qr_cache is not None and self._qr_cache.get(binding_id) is not None
+            ) or self._is_qr_presenting(binding_id)
+            if candidate.private.get("qrcode") and qr_available:
+                result = await client.continue_login(candidate)
+            else:
+                result = await client.begin_login(candidate)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Weixin candidate login failed for binding %s", binding_id)
+            await self._discard_rebind_locked(binding_id, attempt_id)
+            return
+
+        pending = self._pending_rebinds.get(binding_id)
+        if pending is None or pending.attempt_id != attempt_id:
+            return
+        private = dict(candidate.private)
+        private.update(result.private_update)
+        pending.candidate = replace(candidate, status=result.status, private=private)
+
+        qr_content = getattr(result, "qr_content", None)
+        if isinstance(qr_content, str) and qr_content:
+            cached = self._cache_qr(binding_id, qr_content)
+            presented = True
+            if self._qr_presenter is not None:
+                presented = await self._present_qr(
+                    binding_id,
+                    qr_content,
+                    generation=attempt_id,
+                )
+            if not cached and not presented:
+                await self._discard_rebind_locked(binding_id, attempt_id)
+                return
+
+        if result.status == "pending_qr":
+            qr_available = (
+                self._qr_cache is not None and self._qr_cache.get(binding_id) is not None
+            ) or self._is_qr_presenting(binding_id)
+            if not qr_available:
+                await self._discard_rebind_locked(binding_id, attempt_id)
+            return
+        if result.status != "awaiting_first_dm":
+            await self._discard_rebind_locked(binding_id, attempt_id)
+            return
+        await self._commit_rebind_locked(binding_id, attempt_id)
+
+    async def _rebind_loop(self, binding_id: str, attempt_id: int) -> None:
+        try:
+            while not self._closed:
+                await asyncio.sleep(self.poll_interval_seconds)
+                async with self._binding_lock(binding_id):
+                    pending = self._pending_rebinds.get(binding_id)
+                    if pending is None or pending.attempt_id != attempt_id:
+                        return
+                    await self._progress_rebind_locked(binding_id, attempt_id)
+                    if binding_id not in self._pending_rebinds:
+                        return
+        finally:
+            pending = self._pending_rebinds.get(binding_id)
+            if pending is not None and pending.task is asyncio.current_task():
+                pending.task = None
+
+    async def _commit_rebind_locked(self, binding_id: str, attempt_id: int) -> None:
+        """候选凭据就绪后直接切换，不等待旧回复完成。"""
+        pending = self._pending_rebinds.get(binding_id)
+        current = self.registry.get("weixin", binding_id)
+        if (
+            pending is None
+            or pending.attempt_id != attempt_id
+            or current is None
+            or current.status == "disabled"
+            or (current.status == "revoked" and pending.baseline_status != "revoked")
+        ):
+            await self._discard_rebind_locked(binding_id, attempt_id)
+            return
+        private = dict(pending.candidate.private)
+        for field_name in (
+            "from_user_id",
+            "context_token",
+            "cursor",
+            "conversation_id",
+            "qrcode",
+            "qr_status",
+        ):
+            private.pop(field_name, None)
+        private.update(
+            {
+                "inbound_ids": [],
+                "connected": False,
+                "binding_epoch": _binding_epoch(current) + 1,
+            }
+        )
+        committed = self.registry.replace_private_state(
+            replace(
+                current,
+                status="awaiting_first_dm",
+                enabled=True,
+                private=private,
+            )
+        )
+        self._pending_rebinds.pop(binding_id, None)
+        await self._dismiss_qr(binding_id)
+        await self._stop_poll_locked(binding_id)
+        if self._started:
+            self._ensure_poll_task(committed.id)
+
+    async def _discard_rebind_locked(
+        self,
+        binding_id: str,
+        attempt_id: int | None = None,
+    ) -> None:
+        pending = self._pending_rebinds.get(binding_id)
+        if pending is None or (attempt_id is not None and pending.attempt_id != attempt_id):
+            return
+        self._pending_rebinds.pop(binding_id, None)
+        task = pending.task
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+        await self._dismiss_qr(binding_id)
 
     async def _handle_event(self, account: ChannelAccount, event: dict[str, object]) -> bool:
         parsed = _parse_event(event)
@@ -808,6 +728,7 @@ class WeixinTransport(ChannelTransport):
         content = content.strip()
         if not content:
             return False
+        metadata["binding_epoch"] = _binding_epoch(account)
         route = ChannelRoute(
             account.principal_id,
             self.name,
@@ -876,7 +797,10 @@ class WeixinTransport(ChannelTransport):
             logger.debug("Unable to mark Weixin binding %s disconnected", account.id)
 
     async def _expire_binding(self, account: ChannelAccount) -> None:
-        await self._dismiss_qr(account.id)
+        # 候选重扫二维码独立于旧凭据。旧凭据恰好过期时，不能把候选二维码
+        # 一并关闭；候选成功后仍可直接切换到新的凭据。
+        if account.id not in self._pending_rebinds:
+            await self._dismiss_qr(account.id)
         current = self.registry.get("weixin", account.id)
         if current is None or current.status == "revoked":
             return
@@ -910,14 +834,16 @@ class WeixinTransport(ChannelTransport):
         if self._qr_presenter is None:
             return False
         try:
-            present = self._qr_presenter.present
+            presenter = self._qr_presenter.present
             try:
-                inspect.signature(present).bind(binding_id, qr_content, generation)
+                inspect.signature(presenter).bind(binding_id, qr_content, generation)
             except (TypeError, ValueError):
-                result = present(binding_id, qr_content)
+                result = presenter(binding_id, qr_content)
             else:
-                result = present(binding_id, qr_content, generation)
-            return (await result) is not False
+                result = presenter(binding_id, qr_content, generation)
+            if inspect.isawaitable(result):
+                result = await result
+            return result is not False
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -996,12 +922,12 @@ class WeixinTransport(ChannelTransport):
         binding_id: str,
         generation: int | None = None,
     ) -> None:
-        async with self._binding_lock(binding_id):
-            pending = self._pending_rebinds.get(binding_id)
-            if pending is not None:
-                if generation == pending.generation:
-                    await self._discard_rebind_locked(binding_id, pending.generation)
-                return
+        pending = self._pending_rebinds.get(binding_id)
+        if pending is not None:
+            if generation is None or pending.attempt_id == generation:
+                async with self._binding_lock(binding_id):
+                    await self._discard_rebind_locked(binding_id, generation)
+            return
         account = self.registry.get("weixin", binding_id)
         if account is None or account.status != "pending_qr":
             return
@@ -1046,6 +972,11 @@ class WeixinTransport(ChannelTransport):
             and account.private.get("from_user_id")
             and account.private.get("connected", True)
         )
+
+
+def _binding_epoch(account: ChannelAccount) -> int:
+    value = account.private.get("binding_epoch", 0)
+    return value if isinstance(value, int) and value >= 0 else 0
 
 
 def _parse_event(event: object) -> tuple[str, str, bool, str, dict[str, object]] | None:

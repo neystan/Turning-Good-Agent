@@ -9,10 +9,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
-from ..channels.registry import ChannelConflictError
 from ..sessions.token_counter import count_content_tokens
 from ..sessions.types import MessageRecord
 from ..skills.manager import SkillManager
+from ..channels.registry import ChannelConflictError
 from ..llm.client import LLMProvider
 from ..llm.factory import build_llm
 from ..runtime.turn_context import current_inbound, current_route
@@ -45,52 +45,6 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
-
-
-class PrincipalRetirementReservation:
-    """持有主体调度锁，直到 Host 完成或放弃删除转换。"""
-
-    def __init__(
-        self,
-        service: ProactiveService,
-        principal_id: str,
-        schedule_lock: asyncio.Lock,
-    ) -> None:
-        self._service = service
-        self.principal_id = principal_id
-        self._schedule_lock = schedule_lock
-        self._committed = False
-        self._released = False
-
-    @property
-    def committed(self) -> bool:
-        """返回是否已经越过主体退役提交点。"""
-        return self._committed
-
-    async def commit(self) -> None:
-        """在仍持有调度锁时提交主体退役，且提交至多一次。"""
-        if self._released:
-            raise RuntimeError("主体退役预留已释放")
-        if self._committed:
-            return
-        self._committed = True
-        await self._service._commit_principal_retirement(self.principal_id)
-
-    async def release(self) -> None:
-        """释放调度锁；未提交的预留不会改变主体状态。"""
-        if self._released:
-            return
-        self._released = True
-        self._schedule_lock.release()
-
-    async def __aenter__(self) -> PrincipalRetirementReservation:
-        if self._released:
-            raise RuntimeError("主体退役预留已释放")
-        return self
-
-    async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        del exc_type, exc, traceback
-        await self.release()
 
 
 class _BoundedExecutor:
@@ -146,7 +100,8 @@ class ProactiveService:
         self._principal_registry = principal_registry
         self._owner_principal_id = runtime.settings.gateway.principal_id
         self._workspaces: dict[str, ProactiveWorkspace] = {}
-        self._principal_schedule_locks: dict[str, asyncio.Lock] = {}
+        self._retired_principal_ids: set[str] = set()
+        self._principal_retirement_locks: dict[str, asyncio.Lock] = {}
         self._on_domain_change = on_domain_change
         self._on_idle = on_idle
         self._background_semaphore = asyncio.Semaphore(
@@ -184,7 +139,6 @@ class ProactiveService:
         self._dream_tasks: dict[str, asyncio.Task[None]] = {}
         self._skill_evolution_tasks: dict[str, asyncio.Task[None]] = {}
         self._observation_tasks: dict[str, set[asyncio.Task[None]]] = {}
-        self._retired_principal_ids: set[str] = set()
         self._mcp_listener: Callable[[Any], None] | None = None
         self._installed_tools: list[Any] = []
         runtime.proactive.register(self)
@@ -193,6 +147,8 @@ class ProactiveService:
         """懒创建并缓存一个主体的主动 workspace。"""
         if not isinstance(principal_id, str) or not principal_id:
             raise ValueError("principal_id 不能为空")
+        if principal_id in self._retired_principal_ids:
+            raise RuntimeError("主体正在删除")
         workspace = self._workspaces.get(principal_id)
         if workspace is not None:
             return workspace
@@ -321,62 +277,38 @@ class ProactiveService:
         )
 
     def is_principal_idle(self, principal_id: str) -> bool:
-        """报告一个主体是否没有 Cron 或主动后台任务。"""
-        if not isinstance(principal_id, str) or not principal_id:
-            raise ValueError("principal_id 不能为空")
+        """只判断一个独立主体，避免因其它主体后台任务阻塞删除。"""
         workspace = self._workspaces.get(principal_id)
         return (
             (workspace is None or workspace.cron.is_idle)
             and not _task_active(self._breakbeat_tasks.get(principal_id))
             and not _task_active(self._dream_tasks.get(principal_id))
             and not _task_active(self._skill_evolution_tasks.get(principal_id))
-            and not any(
-                _task_active(task)
-                for task in self._observation_tasks.get(principal_id, ())
-            )
+            and not any(_task_active(task) for task in self._observation_tasks.get(principal_id, ()))
         )
 
     async def retire_principal(self, principal_id: str) -> None:
-        """仅在独立主体空闲时移除其主动工作区投影。"""
-        reservation = await self.prepare_principal_retirement(principal_id)
-        async with reservation:
-            await reservation.commit()
-
-    async def prepare_principal_retirement(
-        self,
-        principal_id: str,
-    ) -> PrincipalRetirementReservation:
-        """原子检查主体空闲并持有调度锁，等待调用方提交或释放。"""
-        if not isinstance(principal_id, str) or not principal_id:
-            raise ValueError("principal_id 不能为空")
-        if principal_id == self._owner_principal_id:
+        """在主体空闲时停止其主动投影；不向 Host 暴露 reservation。"""
+        if not principal_id or principal_id == self._owner_principal_id:
             raise ValueError("Owner 主体不能退役")
-        schedule_lock = self._principal_schedule_lock(principal_id)
-        await schedule_lock.acquire()
-        try:
+        lock = self._principal_retirement_locks.setdefault(principal_id, asyncio.Lock())
+        async with lock:
             if not self.is_principal_idle(principal_id):
                 raise ChannelConflictError("binding_busy", "独立主体仍有后台任务")
-            return PrincipalRetirementReservation(self, principal_id, schedule_lock)
-        except BaseException:
-            schedule_lock.release()
-            raise
+            self._retired_principal_ids.add(principal_id)
+            workspace = self._workspaces.pop(principal_id, None)
+            if workspace is not None:
+                await workspace.cron.close()
+            self._breakbeat_tasks.pop(principal_id, None)
+            self._dream_tasks.pop(principal_id, None)
+            self._skill_evolution_tasks.pop(principal_id, None)
+            self._observation_tasks.pop(principal_id, None)
+            self._wake_scheduler()
 
-    async def _commit_principal_retirement(self, principal_id: str) -> None:
-        """提交已预留主体的退役；调用期间必须持续持有其调度锁。"""
-        self._retired_principal_ids.add(principal_id)
-        workspace = self._workspaces.get(principal_id)
-        if workspace is not None:
-            await workspace.cron.close()
-        self._workspaces.pop(principal_id, None)
-        self._breakbeat_tasks.pop(principal_id, None)
-        self._dream_tasks.pop(principal_id, None)
-        self._skill_evolution_tasks.pop(principal_id, None)
-        self._observation_tasks.pop(principal_id, None)
+    def restore_principal(self, principal_id: str) -> None:
+        """删除后续文件清理失败时允许该主体在下次调度恢复。"""
+        self._retired_principal_ids.discard(principal_id)
         self._wake_scheduler()
-
-    def _principal_schedule_lock(self, principal_id: str) -> asyncio.Lock:
-        """返回调度与退役共享的主体串行锁。"""
-        return self._principal_schedule_locks.setdefault(principal_id, asyncio.Lock())
 
     def _available_tool_names(self) -> frozenset[str]:
         """在每次 Cron 触发时返回当前 Runtime 的 Tool 快照。"""
@@ -492,15 +424,17 @@ class ProactiveService:
             and isinstance(session_id, str)
             and session_id
         ):
+            if principal_id in self._retired_principal_ids:
+                return
             assistant_message_id = payload.get("completed_assistant_message_id")
             workspace = self.workspace_for(principal_id)
-            self._spawn(
+            self._spawn_for_principal(
+                principal_id,
                 self._observe_session(
                     workspace,
                     session_id,
                     assistant_message_id if isinstance(assistant_message_id, str) else None,
-                ),
-                observation_principal_id=principal_id,
+                )
             )
 
     async def _scheduler_loop(self) -> None:
@@ -554,10 +488,7 @@ class ProactiveService:
         if self._principal_registry is None:
             return
         for principal_id in self._principal_registry.principal_ids():
-            if (
-                principal_id in self._workspaces
-                or principal_id in self._retired_principal_ids
-            ):
+            if principal_id in self._workspaces or principal_id in self._retired_principal_ids:
                 continue
             self.workspace_for(principal_id)
 
@@ -572,7 +503,8 @@ class ProactiveService:
     async def _run_workspace_due(self, workspace: ProactiveWorkspace, now: datetime) -> None:
         """在唯一调度循环中推进一个主体到期的能力。"""
         principal_id = workspace.principal_id
-        async with self._principal_schedule_lock(principal_id):
+        lock = self._principal_retirement_locks.setdefault(principal_id, asyncio.Lock())
+        async with lock:
             if principal_id in self._retired_principal_ids:
                 return
             if await workspace.cron.run_due(now):
@@ -771,41 +703,40 @@ class ProactiveService:
             await self._workspace_domain_changed(workspace.principal_id, "skill")
 
     def _spawn(
-        self,
-        coroutine: Awaitable[None],
-        *,
-        wake_on_done: bool = False,
-        observation_principal_id: str | None = None,
+        self, coroutine: Awaitable[None], *, wake_on_done: bool = False
     ) -> asyncio.Task[None]:
         """执行当前处理。"""
         task = asyncio.create_task(coroutine)
         self._background_tasks.add(task)
-        if observation_principal_id is not None:
-            self._observation_tasks.setdefault(observation_principal_id, set()).add(task)
         task.add_done_callback(
             lambda completed: self._background_finished(
-                completed,
-                wake_on_done=wake_on_done,
-                observation_principal_id=observation_principal_id,
+                completed, wake_on_done=wake_on_done
             )
         )
         return task
 
-    def _background_finished(
+    def _spawn_for_principal(
         self,
-        task: asyncio.Task[None],
+        principal_id: str,
+        coroutine: Awaitable[None],
         *,
-        wake_on_done: bool,
-        observation_principal_id: str | None,
-    ) -> None:
+        wake_on_done: bool = False,
+    ) -> asyncio.Task[None]:
+        task = self._spawn(coroutine, wake_on_done=wake_on_done)
+        bucket = self._observation_tasks.setdefault(principal_id, set())
+        bucket.add(task)
+
+        def remove(completed: asyncio.Task[None]) -> None:
+            bucket.discard(completed)
+            if not bucket:
+                self._observation_tasks.pop(principal_id, None)
+
+        task.add_done_callback(remove)
+        return task
+
+    def _background_finished(self, task: asyncio.Task[None], *, wake_on_done: bool) -> None:
         """先清除任务投影，再让 Gateway 判断是否已到安全空闲点。"""
         self._background_tasks.discard(task)
-        if observation_principal_id is not None:
-            observations = self._observation_tasks.get(observation_principal_id)
-            if observations is not None:
-                observations.discard(task)
-                if not observations:
-                    self._observation_tasks.pop(observation_principal_id, None)
         if wake_on_done:
             self._wake_scheduler()
         self._request_idle_check()

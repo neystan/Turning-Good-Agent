@@ -4,6 +4,7 @@ import asyncio
 import os
 import shutil
 from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,7 @@ from ..proactive.notifications import (
     NotificationFanout,
     NotificationSubscription,
 )
-from ..proactive.service import PrincipalRetirementReservation, ProactiveService
+from ..proactive.service import ProactiveService
 from ..runtime.runtime import AgentRuntime
 from ..sessions.store import JsonlSessionStore
 from ..web.backend.config_control import WebConfigControlService
@@ -39,7 +40,6 @@ from ..web.backend.coordinator import WebSessionCoordinator
 from ..web.backend.proactive_control import WebProactiveControlService
 from ..web.backend.proactive_events import GatewayProactiveState, ProactiveEventHub
 from .auth import load_or_create_gateway_token
-from .binding_lifecycle import BindingRouteScope, ChannelDeletionResult
 from .catalog_actions import CatalogActionExecutor
 from .instance_lock import GatewayInstanceLock
 from .runtime_supervisor import RuntimeSupervisor
@@ -47,6 +47,16 @@ from .turns import GatewayTurnCoordinator
 
 
 RuntimeFactory = Callable[[], Awaitable[AgentRuntime]]
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelDeletionResult:
+    """控制面可安全返回的永久删除结果。"""
+
+    platform: Platform
+    account_id: str
+    principal_kind: str
+    deleted_session_ids: list[str]
 
 
 class GatewayHost:
@@ -77,7 +87,7 @@ class GatewayHost:
         self._initial_runtime = initial_runtime
         self._started = False
         self._lifecycle_lock = asyncio.Lock()
-        self._binding_lifecycle_locks: dict[tuple[Platform, str], asyncio.Lock] = {}
+        self._binding_delete_locks: dict[tuple[Platform, str], asyncio.Lock] = {}
         self._turn_slots = asyncio.Semaphore(settings.web.max_concurrent_sessions)
 
         self.web_coordinator = WebSessionCoordinator(
@@ -140,7 +150,6 @@ class GatewayHost:
             weixin_client,
             qr_presenter=self.weixin_qr_presenter,
             qr_cache=self.weixin_qr_cache,
-            request_rebind_commit=self.request_weixin_rebind_commit,
         )
         self.feishu_transport = FeishuTransport(
             self.channel_registry,
@@ -216,108 +225,45 @@ class GatewayHost:
             finally:
                 self.instance_lock.close()
 
-    async def _submit_turn(self, message: Any, *, dispatch: Any) -> bool:
-        return await self.turn_coordinator.submit(message, dispatch=dispatch)
-
-    async def _complete_route_turn(self, route: ChannelRoute, request_id: str) -> None:
-        await self.turn_coordinator.complete_route_turn(route, request_id)
-
-    async def _discard_pending_route(self, route: ChannelRoute) -> None:
-        await self.turn_coordinator.discard_pending_route(route)
-
-    async def _acquire_runtime(self) -> AgentRuntime:
-        return await self.runtime_supervisor.acquire_runtime()
-
-    async def _notify_idle(self) -> None:
-        await self.runtime_supervisor.notify_idle()
-
-    def _is_globally_idle(self) -> bool:
-        supervisor = getattr(self, "runtime_supervisor", None)
-        return (
-            (supervisor is None or not supervisor.lifecycle_busy)
-            and self.turn_coordinator.is_globally_idle()
-            and self.im_coordinator.is_globally_idle()
-            and self.web_coordinator.is_globally_idle()
-            and self.cli_coordinator.is_globally_idle()
-            and bool(self.proactive_service.is_idle)
-        )
-
     async def delete_channel_binding(
         self,
         platform: Platform,
         account_id: str,
     ) -> ChannelDeletionResult:
-        """在精确空闲范围内永久删除一条 Binding 及其专属状态。"""
-        try:
-            async with self.runtime_supervisor.reserve_lifecycle_transition():
-                async with self.channel_binding_lifecycle(platform, account_id):
-                    account = self._require_account(platform, account_id)
-                    scope = self._scope_for_account(account)
-                    reservation = await self.im_coordinator.reserve_scope_if_idle(scope)
-                    if reservation is None:
-                        raise ChannelConflictError(
-                            "binding_busy",
-                            "该 Binding 正在处理消息或等待回复投递",
-                        )
-                    async with reservation:
-                        self._preflight_independent_principal(account)
-                        retirement = await self._prepare_independent_principal_retirement(account)
-                        try:
-                            await self._disable_transport(account)
-                            if retirement is not None:
-                                await retirement.commit()
-                            deleted_session_ids = await self._clear_matching_sessions(
-                                account,
-                                scope,
-                            )
-                            self._remove_independent_principal_root(account)
-                            self.channel_registry.delete(platform, account_id)
-                            await self._detach_transport(account)
-                        finally:
-                            if retirement is not None:
-                                await retirement.release()
-        finally:
-            await self._notify_idle()
+        """永久删除一条空闲 Binding；不把生命周期协议扩展到重扫。"""
+        lock = self._binding_delete_locks.setdefault((platform, account_id), asyncio.Lock())
+        async with lock:
+            account = self._require_account(platform, account_id)
+            matcher = self._route_matcher(account)
+            route_block = await self.im_coordinator.reserve_matching_routes_if_idle(matcher)
+            if route_block is None:
+                raise ChannelConflictError(
+                    "binding_busy",
+                    "该 Binding 正在处理消息或等待回复投递",
+                )
+            retired_principal = False
+            try:
+                self._preflight_independent_principal(account)
+                if self._principal_kind(account) == "independent":
+                    await self.proactive_service.retire_principal(account.principal_id)
+                    retired_principal = True
+                await self._detach_transport(account)
+                deleted_session_ids = await self._clear_matching_sessions(account)
+                self._remove_independent_principal_root(account)
+                self.channel_registry.delete(platform, account_id)
+            except BaseException:
+                if retired_principal:
+                    self.proactive_service.restore_principal(account.principal_id)
+                raise
+            finally:
+                await self.im_coordinator.release_route_block(route_block)
+                await self._notify_idle()
         return ChannelDeletionResult(
             platform=platform,
             account_id=account_id,
             principal_kind=self._principal_kind(account),
             deleted_session_ids=deleted_session_ids,
         )
-
-    async def request_weixin_rebind_commit(self, binding_id: str) -> bool:
-        """仅在旧 Binding 精确空闲且已预留时提交候选微信凭据。"""
-        try:
-            async with self.runtime_supervisor.reserve_lifecycle_transition():
-                async with self.channel_binding_lifecycle("weixin", binding_id):
-                    account = self._require_account("weixin", binding_id)
-                    scope = self._scope_for_account(account)
-                    reservation = await self.im_coordinator.reserve_scope_if_idle(scope)
-                    if reservation is None:
-                        return False
-                    async with reservation:
-                        commit = getattr(self.weixin_transport, "try_commit_rebind", None)
-                        if commit is None:
-                            return False
-                        return bool(await commit(binding_id))
-        finally:
-            await self._notify_idle()
-
-    def _binding_lifecycle_lock(
-        self,
-        platform: Platform,
-        account_id: str,
-    ) -> asyncio.Lock:
-        """返回删除与候选提交共享的单 Binding 串行锁。"""
-        return self._binding_lifecycle_locks.setdefault((platform, account_id), asyncio.Lock())
-
-    def channel_binding_lifecycle(
-        self,
-        platform: Platform,
-        account_id: str,
-    ) -> asyncio.Lock:
-        """返回 Host 与控制面共享的单 Binding 生命周期边界。"""
-        return self._binding_lifecycle_lock(platform, account_id)
 
     def _require_account(self, platform: Platform, account_id: str) -> ChannelAccount:
         account = self.channel_registry.get(platform, account_id)
@@ -326,83 +272,62 @@ class GatewayHost:
         return account
 
     @staticmethod
-    def _scope_for_account(account: ChannelAccount) -> BindingRouteScope:
+    def _route_matcher(account: ChannelAccount) -> Callable[[tuple[str, str, str]], bool]:
         if account.platform == "weixin":
-            return BindingRouteScope(account.principal_id, "weixin", account.id)
-        return BindingRouteScope(
-            account.principal_id,
-            "feishu",
-            f"{account.id}:",
-            prefix=True,
-        )
-
-    def _scope_is_busy(self, scope: BindingRouteScope) -> bool:
-        return self.turn_coordinator.is_scope_busy(scope) or self.im_coordinator.is_scope_busy(
-            scope
+            return lambda route: route == (account.principal_id, "weixin", account.id)
+        prefix = f"{account.id}:"
+        return lambda route: (
+            route[0] == account.principal_id
+            and route[1] == "feishu"
+            and route[2].startswith(prefix)
         )
 
     def _preflight_independent_principal(self, account: ChannelAccount) -> None:
         if self._principal_kind(account) == "owner":
             return
-        matching = tuple(
+        matches = tuple(
             item
             for item in self.channel_registry.list_accounts()
             if item.principal_id == account.principal_id
         )
-        if len(matching) != 1 or (
-            matching[0].platform,
-            matching[0].id,
-        ) != (account.platform, account.id):
+        if len(matches) != 1 or matches[0].id != account.id:
             raise ChannelConflictError(
                 "independent_principal_integrity_error",
                 "独立主体 Binding 完整性异常，无法安全删除",
             )
 
-    async def _prepare_independent_principal_retirement(
-        self,
-        account: ChannelAccount,
-    ) -> PrincipalRetirementReservation | None:
-        if self._principal_kind(account) == "owner":
-            return None
-        return await self.proactive_service.prepare_principal_retirement(account.principal_id)
-
-    async def _disable_transport(self, account: ChannelAccount) -> None:
-        """只停止可重新启用的内存连接/轮询；此步骤不改写 Registry。"""
-        transport = (
-            self.weixin_transport if account.platform == "weixin" else self.feishu_transport
-        )
-        await transport.disable_account(account.id)
-
     async def _detach_transport(self, account: ChannelAccount) -> None:
-        """永久删除时释放 Transport 持有的单 Binding 资源。"""
-        if account.platform != "weixin":
-            return
-        await self.weixin_transport.detach_account(account.id)
+        if account.platform == "weixin":
+            await self.weixin_transport.detach_account(account.id)
+        else:
+            await self.feishu_transport.disable_account(account.id)
 
-    async def _clear_matching_sessions(
-        self,
-        account: ChannelAccount,
-        scope: BindingRouteScope,
-    ) -> list[str]:
+    async def _clear_matching_sessions(self, account: ChannelAccount) -> list[str]:
         if self._principal_kind(account) == "owner":
             store = self.current_runtime.sessions.store
         else:
             route = ChannelRoute(
                 account.principal_id,
                 account.platform,
-                scope.conversation_id,
-                f"binding-lifecycle:{account.id}",
+                account.id,
+                f"delete-binding:{account.id}",
             )
             context = self.principal_resolver.resolve(route)
             store = JsonlSessionStore(context.data_root)
-        return await store.clear_matching_sessions(
-            lambda session: scope.matches(
-                ChannelRoute(
-                    session.principal_id,
-                    session.channel,
-                    session.conversation_id,
-                    session.id,
+        if account.platform == "weixin":
+            return await store.clear_matching_sessions(
+                lambda session: (
+                    session.principal_id == account.principal_id
+                    and session.channel == "weixin"
+                    and session.conversation_id == account.id
                 )
+            )
+        prefix = f"{account.id}:"
+        return await store.clear_matching_sessions(
+            lambda session: (
+                session.principal_id == account.principal_id
+                and session.channel == "feishu"
+                and session.conversation_id.startswith(prefix)
             )
         )
 
@@ -422,6 +347,30 @@ class GatewayHost:
             "owner"
             if account.principal_id == self.settings.gateway.principal_id
             else "independent"
+        )
+
+    async def _submit_turn(self, message: Any, *, dispatch: Any) -> bool:
+        return await self.turn_coordinator.submit(message, dispatch=dispatch)
+
+    async def _complete_route_turn(self, route: ChannelRoute, request_id: str) -> None:
+        await self.turn_coordinator.complete_route_turn(route, request_id)
+
+    async def _discard_pending_route(self, route: ChannelRoute) -> None:
+        await self.turn_coordinator.discard_pending_route(route)
+
+    async def _acquire_runtime(self) -> AgentRuntime:
+        return await self.runtime_supervisor.acquire_runtime()
+
+    async def _notify_idle(self) -> None:
+        await self.runtime_supervisor.notify_idle()
+
+    def _is_globally_idle(self) -> bool:
+        return (
+            self.turn_coordinator.is_globally_idle()
+            and self.im_coordinator.is_globally_idle()
+            and self.web_coordinator.is_globally_idle()
+            and self.cli_coordinator.is_globally_idle()
+            and bool(self.proactive_service.is_idle)
         )
 
     async def _build_replacement_runtime(self) -> AgentRuntime:

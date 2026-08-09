@@ -4,19 +4,27 @@ import asyncio
 import inspect
 from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
 from ..bus.messages import ChannelRoute, InboundMessage, OutboundMessage, Recipient
 from ..bus.queue import AsyncMessageBus
-from .binding_lifecycle import BindingRouteReservation, BindingRouteScope
 
 
 RuntimeProvider = Callable[[], Any | Awaitable[Any]]
 IdleCallback = Callable[[], Awaitable[None]]
 TurnDispatch = Callable[[InboundMessage], Awaitable[None]]
 RouteKey = tuple[str, str, str]
+RouteMatcher = Callable[[RouteKey], bool]
 _TERMINAL_CACHE_LIMIT = 2_048
+
+
+@dataclass(frozen=True, slots=True)
+class RouteBlock:
+    """只供删除期间短暂拒绝指定 IM 路由的新入站。"""
+
+    token: str
 
 
 class GatewayTurnCoordinator:
@@ -43,7 +51,7 @@ class GatewayTurnCoordinator:
         self._terminal: OrderedDict[str, OutboundMessage] = OrderedDict()
         self._active_routes: dict[RouteKey, str] = {}
         self._pending_routes: dict[RouteKey, deque[tuple[InboundMessage, TurnDispatch]]] = {}
-        self._reserved_scopes: dict[str, BindingRouteScope] = {}
+        self._route_blocks: dict[str, RouteMatcher] = {}
         self._lock = asyncio.Lock()
         self._closed = False
 
@@ -71,7 +79,7 @@ class GatewayTurnCoordinator:
             self._inflight.clear()
             self._active_routes.clear()
             self._pending_routes.clear()
-            self._reserved_scopes.clear()
+            self._route_blocks.clear()
 
     async def submit(self, message: InboundMessage, *, dispatch: TurnDispatch) -> bool:
         """接收一条 Adapter 输入；重复 request-id 不会重新执行。"""
@@ -79,7 +87,7 @@ class GatewayTurnCoordinator:
         async with self._lock:
             if self._closed:
                 raise RuntimeError("Gateway 已关闭")
-            if any(scope.matches(message.route) for scope in self._reserved_scopes.values()):
+            if any(matcher(route_key) for matcher in self._route_blocks.values()):
                 return False
             if message.id in self._inflight or message.id in self._terminal:
                 return False
@@ -91,49 +99,30 @@ class GatewayTurnCoordinator:
         await self._dispatch(message, dispatch)
         return True
 
-    async def reserve_scope(self, scope: BindingRouteScope) -> BindingRouteReservation:
-        """原子预留一个 Binding 路由范围，并阻止后续匹配提交。"""
-        if not isinstance(scope, BindingRouteScope):
-            raise TypeError("scope 必须是 BindingRouteScope")
-        reservation_id = str(uuid4())
-        async with self._lock:
-            if self._closed:
-                raise RuntimeError("Gateway 已关闭")
-            self._reserved_scopes[reservation_id] = scope
-        return BindingRouteReservation(reservation_id, self._release_scope_reservation)
-
-    async def reserve_scope_if_idle(
+    async def reserve_matching_routes_if_idle(
         self,
-        scope: BindingRouteScope,
-    ) -> BindingRouteReservation | None:
-        """仅当范围内没有 active/pending turn 时才原子加入预留。"""
-        if not isinstance(scope, BindingRouteScope):
-            raise TypeError("scope 必须是 BindingRouteScope")
-        reservation_id = str(uuid4())
+        matcher: RouteMatcher,
+    ) -> RouteBlock | None:
+        """为永久删除原子阻止一组空闲 IM 路由，不服务普通重扫。"""
+        if not callable(matcher):
+            raise TypeError("matcher 必须可调用")
+        token = str(uuid4())
         async with self._lock:
             if self._closed:
                 raise RuntimeError("Gateway 已关闭")
-            if scope in self._reserved_scopes.values() or any(
-                self._scope_matches_route_key(scope, route_key)
+            if any(
+                matcher(route_key)
                 for route_key in (*self._active_routes, *self._pending_routes)
             ):
                 return None
-            self._reserved_scopes[reservation_id] = scope
-        return BindingRouteReservation(reservation_id, self._release_scope_reservation)
+            self._route_blocks[token] = matcher
+        return RouteBlock(token)
 
-    async def _release_scope_reservation(self, reservation_id: str) -> None:
-        """释放一个由当前协调器签发的路由预留。"""
+    async def release_route_block(self, block: RouteBlock) -> None:
+        if not isinstance(block, RouteBlock):
+            raise TypeError("block 必须是 RouteBlock")
         async with self._lock:
-            self._reserved_scopes.pop(reservation_id, None)
-
-    def is_scope_busy(self, scope: BindingRouteScope) -> bool:
-        """检查范围内是否有已激活或 FIFO 等待的普通消息。"""
-        if not isinstance(scope, BindingRouteScope):
-            raise TypeError("scope 必须是 BindingRouteScope")
-        return any(
-            self._scope_matches_route_key(scope, route_key)
-            for route_key in (*self._active_routes, *self._pending_routes)
-        )
+            self._route_blocks.pop(block.token, None)
 
     async def complete_route_turn(self, route: ChannelRoute, request_id: str) -> None:
         """完成一个 Route 的当前 turn，并按 FIFO 调度下一条普通消息。"""
@@ -242,6 +231,10 @@ class GatewayTurnCoordinator:
         else:
             outbound.event_id = message.id
         outbound.metadata["request_id"] = message.id
+        binding_epoch = message.metadata.get("binding_epoch")
+        if isinstance(binding_epoch, int) and binding_epoch >= 0:
+            # 微信重扫后 Transport 用它丢弃旧用户的终态回复。
+            outbound.metadata["binding_epoch"] = binding_epoch
         async with self._lock:
             self._inflight.discard(message.id)
             self._terminal[message.id] = outbound
@@ -258,16 +251,3 @@ class GatewayTurnCoordinator:
     @staticmethod
     def _route_key(route: ChannelRoute) -> RouteKey:
         return route.principal_id, route.channel, route.conversation_id
-
-    @staticmethod
-    def _scope_matches_route_key(scope: BindingRouteScope, route_key: RouteKey) -> bool:
-        principal_id, channel, conversation_id = route_key
-        return (
-            principal_id == scope.principal_id
-            and channel == scope.channel
-            and (
-                conversation_id.startswith(scope.conversation_id)
-                if scope.prefix
-                else conversation_id == scope.conversation_id
-            )
-        )
