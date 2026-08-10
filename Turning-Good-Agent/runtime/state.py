@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from ..bus.messages import OutboundMessage, Recipient, utc_now_iso
+from ..channels.policy import im_command_rejection
 from ..context.session_context import build_session_context
 from ..context.token_budget import build_context_token_breakdown, build_save_context_token_breakdown
 from ..memory.short_term import ShortTermMemory
@@ -90,6 +91,11 @@ async def run_state(runtime: AgentRuntime, ctx: TurnContext) -> str:
 async def command(runtime: AgentRuntime, ctx: TurnContext) -> str:
     """处理 slash command，命中后跳过模型链路。"""
     msg = ctx.inbound
+    rejection = im_command_rejection(msg.route, msg.content)
+    if rejection is not None:
+        ctx.shortcut_response = rejection
+        ctx.final_content = rejection
+        return "shortcut"
     sessions = _sessions_for(runtime, ctx)
     ctx.shortcut_response = await sessions.handle_inbound_command(msg.session_id, msg)
     if ctx.shortcut_response is not None:
