@@ -11,6 +11,7 @@ from ..bus.messages import ChannelRoute, InboundMessage, OutboundMessage, Recipi
 from ..bus.queue import AsyncMessageBus
 from ..gateway.routing import derive_session_id
 from ..llm.types import ToolCall
+from ..multi_agent.events import MULTI_AGENT_LIVE_EVENT_FIELDS
 from .base import ChannelCapabilities
 
 
@@ -31,8 +32,18 @@ CLI_EVENT_FIELDS = frozenset(
         "approval_id",
         "approved",
         "outcome",
+        *MULTI_AGENT_LIVE_EVENT_FIELDS,
     }
 )
+
+
+# 严格校验 CLI 一次性模式，省略时保留默认 auto。
+def _multi_agent_metadata(value: str | None) -> dict[str, str]:
+    if value is None:
+        return {}
+    from ..multi_agent.types import parse_multi_agent_mode
+
+    return {"multi_agent_mode": parse_multi_agent_mode(value).value}
 
 
 @dataclass(slots=True)
@@ -242,10 +253,12 @@ class CliTurnControl:
         self.release_slot()
         try:
             approved = await future
-            await self.acquire_slot()
             return approved
         finally:
-            self.approvals.pop(approval_id, None)
+            try:
+                await self.acquire_slot()
+            finally:
+                self.approvals.pop(approval_id, None)
 
     def bind_slot(self, semaphore: asyncio.Semaphore) -> None:
         """标识当前 turn 已持有 Gateway 全局执行槽位。"""
@@ -336,6 +349,15 @@ class CliGatewayAdapter:
         """终态由 GatewayTurnCoordinator 统一投递。"""
         del content
 
+    # 将固定字段的 Multi-Agent 事件投影到现有 CLI 通道。
+    async def on_multi_agent_event(self, event_type: str, payload: Mapping[str, Any]) -> None:
+        safe_payload = {
+            key: value
+            for key, value in payload.items()
+            if key in MULTI_AGENT_LIVE_EVENT_FIELDS
+        }
+        await self._publish(event_type, safe_payload)
+
     async def request_tool_approval(self, call: ToolCall) -> str | None:
         """向当前 CLI 发送审批请求并等待其选择。"""
         approval_id = self._control.create_approval()
@@ -418,7 +440,14 @@ class CliGatewayCoordinator:
             ),
         )
 
-    async def send(self, route: ChannelRoute, request_id: str, content: str) -> str:
+    # 发送单次 CLI 消息并附带可选的多 Agent 模式。
+    async def send(
+        self,
+        route: ChannelRoute,
+        request_id: str,
+        content: str,
+        multi_agent_mode: str | None = None,
+    ) -> str:
         """提交一条拥有独立 request-id 的普通 CLI 消息。"""
         text = content.strip()
         if not text:
@@ -429,6 +458,7 @@ class CliGatewayCoordinator:
             raise ValueError("CLI 控制器只接受 cli route")
         if self._closed:
             raise RuntimeError("Gateway CLI 控制器已关闭")
+        metadata = _multi_agent_metadata(multi_agent_mode)
         async with self._action_lock:
             active = self._controls.get(route.session_id)
             if active is not None and active.route != route:
@@ -445,7 +475,7 @@ class CliGatewayCoordinator:
                     raise
 
             accepted = await self._submit(
-                InboundMessage(request_id, route=route, content=text),
+                InboundMessage(request_id, route=route, content=text, metadata=metadata),
                 dispatch=dispatch,
             )
             if not accepted:

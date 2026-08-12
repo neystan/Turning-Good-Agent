@@ -15,6 +15,7 @@ const session = {
 const editable = {
   llm: { provider: "openai-compatible", api_key_configured: true, base_url: "https://api.example.test/v1", model: "example-model", timeout_seconds: 60, max_retries: 2, retry_delay_seconds: 0.5, streaming_enabled: true },
   runtime: { max_tool_rounds: 5, max_tool_calls_per_round: 8, parallel_tool_calls_enabled: true, max_parallel_tool_calls: 4, turn_timeout_seconds: 120, max_context_tokens: 300000, max_tool_result_tokens: 8000 },
+  multi_agent: { enabled: true, run_timeout_seconds: 60000, worker_timeout_seconds: 20000, max_workers_per_run: 4, max_concurrent_workers_per_run: 4, max_concurrent_workers_global: 8, worker_result_token_limit: 8000, parent_result_token_limit: 16000 },
   memory: { compact_token_threshold: 200000, recent_window_token_limit: 20000 },
   sessions: { retention_days: 7 },
   skills: { max_loaded_skills_per_turn: 3, max_skill_tokens: 8000, max_loaded_skill_tokens_per_turn: 16000 },
@@ -246,10 +247,11 @@ for (const theme of ["dark", "light"] as const) {
     await expect(notice).toHaveCSS("pointer-events", "auto");
     await expect(page.locator(".notice-region")).toHaveCSS("pointer-events", "none");
 
-    const [noticeBox, composerBox] = await Promise.all([notice.boundingBox(), composer.boundingBox()]);
+    const [noticeBox, composerBox, conversationBox] = await Promise.all([notice.boundingBox(), composer.boundingBox(), page.locator(".conversation").boundingBox()]);
     expect(noticeBox).not.toBeNull();
     expect(composerBox).not.toBeNull();
-    expect(Math.abs(noticeBox!.x + noticeBox!.width / 2 - 720)).toBeLessThanOrEqual(1);
+    expect(conversationBox).not.toBeNull();
+    expect(Math.abs(noticeBox!.x + noticeBox!.width / 2 - (conversationBox!.x + conversationBox!.width / 2))).toBeLessThanOrEqual(1);
     expect(noticeBox!.y).toBeGreaterThanOrEqual(68);
     expect(noticeBox!.y + noticeBox!.height).toBeLessThan(composerBox!.y);
     await expect(notice).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");

@@ -30,6 +30,14 @@ const fields: FieldDefinition[] = [
   { group: "runtime", field: "turn_timeout_seconds", label: "单轮超时（秒）", type: "number" },
   { group: "runtime", field: "max_context_tokens", label: "最大上下文 Token", type: "number" },
   { group: "runtime", field: "max_tool_result_tokens", label: "最大工具结果 Token", type: "number" },
+  { group: "multi_agent", field: "enabled", label: "启用多 Agent", type: "switch" },
+  { group: "multi_agent", field: "run_timeout_seconds", label: "单次运行超时（秒）", type: "number" },
+  { group: "multi_agent", field: "worker_timeout_seconds", label: "Worker 超时（秒）", type: "number" },
+  { group: "multi_agent", field: "max_workers_per_run", label: "每次最大 Worker 数", type: "number" },
+  { group: "multi_agent", field: "max_concurrent_workers_per_run", label: "每次并发 Worker 数", type: "number" },
+  { group: "multi_agent", field: "max_concurrent_workers_global", label: "全局并发 Worker 数", type: "number" },
+  { group: "multi_agent", field: "worker_result_token_limit", label: "Worker 结果 Token 上限", type: "number" },
+  { group: "multi_agent", field: "parent_result_token_limit", label: "汇总结果 Token 上限", type: "number" },
   { group: "memory", field: "compact_token_threshold", label: "压缩阈值 Token", type: "number" },
   { group: "memory", field: "recent_window_token_limit", label: "最近窗口 Token", type: "number" },
   { group: "sessions", field: "retention_days", label: "会话保留天数", type: "number" },
@@ -57,6 +65,7 @@ const fields: FieldDefinition[] = [
 const groups: Array<{ title: string; key: FieldGroup }> = [
   { title: "模型连接", key: "llm" },
   { title: "Runtime 限制", key: "runtime" },
+  { title: "多 Agent", key: "multi_agent" },
   { title: "记忆、会话与 Skill", key: "memory" },
   { title: "记忆、会话与 Skill", key: "sessions" },
   { title: "记忆、会话与 Skill", key: "skills" },
@@ -69,7 +78,7 @@ function cloneConfig(config: EditableControlConfig): EditableControlConfig {
 
 function changesFor(baseline: EditableControlConfig, draft: EditableControlConfig): ConfigApplyRequest["changes"] {
   const changes: ConfigApplyRequest["changes"] = {};
-  for (const group of ["llm", "runtime", "memory", "sessions", "skills", "proactive"] as const) {
+  for (const group of ["llm", "runtime", "multi_agent", "memory", "sessions", "skills", "proactive"] as const) {
     const changed = Object.fromEntries(Object.entries(draft[group]).filter(([key, value]) => baseline[group][key as never] !== value));
     if (Object.keys(changed).length) Object.assign(changes, { [group]: changed });
   }

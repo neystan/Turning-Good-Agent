@@ -79,6 +79,10 @@ class ImChannelAdapter:
         """终态由 GatewayTurnCoordinator 统一生成并投递。"""
         del content
 
+    # 固定丢弃 IM 不支持的 Multi-Agent 运行事件。
+    async def on_multi_agent_event(self, event_type: str, payload: Mapping[str, Any]) -> None:
+        del event_type, payload
+
     async def request_tool_approval(self, call: ToolCall) -> str | None:
         """防御性拒绝审批；正常 IM 路径由 Tool Policy 先行隐藏审批工具。"""
         del call

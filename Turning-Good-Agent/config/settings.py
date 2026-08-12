@@ -20,6 +20,20 @@ class RuntimeSettings:
 
 
 @dataclass(slots=True)
+class MultiAgentSettings:
+    """保存 Phase 9 多 Agent 委派限制。"""
+
+    enabled: bool = False
+    run_timeout_seconds: int = 3_600
+    worker_timeout_seconds: int = 900
+    max_workers_per_run: int = 8
+    max_concurrent_workers_per_run: int = 4
+    max_concurrent_workers_global: int = 8
+    worker_result_token_limit: int = 60_000
+    parent_result_token_limit: int = 120_000
+
+
+@dataclass(slots=True)
 class MemorySettings:
     """保存短期记忆压缩参数。"""
 
@@ -149,6 +163,7 @@ class Settings:
     user_id: str = "local-user"
     channel: str = "cli"
     runtime: RuntimeSettings = field(default_factory=RuntimeSettings)
+    multi_agent: MultiAgentSettings = field(default_factory=MultiAgentSettings)
     memory: MemorySettings = field(default_factory=MemorySettings)
     sessions: SessionSettings = field(default_factory=SessionSettings)
     tool_permissions: ToolPermissionSettings = field(default_factory=ToolPermissionSettings)
@@ -191,6 +206,7 @@ class Settings:
             ):
                 if key in runtime:
                     setattr(settings.runtime, key, runtime[key])
+            settings.multi_agent = _load_multi_agent_settings(payload.get("multi_agent", {}))
             memory = payload.get("memory", {})
             for key in ("compact_token_threshold", "recent_window_token_limit"):
                 if key in memory:
@@ -241,6 +257,27 @@ class Settings:
             raise ValueError("tool_permissions 必须是 object")
         permissions["auto_approve_tools"] = enabled
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+# 解析多 Agent 配置并忽略未声明字段。
+def _load_multi_agent_settings(payload: object) -> MultiAgentSettings:
+    """解析多 Agent 配置，只读取契约内的八个字段。"""
+    if not isinstance(payload, dict):
+        raise ValueError("multi_agent 必须是 object")
+    settings = MultiAgentSettings()
+    for key in (
+        "enabled",
+        "run_timeout_seconds",
+        "worker_timeout_seconds",
+        "max_workers_per_run",
+        "max_concurrent_workers_per_run",
+        "max_concurrent_workers_global",
+        "worker_result_token_limit",
+        "parent_result_token_limit",
+    ):
+        if key in payload:
+            setattr(settings, key, payload[key])
+    return settings
 
 
 def _load_mcp_settings(payload: object) -> McpSettings:
@@ -395,7 +432,7 @@ def _validate_mcp_url(name: str, url: str | None) -> None:
     if not isinstance(url, str):
         raise ValueError(f"mcp.servers.{name}.url 不能为空")
     parsed = urlparse(url)
-    local_hosts = {"localhost", "127.0.0.1", "::1"}
+    local_hosts = {"localhost", "127.0.0.1", "::1", "host.docker.internal"}
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError(f"mcp.servers.{name}.url 必须是 HTTP URL")
     if parsed.scheme != "https" and parsed.hostname not in local_hosts:

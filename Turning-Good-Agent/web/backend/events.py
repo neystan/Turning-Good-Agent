@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from ...bus.messages import utc_now_iso
 
@@ -31,16 +31,20 @@ class SessionEvent:
         }
 
 
+SnapshotFactory = Callable[[str], Awaitable[dict[str, Any]]]
+
+
 class SessionEventHub:
     """保存每会话有界事件窗口并向订阅者广播。"""
 
-    def __init__(self, buffer_size: int, snapshot_factory: Callable[[str], dict[str, Any]]) -> None:
+    def __init__(self, buffer_size: int, snapshot_factory: SnapshotFactory) -> None:
         """初始化事件序号、缓冲和快照生成器。"""
         self.buffer_size = buffer_size
         self.snapshot_factory = snapshot_factory
         self._events: dict[str, deque[SessionEvent]] = defaultdict(lambda: deque(maxlen=buffer_size))
         self._subscribers: dict[str, set[asyncio.Queue[SessionEvent]]] = defaultdict(set)
         self._event_ids: dict[str, int] = defaultdict(int)
+        self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     async def publish(
         self,
@@ -50,26 +54,29 @@ class SessionEventHub:
         payload: dict[str, Any] | None = None,
     ) -> SessionEvent:
         """写入内存窗口并广播一个实时事件。"""
-        self._event_ids[session_id] += 1
-        event = SessionEvent(
-            self._event_ids[session_id], session_id, request_id, event_type, payload or {}, utc_now_iso()
-        )
-        self._events[session_id].append(event)
-        for queue in tuple(self._subscribers[session_id]):
+        async with self._locks[session_id]:
+            self._event_ids[session_id] += 1
+            event = SessionEvent(
+                self._event_ids[session_id], session_id, request_id, event_type, payload or {}, utc_now_iso()
+            )
+            self._events[session_id].append(event)
+            queues = tuple(self._subscribers[session_id])
+        for queue in queues:
             queue.put_nowait(event)
         return event
 
-    def subscribe(self, session_id: str, after_event_id: int | None) -> tuple[list[SessionEvent], asyncio.Queue[SessionEvent]]:
+    async def subscribe(self, session_id: str, after_event_id: int | None) -> tuple[list[SessionEvent], asyncio.Queue[SessionEvent]]:
         """订阅会话，并返回可回放事件或快照。"""
         queue: asyncio.Queue[SessionEvent] = asyncio.Queue()
-        events = self._events[session_id]
-        if after_event_id is None:
-            replay = [self._snapshot_event(session_id)]
-        elif events and after_event_id >= events[0].event_id - 1:
-            replay = [item for item in events if item.event_id > after_event_id]
-        else:
-            replay = [self._snapshot_event(session_id)]
-        self._subscribers[session_id].add(queue)
+        async with self._locks[session_id]:
+            events = self._events[session_id]
+            if after_event_id is None:
+                replay = [await self._snapshot_event(session_id)]
+            elif events and after_event_id >= events[0].event_id - 1:
+                replay = [item for item in events if item.event_id > after_event_id]
+            else:
+                replay = [await self._snapshot_event(session_id)]
+            self._subscribers[session_id].add(queue)
         return replay, queue
 
     def unsubscribe(self, session_id: str, queue: asyncio.Queue[SessionEvent] | None) -> None:
@@ -77,8 +84,13 @@ class SessionEventHub:
         if queue is not None:
             self._subscribers[session_id].discard(queue)
 
-    def _snapshot_event(self, session_id: str) -> SessionEvent:
+    async def _snapshot_event(self, session_id: str) -> SessionEvent:
         """构造不落盘的会话运行快照。"""
         return SessionEvent(
-            self._event_ids[session_id], session_id, "", "session.snapshot", self.snapshot_factory(session_id), utc_now_iso()
+            self._event_ids[session_id],
+            session_id,
+            "",
+            "session.snapshot",
+            await self.snapshot_factory(session_id),
+            utc_now_iso(),
         )

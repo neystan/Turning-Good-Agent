@@ -3,9 +3,10 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { ArchiveRestore, ArrowUp, Check, ChevronDown, Hand, Square, TriangleAlert } from "lucide-react";
 
 import { ContextWindowIndicator } from "./ContextWindowIndicator";
+import { MultiAgentModeSelector } from "./MultiAgentModeSelector";
 import { SlashCommandMenu } from "./SlashCommandMenu";
 import { createGuidanceSegment, createTextSegment } from "../state/composer_segments";
-import type { CommandEntry, ComposerSegment, ContextWindow, Session } from "../types";
+import type { CommandEntry, ComposerSegment, ContextWindow, MultiAgentMode, Session } from "../types";
 import mcpIcon from "../assets/slash-icons/mcp.svg";
 import skillIcon from "../assets/slash-icons/skill.svg";
 
@@ -17,6 +18,11 @@ type ComposerProps = {
   actionsEnabled: boolean;
   segments: ComposerSegment[];
   autoApprove: boolean;
+  multiAgentMode: MultiAgentMode;
+  multiAgentEnabled: boolean;
+  multiAgentDisabledReason: string | null;
+  multiAgentLocked: boolean;
+  inputLocked: boolean;
   contextWindow: ContextWindow | null;
   onSegmentsChange: (segments: ComposerSegment[]) => void;
   onSend: () => void;
@@ -24,13 +30,14 @@ type ComposerProps = {
   restoreFocusVersion: number;
   onRestore: () => Promise<void>;
   onAutoApproveChange: (enabled: boolean) => void;
+  onMultiAgentModeChange: (mode: MultiAgentMode) => void;
   onSlashRead: (entry: CommandEntry) => void;
   rootRef?: Ref<HTMLElement>;
 };
 
 type Caret = { segmentId: string; offset: number };
 
-export function Composer({ session, running, actionsEnabled, segments, autoApprove, contextWindow, restoreFocusVersion, onSegmentsChange, onSend, onStop, onRestore, onAutoApproveChange, onSlashRead, rootRef }: ComposerProps) {
+export function Composer({ session, running, actionsEnabled, segments, autoApprove, multiAgentMode, multiAgentEnabled, multiAgentDisabledReason, multiAgentLocked, inputLocked, contextWindow, restoreFocusVersion, onSegmentsChange, onSend, onStop, onRestore, onAutoApproveChange, onMultiAgentModeChange, onSlashRead, rootRef }: ComposerProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const [scrollThumb, setScrollThumb] = useState<{ top: number; height: number } | null>(null);
   const [slashToken, setSlashToken] = useState<string | null>(null);
@@ -123,7 +130,7 @@ export function Composer({ session, running, actionsEnabled, segments, autoAppro
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented) return;
-    if (event.key === "Enter" && !event.shiftKey && actionsEnabled) {
+    if (event.key === "Enter" && !event.shiftKey && editorEnabled) {
       event.preventDefault();
       onSend();
       return;
@@ -169,11 +176,12 @@ export function Composer({ session, running, actionsEnabled, segments, autoAppro
   };
 
   if (session?.archived) return <footer ref={rootRef} className="composer archived-composer"><strong>此会话已归档</strong><button className="restore-session" type="button" onClick={() => void onRestore()}><ArchiveRestore size={16} aria-hidden="true" />恢复会话</button></footer>;
-  const connectionHint = actionsEnabled ? undefined : running ? "当前操作正在运行，完成前不可输入或停止" : "正在重连，恢复后可操作";
+  const editorEnabled = actionsEnabled && !inputLocked;
+  const connectionHint = actionsEnabled ? inputLocked ? "Multi-Agent 协作运行中，完成前不可编辑" : undefined : running ? "当前操作正在运行，完成前不可输入或停止" : "正在重连，恢复后可操作";
   const empty = segments.every((segment) => segment.type === "text" && !segment.text);
   const guidance = segments.filter((segment): segment is Extract<ComposerSegment, { type: "guidance" }> => segment.type === "guidance");
-  const placeholder = running && !actionsEnabled ? "当前操作正在运行…" : running ? "补充当前任务方向…" : "发送消息…";
-  return <footer ref={rootRef} className="composer"><SlashCommandMenu slashToken={slashToken} onSelect={selectSlash} /><div className="composer-input">{empty && <span className="composer-placeholder" aria-hidden="true">{placeholder}</span>}<div ref={editorRef} className="composer-editor" aria-label="消息内容" aria-multiline="true" aria-disabled={!actionsEnabled} aria-describedby={guidance.length ? "composer-selected-guidance" : undefined} contentEditable={actionsEnabled} suppressContentEditableWarning role="textbox" tabIndex={0} onInput={(event) => { const next = readSegments(); const text = event.currentTarget.innerText.replaceAll(ZERO_WIDTH_SPACE, ""); const textSegment = [...next].reverse().find((segment) => segment.type === "text"); if (textSegment?.type === "text") latestCaret.current = { segmentId: textSegment.id, offset: textSegment.text.length }; internalEdit.current = true; onSegmentsChange(next); setSlashToken(text.match(/(?:^|\s)(\/\S*)$/)?.[1] || null); }} onKeyUp={refreshSlashToken} onClick={refreshSlashToken} onScroll={updateScrollThumb} onKeyDown={onKeyDown} onPaste={onPaste} />{guidance.length > 0 && <span id="composer-selected-guidance" className="sr-only">{guidance.map((segment) => `${segment.entry.kind === "mcp" ? "MCP" : "Skill"}：${segment.entry.label}`).join("，")}</span>}{scrollThumb && <span className="composer-scroll-thumb" style={{ height: scrollThumb.height, transform: `translateY(${scrollThumb.top}px)` }} />}</div><div className="composer-toolbar"><PermissionMenu autoApprove={autoApprove} onChange={onAutoApproveChange} /><span className="composer-spacer" /><ContextWindowIndicator context={contextWindow} />{running ? <button className="composer-action is-stop" type="button" aria-label="停止任务" title={connectionHint} disabled={!actionsEnabled} onClick={onStop}><Square size={9} fill="currentColor" strokeWidth={0} aria-hidden="true" /></button> : <button className="composer-action is-send" type="button" aria-label="发送消息" title={connectionHint} disabled={!actionsEnabled} onClick={onSend}><ArrowUp size={13} strokeWidth={2.5} aria-hidden="true" /></button>}</div></footer>;
+  const placeholder = inputLocked ? "Multi-Agent 协作运行中…" : running && !actionsEnabled ? "当前操作正在运行…" : running ? "补充当前任务方向…" : "发送消息…";
+  return <footer ref={rootRef} className="composer"><SlashCommandMenu slashToken={slashToken} onSelect={selectSlash} /><div className="composer-input">{empty && <span className="composer-placeholder" aria-hidden="true">{placeholder}</span>}<div ref={editorRef} className="composer-editor" aria-label="消息内容" aria-multiline="true" aria-disabled={!editorEnabled} aria-describedby={guidance.length ? "composer-selected-guidance" : undefined} contentEditable={editorEnabled} suppressContentEditableWarning role="textbox" tabIndex={0} onInput={(event) => { const next = readSegments(); const text = event.currentTarget.innerText.replaceAll(ZERO_WIDTH_SPACE, ""); const textSegment = [...next].reverse().find((segment) => segment.type === "text"); if (textSegment?.type === "text") latestCaret.current = { segmentId: textSegment.id, offset: textSegment.text.length }; internalEdit.current = true; onSegmentsChange(next); setSlashToken(text.match(/(?:^|\s)(\/\S*)$/)?.[1] || null); }} onKeyUp={refreshSlashToken} onClick={refreshSlashToken} onScroll={updateScrollThumb} onKeyDown={onKeyDown} onPaste={onPaste} />{guidance.length > 0 && <span id="composer-selected-guidance" className="sr-only">{guidance.map((segment) => `${segment.entry.kind === "mcp" ? "MCP" : "Skill"}：${segment.entry.label}`).join("，")}</span>}{scrollThumb && <span className="composer-scroll-thumb" style={{ height: scrollThumb.height, transform: `translateY(${scrollThumb.top}px)` }} />}</div><div className="composer-toolbar"><PermissionMenu autoApprove={autoApprove} onChange={onAutoApproveChange} /><MultiAgentModeSelector value={multiAgentMode} enabled={multiAgentEnabled} disabledReason={multiAgentDisabledReason} locked={multiAgentLocked} onChange={onMultiAgentModeChange} /><span className="composer-spacer" /><ContextWindowIndicator context={contextWindow} />{running ? <button className="composer-action is-stop" type="button" aria-label="停止任务" title={connectionHint} disabled={!actionsEnabled} onClick={onStop}><Square size={9} fill="currentColor" strokeWidth={0} aria-hidden="true" /></button> : <button className="composer-action is-send" type="button" aria-label="发送消息" title={connectionHint} disabled={!editorEnabled} onClick={onSend}><ArrowUp size={13} strokeWidth={2.5} aria-hidden="true" /></button>}</div></footer>;
 }
 
 function insertPlainText(editor: HTMLElement, text: string): void {

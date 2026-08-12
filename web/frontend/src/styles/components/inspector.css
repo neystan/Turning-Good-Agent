@@ -364,3 +364,57 @@
 .inspector-section .inspector-raw pre {
   background: var(--surface-deep);
 }
+
+/* 固定 Multi-Agent 图例只呈现协议内的三种拓扑和最终结果。 */
+.multi-agent-inspector { margin-bottom: 16px; border-radius: var(--radius-panel); padding: 12px; background: var(--surface); box-shadow: 0 5px 16px color-mix(in srgb, var(--shadow) 26%, transparent); }
+
+.multi-agent-inspector > header { display: flex; justify-content: space-between; min-height: 0; height: auto; padding: 0 0 10px; box-shadow: none; }
+
+.multi-agent-inspector > header > div { display: flex; align-items: baseline; gap: 7px; }
+
+.multi-agent-inspector > header span { color: var(--muted); font-size: .75rem; }
+
+.multi-agent-status { border-radius: 999px; padding: 3px 7px; background: color-mix(in srgb, var(--accent) 11%, var(--surface-raised)); color: var(--accent) !important; font-size: .6875rem !important; }
+
+.multi-agent-status.is-failed, .multi-agent-status.is-timed_out, .multi-agent-status.is-interrupted { background: color-mix(in srgb, var(--danger) 11%, var(--surface-raised)); color: var(--danger) !important; }
+
+.multi-agent-inspector > .inspector-summary { margin-bottom: 10px; background: var(--surface-raised); }
+
+.multi-agent-topology { display: grid; grid-template-columns: max-content 16px minmax(0, 1fr) 16px max-content; align-items: center; min-height: 58px; gap: 5px; margin-bottom: 12px; padding: 9px; border-radius: var(--radius-control); background: var(--surface-raised); }
+
+.multi-agent-topology-parent, .multi-agent-topology-worker { display: inline-flex; min-height: 26px; align-items: center; justify-content: center; border-radius: 6px; padding: 3px 7px; background: var(--surface); color: var(--text); font-size: .6875rem; }
+
+.multi-agent-topology-arrow { color: var(--muted); text-align: center; }
+
+.multi-agent-topology-workers { display: flex; min-width: 0; justify-content: center; gap: 4px; }
+
+.multi-agent-topology.is-fan_out_fan_in .multi-agent-topology-workers { flex-wrap: wrap; }
+
+.multi-agent-topology.is-pipeline { display: flex; min-width: 0; overflow-x: auto; }
+
+.multi-agent-topology.is-pipeline .multi-agent-topology-parent, .multi-agent-topology.is-pipeline .multi-agent-topology-worker { flex: 0 0 auto; }
+
+.multi-agent-topology-worker.is-failed, .multi-agent-topology-worker.is-timed_out, .multi-agent-topology-worker.is-interrupted { color: var(--danger); }
+
+.multi-agent-worker-results { margin: 0; }
+
+.multi-agent-worker-results h3 { margin: 0 0 7px; color: var(--muted); font-size: .75rem; font-weight: 600; }
+
+.multi-agent-worker-results-scroll .scroll-area-viewport { max-height: 250px; }
+
+.multi-agent-worker-result { margin: 0 0 5px; border-radius: var(--radius-control); padding: 8px 9px; background: var(--surface-raised); }
+
+.multi-agent-worker-result > header { display: flex; justify-content: space-between; min-height: 0; height: auto; padding: 0; background: transparent; box-shadow: none; }
+
+.multi-agent-worker-result > header strong { font-size: .75rem; }
+
+.multi-agent-worker-result > header span { color: var(--muted); font-size: .6875rem; }
+
+.multi-agent-worker-result pre, .multi-agent-worker-result p { margin: 7px 0 0; overflow-wrap: anywhere; color: var(--muted); font: .75rem/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+
+@media (max-width: 520px) {
+  .multi-agent-topology { grid-template-columns: 1fr; justify-items: stretch; }
+  .multi-agent-topology-arrow { transform: rotate(90deg); }
+  .multi-agent-topology-workers { flex-wrap: wrap; }
+  .multi-agent-topology.is-pipeline { display: flex; justify-items: initial; }
+}

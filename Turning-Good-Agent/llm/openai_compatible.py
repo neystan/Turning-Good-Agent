@@ -62,6 +62,7 @@ class OpenAICompatibleLLM:
             tool_calls=self._parse_tool_calls(getattr(message, "tool_calls", None)),
             usage=self._require_usage(getattr(response, "usage", None)),
             protocol_error=protocol_error,
+            reasoning_content=getattr(message, "reasoning_content", None),
         )
 
     async def stream(

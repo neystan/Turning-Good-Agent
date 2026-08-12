@@ -38,6 +38,7 @@ class LLMResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
     usage: LLMUsage | None = None
     protocol_error: str | None = None
+    reasoning_content: str | None = None
 
 
 @dataclass(slots=True)

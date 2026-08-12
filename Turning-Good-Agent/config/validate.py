@@ -8,6 +8,11 @@ if TYPE_CHECKING:
     from .settings import Settings
 
 
+MULTI_AGENT_RUN_TIMEOUT_MAX_SECONDS = 14_400
+MULTI_AGENT_ROLE_MAX_LENGTH = 128
+MULTI_AGENT_BRIEF_MAX_LENGTH = 12_000
+
+
 @dataclass(slots=True)
 class SettingsValidationError(ValueError):
     """包含可直接映射到配置表单字段的校验错误。"""
@@ -34,6 +39,7 @@ def validate_settings(
     _positive(errors, "runtime.turn_timeout_seconds", settings.runtime.turn_timeout_seconds)
     _positive(errors, "runtime.max_context_tokens", settings.runtime.max_context_tokens)
     _positive(errors, "runtime.max_tool_result_tokens", settings.runtime.max_tool_result_tokens)
+    _validate_multi_agent_settings(errors, settings)
     _positive(errors, "memory.compact_token_threshold", settings.memory.compact_token_threshold)
     _positive(errors, "memory.recent_window_token_limit", settings.memory.recent_window_token_limit)
     _positive(errors, "sessions.retention_days", settings.sessions.retention_days)
@@ -109,6 +115,49 @@ def _validate_approval_names(
     unknown = set(names) - available_names - unavailable_names
     if unknown:
         errors["tool_permissions.approval_required_tools"] = f"包含未知工具：{', '.join(sorted(unknown))}"
+
+
+# 校验多 Agent 的类型、时限、并发和结果预算。
+def _validate_multi_agent_settings(errors: dict[str, str], settings: Settings) -> None:
+    """校验多 Agent 的类型、运行时限、并发和结果预算。"""
+    multi_agent = settings.multi_agent
+    if not isinstance(multi_agent.enabled, bool):
+        errors["multi_agent.enabled"] = "必须是布尔值"
+    for field in (
+        "run_timeout_seconds",
+        "worker_timeout_seconds",
+        "max_workers_per_run",
+        "max_concurrent_workers_per_run",
+        "max_concurrent_workers_global",
+        "worker_result_token_limit",
+        "parent_result_token_limit",
+    ):
+        _positive_integer(errors, f"multi_agent.{field}", getattr(multi_agent, field))
+    if (
+        type(multi_agent.worker_timeout_seconds) is int
+        and type(multi_agent.run_timeout_seconds) is int
+        and multi_agent.worker_timeout_seconds > multi_agent.run_timeout_seconds
+    ):
+        errors["multi_agent.worker_timeout_seconds"] = "不能大于 run_timeout_seconds"
+    if (
+        type(multi_agent.max_concurrent_workers_per_run) is int
+        and type(multi_agent.max_workers_per_run) is int
+        and multi_agent.max_concurrent_workers_per_run > multi_agent.max_workers_per_run
+    ):
+        errors["multi_agent.max_concurrent_workers_per_run"] = "不能大于 max_workers_per_run"
+    if (
+        type(multi_agent.run_timeout_seconds) is int
+        and multi_agent.run_timeout_seconds > MULTI_AGENT_RUN_TIMEOUT_MAX_SECONDS
+    ):
+        errors["multi_agent.run_timeout_seconds"] = f"不能大于 {MULTI_AGENT_RUN_TIMEOUT_MAX_SECONDS} 秒"
+    for field in ("worker_result_token_limit", "parent_result_token_limit"):
+        value = getattr(multi_agent, field)
+        if (
+            type(value) is int
+            and type(settings.runtime.max_context_tokens) in {int, float}
+            and value > settings.runtime.max_context_tokens
+        ):
+            errors[f"multi_agent.{field}"] = "不能大于 runtime.max_context_tokens"
 
 
 def _validate_gateway_settings(errors: dict[str, str], settings: Settings) -> None:

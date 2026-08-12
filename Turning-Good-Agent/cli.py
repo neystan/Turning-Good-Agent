@@ -47,6 +47,7 @@ class GatewayCliClient:
         self._connection_id = connection_id or str(uuid4())
         self._socket: GatewaySocket | None = None
         self._session_id: str | None = None
+        self._pending_multi_agent_mode: str | None = None
 
     @classmethod
     def from_settings(
@@ -115,8 +116,18 @@ class GatewayCliClient:
         if not text:
             raise ValueError("消息不能为空")
         identifier = request_id or str(uuid4())
-        await self._send({"type": "message.send", "request_id": identifier, "content": text})
+        payload: dict[str, object] = {"type": "message.send", "request_id": identifier, "content": text}
+        if self._pending_multi_agent_mode is not None:
+            payload["multi_agent_mode"] = self._pending_multi_agent_mode
+        await self._send(payload)
+        self._pending_multi_agent_mode = None
         return identifier
+
+    # 暂存只作用于下一条普通消息的 Multi-Agent 模式。
+    def set_multi_agent_mode(self, value: str) -> None:
+        from .multi_agent.types import parse_multi_agent_mode
+
+        self._pending_multi_agent_mode = parse_multi_agent_mode(value).value
 
     async def request_stop(self) -> None:
         """请求当前 CLI turn 在下一个安全检查点停止。"""
@@ -214,7 +225,9 @@ async def chat(
     input_task: asyncio.Task[None] | None = None
     try:
         await client.connect(session_id)
-        await ui_events.put(("notice", "Turning Good Agent。输入 /exit 退出；/stop 停止当前任务。"))
+        await ui_events.put(
+            ("notice", "Turning Good Agent。输入 /exit 退出；/stop 停止；/multi auto|off。")
+        )
         receiver = asyncio.create_task(
             _receive_cli_events(client, ui_events),
             name="cli-gateway-receiver",
@@ -260,6 +273,16 @@ async def chat(
                 continue
             if content == "/stop":
                 await client.request_stop()
+                continue
+            if content.startswith("/multi"):
+                parts = content.split(maxsplit=2)
+                mode = parts[1] if len(parts) > 1 else ""
+                if mode in {"auto", "off"} and len(parts) == 2:
+                    client.set_multi_agent_mode(mode)
+                    label = {"auto": "自动", "off": "关闭"}[mode]
+                    renderer(f"[Multi-Agent] 下一条消息模式：{label}", True)
+                    continue
+                renderer("[错误] 用法：/multi auto|off", True)
                 continue
             await client.send_message(content)
     finally:
@@ -331,12 +354,49 @@ def _render_event(event: dict[str, object], render: Renderer, streamed: set[str]
     if event_type.startswith("proactive."):
         render(f"[主动提醒] {content}", True)
         return
+    if event_type.startswith("multi_agent."):
+        run_id = str(event.get("run_id", ""))
+        node_id = event.get("node_id")
+        status = str(event.get("status", ""))
+        strategy = str(event.get("strategy", ""))
+        label = str(event.get("task_label", ""))
+        prefix = f"[Multi-Agent {run_id[:8]}]"
+        metrics = _multi_agent_metrics(event)
+        failure = _multi_agent_failure_summary(event)
+        if node_id:
+            render(f"{prefix}  └─ {strategy} {label or node_id}: {status} {metrics}{failure}", True)
+        else:
+            render(f"{prefix} {strategy} {status} {metrics}{failure}", True)
+        return
     if event_type == "error":
         render(f"[错误] {event.get('message', content)}", True)
         return
     if event_type in {"message.accepted", "task.stopping", "approval.resolved"}:
         return
     render(f"[系统] {content}", True)
+
+
+# 格式化安全 Multi-Agent 观测指标。
+def _multi_agent_metrics(value: dict[str, object]) -> str:
+    duration = value.get("duration_ms")
+    duration_text = f"{float(duration):.1f}ms" if isinstance(duration, (int, float)) else "-"
+    usage = value.get("usage")
+    token_total = None
+    if isinstance(usage, dict):
+        total = usage.get("total")
+        source = total if isinstance(total, dict) else usage
+        candidate = source.get("turn_total_tokens")
+        if isinstance(candidate, int) and not isinstance(candidate, bool):
+            token_total = candidate
+    return f"耗时: {duration_text} Token: {token_total if token_total is not None else '-'}"
+
+
+# 格式化安全 Multi-Agent 失败摘要。
+def _multi_agent_failure_summary(value: dict[str, object]) -> str:
+    error_code = value.get("error_code")
+    error = value.get("error")
+    details = " ".join(str(item) for item in (error_code, error) if isinstance(item, str) and item)
+    return f" 失败: {details}" if details else ""
 
 
 def _approval_prompt(event: dict[str, object]) -> str:

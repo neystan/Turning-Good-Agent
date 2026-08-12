@@ -11,6 +11,7 @@ from uuid import uuid4
 from ...bus.messages import ChannelRoute, InboundMessage, OutboundMessage, Recipient
 from ...bus.queue import AsyncMessageBus
 from ...gateway.routing import derive_session_id
+from ...multi_agent.events import MULTI_AGENT_EVENT_FIELDS
 from .events import SessionEventHub
 
 
@@ -19,6 +20,15 @@ SubmitTurn = Callable[..., Awaitable[bool]]
 CompleteRouteTurn = Callable[[ChannelRoute, str], Awaitable[None]]
 RuntimeProvider = Callable[[], Any | Awaitable[Any]]
 IdleCallback = Callable[[], Awaitable[None]]
+
+
+# 严格校验 Web 一次性模式，省略时保留默认 auto。
+def _multi_agent_metadata(value: str | None) -> dict[str, str]:
+    if value is None:
+        return {}
+    from ...multi_agent.types import parse_multi_agent_mode
+
+    return {"multi_agent_mode": parse_multi_agent_mode(value).value}
 
 
 @dataclass(slots=True)
@@ -56,10 +66,12 @@ class WebTurnControl:
         self.release_slot()
         try:
             approved = await future
-            await self.acquire_slot()
             return approved
         finally:
-            self.approvals.pop(approval_id, None)
+            try:
+                await self.acquire_slot()
+            finally:
+                self.approvals.pop(approval_id, None)
 
     def bind_slot(self, semaphore: asyncio.Semaphore) -> None:
         """兼容运行时在审批等待期间临时释放的执行槽位。"""
@@ -196,6 +208,7 @@ class WebSessionCoordinator:
         session_id: str | None,
         content: str,
         client_action_id: str | None = None,
+        multi_agent_mode: str | None = None,
     ) -> tuple[str, str]:
         """向 Gateway 提交一条拥有独立 request-id 的普通消息。"""
         text = content.strip()
@@ -203,6 +216,7 @@ class WebSessionCoordinator:
             raise ValueError("消息不能为空")
         if self._closed:
             raise RuntimeError("Web Gateway 已关闭")
+        mode_metadata = _multi_agent_metadata(multi_agent_mode)
         async with self._action_lock:
             receipt = self._accepted_actions.get(client_action_id) if client_action_id else None
             if receipt is not None:
@@ -224,7 +238,7 @@ class WebSessionCoordinator:
                     raise
 
             accepted = await self._submit(
-                InboundMessage(request_id, route=route, content=text),
+                InboundMessage(request_id, route=route, content=text, metadata=mode_metadata),
                 dispatch=dispatch,
             )
             if not accepted:
@@ -265,16 +279,26 @@ class WebSessionCoordinator:
         """判断会话是否正在排队、运行、停止或等待审批。"""
         return session_id in self.controls or bool(self._catalog_actions.get(session_id))
 
-    def snapshot(self, session_id: str) -> dict[str, object]:
-        """返回当前会话不落盘的运行快照。"""
+    # 从父 Session trace 读取当前会话的唯一 Run 投影。
+    async def snapshot(self, session_id: str) -> dict[str, object]:
+        """返回当前会话的运行快照和持久化 Run 摘要。"""
         control = self.controls.get(session_id)
         if control is None:
-            return {"state": "running" if self._catalog_actions.get(session_id) else "idle"}
-        return {
-            "state": "stopping" if control.stop_requested else "running",
-            "pending_guidance_count": len(control.guidance),
-            "pending_approval_count": len(control.approvals),
-        }
+            snapshot: dict[str, object] = {
+                "state": "running" if self._catalog_actions.get(session_id) else "idle"
+            }
+        else:
+            snapshot = {
+                "state": "stopping" if control.stop_requested else "running",
+                "pending_guidance_count": len(control.guidance),
+                "pending_approval_count": len(control.approvals),
+            }
+        route = await self._route_for_session(session_id)
+        runtime = await _resolve(self._runtime_provider())
+        principal_context = runtime.resolve_principal_context(route)
+        runs = await principal_context.sessions.read_multi_agent_runs(session_id, limit=20)
+        snapshot["multi_agent_runs"] = [dict(item) for item in runs if isinstance(item, dict)]
+        return snapshot
 
     async def deliver(self, outbound: OutboundMessage) -> bool:
         """把 ChannelManager 已定向的 Web 聊天输出投影为 SessionEvent。"""
@@ -289,6 +313,8 @@ class WebSessionCoordinator:
         payload = {key: value for key, value in outbound.metadata.items() if key != "request_id"}
         if outbound.content:
             payload["content"] = outbound.content
+        if outbound.event_type.startswith("multi_agent."):
+            payload = {key: value for key, value in payload.items() if key in MULTI_AGENT_EVENT_FIELDS}
         await self.hub.publish(outbound.session_id, request_id, outbound.event_type, payload)
         if outbound.event_type not in {"response.completed", "response.error"}:
             return True

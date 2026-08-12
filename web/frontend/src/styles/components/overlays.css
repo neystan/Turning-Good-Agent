@@ -233,7 +233,7 @@ button.notice-content:focus-visible {
 }
 
 @keyframes notice-rail-enter {
-  from { opacity: 0; transform: translateY(10px); }
+  from { opacity: 0; transform: translateY(-10px); }
   to { opacity: 1; transform: translateY(0); }
 }
 

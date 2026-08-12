@@ -11,6 +11,7 @@ class LoadSkillTool:
     """按需加载一个完整 Skill 到当前轮上下文。"""
 
     name = "load_skill"
+    worker_read_only = True
     description = "加载一个已发现 Skill 的完整工作流指导，仅当前轮可见。"
     parallel_safe = False
     approval_required = False

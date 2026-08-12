@@ -1,4 +1,5 @@
-import type { ChatMessage, PendingAction, PendingActionInput, TaskEvent, TurnState, TurnStatus } from "../types";
+import { buildMultiAgentRunView, mergeAuthoritativeMultiAgentRunView, mergeMultiAgentRunView, normalizeMultiAgentRunSummary } from "./multi_agent_view";
+import { MULTI_AGENT_EVENT_TYPES, type ChatMessage, type MultiAgentEvent, type MultiAgentRunSummary, type PendingAction, type PendingActionInput, type TaskEvent, type TurnState, type TurnStatus } from "../types";
 
 /** 保存单个浏览器会话页的即时消息、turn 和待确认动作。 */
 export type SessionState = {
@@ -231,8 +232,8 @@ function networkFailureMessage(requestId: string, user: ChatMessage, previous?: 
 /** 将真实 WebSocket 事件归入唯一 request_id 的 turn。 */
 function applyTaskEvent(state: SessionState, event: TaskEvent): SessionState {
   if (event.type === "session.snapshot") {
-    if (event.payload.state === "idle") return interruptRunningTurns(state);
-    return { ...state, running: event.payload.state === "running" || event.payload.state === "stopping" };
+    const snapshotState = event.payload.state === "idle" ? interruptRunningTurns(state) : state;
+    return restoreMultiAgentSnapshot({ ...snapshotState, running: event.payload.state === "running" || event.payload.state === "stopping" }, event);
   }
   if (!event.request_id) return state;
   if (isDuplicateEvent(state.turns[event.request_id], event)) return state;
@@ -257,15 +258,63 @@ function isDuplicateEvent(turn: TurnState | undefined, event: TaskEvent): boolea
 function appendTurnEvent(current: TurnState | undefined, event: TaskEvent): TurnState {
   const status = eventStatus(event.type, current?.status || "queued");
   const terminal = !isTurnRunning(status);
+  const events = [...(current?.events || []), event];
   return {
     requestId: event.request_id,
     kind: event.type === "task.queued" && event.payload.kind === "catalog" ? "catalog" : current?.kind || "chat",
     status,
-    events: [...(current?.events || []), event],
+    events,
     guidanceCount: (current?.guidanceCount || 0) + (isGuidanceStatus(event) ? 1 : 0),
     startedAt: current?.startedAt || event.created_at || new Date().toISOString(),
     finishedAt: terminal ? event.created_at || new Date().toISOString() : undefined,
+    multiAgentRuns: multiAgentRunsFromEvent(current?.multiAgentRuns || [], events, event),
   };
+}
+
+/** 将 session.snapshot 中的有界 Run 摘要收回既有父 turn。 */
+function restoreMultiAgentSnapshot(state: SessionState, event: TaskEvent): SessionState {
+  const rawRuns = event.payload.multi_agent_runs;
+  if (!Array.isArray(rawRuns)) return state;
+  const runs = rawRuns.map(normalizeMultiAgentRunSummary).filter((run): run is MultiAgentRunSummary => run !== null);
+  const runIds = new Set(runs.map((run) => run.run_id));
+  const idle = event.payload.state === "idle";
+  const turns = Object.fromEntries(Object.entries(state.turns).map(([requestId, turn]) => [requestId, {
+    ...turn,
+    multiAgentRuns: idle && turn.multiAgentRuns
+      ? turn.multiAgentRuns.filter((run) => runIds.has(run.run_id) || !isActiveMultiAgentRun(run))
+      : turn.multiAgentRuns,
+  }]));
+  for (const run of runs) {
+    const requestId = run.parent_request_id || findRunRequestId(turns, run.run_id) || `multi-agent:${run.run_id}`;
+    const current = turns[requestId] || createSnapshotTurn(requestId, event);
+    turns[requestId] = { ...current, multiAgentRuns: mergeAuthoritativeMultiAgentRunView(current.multiAgentRuns || [], run) };
+  }
+  return { ...state, turns };
+}
+
+/** 判断 Run 是否仍会占用父会话的 Composer 锁。 */
+function isActiveMultiAgentRun(run: MultiAgentRunSummary): boolean {
+  return run.status === "queued" || run.status === "running" || run.status === "waiting";
+}
+
+/** 从已缓存的父 turn 找到同一个 Run，避免快照重复创建时间线项。 */
+function findRunRequestId(turns: Record<string, TurnState>, runId: string): string | null {
+  return Object.values(turns).find((turn) => turn.multiAgentRuns?.some((run) => run.run_id === runId))?.requestId || null;
+}
+
+/** 为缺少父请求标识的历史摘要提供不含聊天消息的稳定锚点。 */
+function createSnapshotTurn(requestId: string, event: TaskEvent): TurnState {
+  return { requestId, kind: "chat", status: "completed", events: [], guidanceCount: 0, startedAt: event.created_at || new Date().toISOString(), finishedAt: event.created_at || new Date().toISOString() };
+}
+
+/** 仅将 Multi-Agent 事件投影为父 turn 的结构化 Run 状态。 */
+function multiAgentRunsFromEvent(current: MultiAgentRunSummary[], events: TaskEvent[], event: TaskEvent): MultiAgentRunSummary[] | undefined {
+  if (!MULTI_AGENT_EVENT_TYPES.has(event.type as MultiAgentEvent["type"])) return current.length ? current : undefined;
+  const runId = event.payload.run_id;
+  if (typeof runId !== "string" || !runId) return current.length ? current : undefined;
+  const runEvents = events.filter((item): item is MultiAgentEvent => MULTI_AGENT_EVENT_TYPES.has(item.type as MultiAgentEvent["type"]) && item.payload.run_id === runId) as MultiAgentEvent[];
+  const next = buildMultiAgentRunView(runEvents);
+  return next ? mergeMultiAgentRunView(current, next) : current;
 }
 
 /** 由事件类型更新 turn 状态，普通事件保持原状态。 */

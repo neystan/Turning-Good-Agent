@@ -15,6 +15,12 @@ from ..hooks.tool_result_truncation import ToolResultTruncationHook
 from ..hooks.turn_monitor import TurnMonitorHook
 from ..llm.client import LLMProvider
 from ..memory.long_term import ProfileMemory
+from ..multi_agent.coordinator import MultiAgentCoordinator
+from ..multi_agent.events import (
+    MULTI_AGENT_EVENT_FIELDS,
+    MULTI_AGENT_EVENT_TYPES,
+    MULTI_AGENT_LIVE_EVENT_FIELDS,
+)
 from ..mcp.manager import McpManager
 from ..mcp.control_tools import register_mcp_control_tools
 from ..observability.token_monitor import TokenMonitor
@@ -46,13 +52,16 @@ from .state import (
 )
 from .turn_context import (
     TurnContext,
+    current_turn_context,
     reset_current_inbound,
     reset_current_principal_context,
     reset_current_route,
+    reset_current_turn_context,
     current_principal_context,
     set_current_inbound,
     set_current_principal_context,
     set_current_route,
+    set_current_turn_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,6 +103,10 @@ class AgentRuntime:
         self._skills_started = False
         self._activity_lock = asyncio.Lock()
         self._active_turns = 0
+        self.multi_agent_coordinator = MultiAgentCoordinator(
+            self,
+            event_sink=self._persist_multi_agent_event,
+        )
 
     @classmethod
     def create_default(cls, settings: Settings, llm: LLMProvider) -> "AgentRuntime":
@@ -194,6 +207,20 @@ class AgentRuntime:
             ),
             principal_context=principal_context,
         )
+        turn_context_token = set_current_turn_context(ctx)
+        try:
+            return await self._run_turn_bound(msg, ctx, principal_context, turn_started)
+        finally:
+            reset_current_turn_context(turn_context_token)
+
+    # 在已绑定父 TurnContext 的上下文中执行状态机并保存出站回复。
+    async def _run_turn_bound(
+        self,
+        msg: InboundMessage,
+        ctx: TurnContext,
+        principal_context: PrincipalRuntimeContext | None,
+        turn_started: float,
+    ) -> OutboundMessage:
         lock_wait_started = time.perf_counter()
         sessions = principal_context.sessions if principal_context is not None else self.sessions
         lock = sessions.locks.lock_for(msg.session_id)
@@ -238,6 +265,59 @@ class AgentRuntime:
         else:
             await ctx.channel_adapter.on_completed(outbound.content)
         return outbound
+
+    # 将 Coordinator 的安全事件和 Worker 用量立即追加到父 Session。
+    async def _persist_multi_agent_event(self, event_type: str, payload: object) -> None:
+        ctx = current_turn_context()
+        if ctx is None or ctx.session is None:
+            return
+        if event_type not in MULTI_AGENT_EVENT_TYPES:
+            return
+        payload_dict = payload.as_dict() if hasattr(payload, "as_dict") else {}
+        if not isinstance(payload_dict, dict):
+            return
+        usage = payload_dict.get("usage")
+        metadata = {
+            key: value for key, value in payload_dict.items() if key in MULTI_AGENT_EVENT_FIELDS
+        }
+        run_id = metadata.get("run_id")
+        node_id = metadata.get("node_id")
+        # 父请求标识只进入父 Session trace，不能扩展实时 Multi-Agent 事件协议。
+        trace_metadata = {**metadata, "parent_request_id": ctx.inbound.id}
+        trace = StateTrace(
+            ctx.turn_id,
+            ctx.inbound.session_id,
+            "MULTI_AGENT",
+            float(metadata.get("duration_ms") or 0.0),
+            event_type,
+            trace_metadata.get("error") if isinstance(trace_metadata.get("error"), str) else None,
+            trace_metadata,
+        )
+        sessions = ctx.principal_context.sessions if ctx.principal_context is not None else self.sessions
+        await sessions.save_turn_traces([trace])
+        if isinstance(usage, dict) and isinstance(run_id, str) and isinstance(node_id, str):
+            usage_row = {
+                "input_tokens": int(usage.get("input_tokens", 0)),
+                "output_tokens": int(usage.get("output_tokens", 0)),
+                "turn_total_tokens": int(usage.get("turn_total_tokens", 0)),
+                "total_tokens": int(usage.get("turn_total_tokens", 0)),
+                "compacted": 0,
+                "run_id": run_id,
+                "node_id": node_id,
+                "agent_id": f"worker-{run_id}-{node_id}",
+                "scope": "worker",
+            }
+            await sessions.save_true_token_usage(
+                f"{ctx.turn_id}:{run_id}:{node_id}",
+                ctx.inbound.session_id,
+                usage_row,
+            )
+        publish = getattr(ctx.channel_adapter, "on_multi_agent_event", None)
+        if callable(publish):
+            await publish(
+                event_type,
+                {key: value for key, value in metadata.items() if key in MULTI_AGENT_LIVE_EVENT_FIELDS},
+            )
 
     def set_channel_tool_policy(self, policy: ChannelToolPolicy) -> None:
         """替换当前 Runtime 使用的 Channel 工具策略。"""

@@ -12,6 +12,8 @@ from ..memory.short_term import ShortTermMemory
 from ..proactive.events import CONVERSATION_COMPLETED
 from ..sessions.types import MessageRecord
 from ..sessions.token_counter import count_content_tokens
+from ..multi_agent.delegate_tool import DelegateMultiAgentInvocation
+from ..multi_agent.types import DelegateParentTurn, RequestMode, parse_multi_agent_mode
 
 if TYPE_CHECKING:
     from .runtime import AgentRuntime
@@ -125,20 +127,31 @@ async def build(runtime: AgentRuntime, ctx: TurnContext) -> str:
         ctx.session, await sessions.all_messages(ctx.session.id)
     )
     ctx.uncompacted_history = session_context.uncompacted_history
+    try:
+        provisional_invocation = _multi_agent_invocation(runtime, ctx)
+    except ValueError as exc:
+        ctx.error = str(exc)
+        ctx.final_content = f"请求失败：{ctx.error}"
+        return "rejected"
     context_tokens = build_context_token_breakdown(
         summary=ctx.session.summary,
         history=ctx.uncompacted_history,
         current_input=msg.content,
         output="",
         profile_memory=profile_memory.read(),
-        openai_tools=runtime.agent_loop.tools.openai_tools(ctx.allowed_tool_names),
+        openai_tools=runtime.agent_loop.openai_tools(
+            ctx.allowed_tool_names,
+            multi_agent_invocation=provisional_invocation,
+        ),
         include_current_turn=True,
         skills=runtime.skills.list_skills(),
     )
+    ctx.context_tokens = context_tokens
     if context_tokens["current_context_tokens"] > runtime.settings.runtime.max_context_tokens:
         ctx.error = "上下文过大，已拒绝本轮请求。请先清理会话或提高 max_context_tokens。"
         ctx.final_content = f"请求失败：{ctx.error}"
         return "rejected"
+    ctx.multi_agent_invocation = _multi_agent_invocation(runtime, ctx)
     ctx.model_messages = runtime.context_builder.build(
         summary=session_context.summary,
         history=ctx.uncompacted_history,
@@ -158,6 +171,7 @@ async def run(runtime: AgentRuntime, ctx: TurnContext) -> str:
         ctx.channel_adapter,
         runtime.settings.tool_permissions.auto_approve_tools,
         allowed_tool_names=ctx.allowed_tool_names,
+        multi_agent_invocation=ctx.multi_agent_invocation,
     )
     ctx.final_content = result.final_content
     ctx.tool_calls = result.tool_calls
@@ -167,6 +181,34 @@ async def run(runtime: AgentRuntime, ctx: TurnContext) -> str:
     ctx.consumed_guidance = result.consumed_guidance
     ctx.cancelled = result.cancelled
     return "ok"
+
+
+# 在 Runtime 可信边界创建当前父 Turn 的唯一委派对象。
+def _multi_agent_invocation(
+    runtime: AgentRuntime,
+    ctx: TurnContext,
+) -> DelegateMultiAgentInvocation | None:
+    raw_mode = ctx.inbound.metadata.get("multi_agent_mode", "auto")
+    mode = parse_multi_agent_mode(raw_mode)
+    if ctx.inbound.route.channel not in {"cli", "web"}:
+        return None
+    if not runtime.settings.multi_agent.enabled or mode is RequestMode.OFF:
+        return None
+    initial_context_tokens = ctx.context_tokens.get("current_context_tokens", 0)
+    if not isinstance(initial_context_tokens, int) or initial_context_tokens < 0:
+        raise ValueError("Multi-Agent 父上下文 token 计数无效")
+    parent = DelegateParentTurn(
+        session_id=ctx.inbound.session_id,
+        request_id=ctx.inbound.id,
+        profile_memory=_profile_for(runtime, ctx).read(),
+        initial_context_tokens=initial_context_tokens,
+        is_stop_requested=ctx.channel_adapter.is_stop_requested,
+    )
+    return DelegateMultiAgentInvocation(
+        runtime.multi_agent_coordinator,
+        parent,
+        max_workers_per_run=runtime.settings.multi_agent.max_workers_per_run,
+    )
 
 
 async def compact(runtime: AgentRuntime, ctx: TurnContext) -> str:
@@ -270,7 +312,19 @@ async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
         await _storage_for(sessions).update_uncompacted_history(session_id, ctx.session.uncompacted_history)
     await _storage_for(sessions).save_tool_calls(ctx.turn_id, session_id, ctx.tool_calls)
     if ctx.true_token_usage:
-        await _storage_for(sessions).save_true_token_usage(ctx.turn_id, session_id, ctx.true_token_usage)
+        usage = dict(ctx.true_token_usage)
+        invocation = ctx.multi_agent_invocation
+        run_id = invocation.run_id if invocation is not None else None
+        if isinstance(run_id, str) and run_id:
+            usage.update(
+                {
+                    "run_id": run_id,
+                    "node_id": None,
+                    "agent_id": "parent",
+                    "scope": "parent",
+                }
+            )
+        await _storage_for(sessions).save_true_token_usage(ctx.turn_id, session_id, usage)
     payload: dict[str, object] = {
         "session_id": session_id,
         "turn_id": ctx.turn_id,

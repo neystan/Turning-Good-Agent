@@ -28,10 +28,79 @@ export type TaskEvent = {
   created_at?: string;
 };
 
+export type MultiAgentMode = "auto" | "off";
+export type MultiAgentStrategy = "fan_out_fan_in" | "pipeline";
+export type MultiAgentRunStatus = "queued" | "running" | "waiting" | "completed" | "failed" | "timed_out" | "cancelled" | "interrupted";
+export type MultiAgentNodeStatus = "queued" | "running" | "completed" | "failed" | "timed_out" | "cancelled" | "interrupted";
+
+export type MultiAgentUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  turn_total_tokens?: number;
+  total_tokens?: number;
+};
+
+export type MultiAgentUsageSummary = {
+  worker?: MultiAgentUsage;
+  total?: MultiAgentUsage;
+};
+
+const multiAgentEventTypes = [
+  "multi_agent.run.started",
+  "multi_agent.node.updated",
+  "multi_agent.run.completed",
+  "multi_agent.run.failed",
+  "multi_agent.run.cancelled",
+] as const;
+
+export type MultiAgentEventType = (typeof multiAgentEventTypes)[number];
+export const MULTI_AGENT_EVENT_TYPES: ReadonlySet<MultiAgentEventType> = new Set(multiAgentEventTypes);
+
+export type MultiAgentNodeView = {
+  node_id: string;
+  role: string;
+  status: MultiAgentNodeStatus;
+  duration_ms: number | null;
+  content: string | null;
+  error_code: string | null;
+  error: string | null;
+};
+
+export type MultiAgentRunSummary = {
+  run_id: string;
+  parent_request_id?: string | null;
+  strategy: MultiAgentStrategy;
+  status: MultiAgentRunStatus;
+  partial: boolean;
+  nodes: MultiAgentNodeView[];
+  duration_ms?: number | null;
+  usage: MultiAgentUsageSummary | MultiAgentUsage | null;
+  error_code: string | null;
+  error: string | null;
+};
+
+export type MultiAgentEventPayload = {
+  run_id: string;
+  node_id: string | null;
+  task_label: string | null;
+  strategy: MultiAgentStrategy;
+  status: MultiAgentRunStatus | MultiAgentNodeStatus;
+  duration_ms: number | null;
+  usage?: MultiAgentUsageSummary | MultiAgentUsage | null;
+  error_code: string | null;
+  error: string | null;
+};
+
+export type MultiAgentEvent = Omit<TaskEvent, "type" | "payload"> & {
+  type: MultiAgentEventType;
+  payload: MultiAgentEventPayload;
+};
+
 export type Observability = {
   session: Session;
   traces: Record<string, unknown>[];
   token_usage: Record<string, unknown>[];
+  multi_agent_runs: MultiAgentRunSummary[];
   tool_calls: Record<string, unknown>[];
 };
 
@@ -67,6 +136,7 @@ export type TurnState = {
   guidanceCount: number;
   startedAt: string;
   finishedAt?: string;
+  multiAgentRuns?: MultiAgentRunSummary[];
 };
 
 export type ControlConfigState = "active" | "pending" | "applying" | "failed";
@@ -90,6 +160,16 @@ export type EditableControlConfig = {
     turn_timeout_seconds: number;
     max_context_tokens: number;
     max_tool_result_tokens: number;
+  };
+  multi_agent: {
+    enabled: boolean;
+    run_timeout_seconds: number;
+    worker_timeout_seconds: number;
+    max_workers_per_run: number;
+    max_concurrent_workers_per_run: number;
+    max_concurrent_workers_global: number;
+    worker_result_token_limit: number;
+    parent_result_token_limit: number;
   };
   memory: { compact_token_threshold: number; recent_window_token_limit: number };
   sessions: { retention_days: number };
@@ -119,6 +199,7 @@ export type ConfigApplyRequest = {
   changes: {
     llm?: Partial<EditableControlConfig["llm"]> & { api_key?: string; clear_api_key?: boolean };
     runtime?: Partial<EditableControlConfig["runtime"]>;
+    multi_agent?: Partial<EditableControlConfig["multi_agent"]>;
     memory?: Partial<EditableControlConfig["memory"]>;
     sessions?: Partial<EditableControlConfig["sessions"]>;
     skills?: Partial<EditableControlConfig["skills"]>;

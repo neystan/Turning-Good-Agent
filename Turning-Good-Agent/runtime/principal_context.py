@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from ..bus.messages import ChannelRoute, InboundMessage
 from ..memory.long_term import ProfileMemory
@@ -146,11 +146,20 @@ class PrincipalSessionReader:
         await self._manager.store.save_tool_calls(turn_id, session_id, tool_calls)
 
     async def save_true_token_usage(
-        self, turn_id: str, session_id: str, usage: dict[str, int]
+        self, turn_id: str, session_id: str, usage: dict[str, Any]
     ) -> None:
         """写入当前主体会话的真实 token 用量。"""
         await self._require_session(session_id)
         await self._manager.store.save_true_token_usage(turn_id, session_id, usage)
+
+    # 读取当前主体会话的有界 Multi-Agent Run 摘要。
+    async def read_multi_agent_runs(
+        self,
+        session_id: str,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        await self._require_session(session_id)
+        return await self._manager.store.read_multi_agent_runs(session_id, limit)
 
     async def save_turn_traces(self, traces: list[object]) -> None:
         """写入仅属于当前主体会话的 trace。"""

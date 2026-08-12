@@ -2,15 +2,63 @@ import { ChevronDown, X } from "lucide-react";
 
 import { ScrollArea } from "./ScrollArea";
 import { buildInspectorSections, buildInspectorSummary, formatTokenCount, type InspectorRecordGroup, type InspectorRecordView } from "../state/observability_view";
-import type { Observability, SessionContextReadModel, ToolCallPage } from "../types";
+import type { MultiAgentNodeView, MultiAgentRunSummary, Observability, SessionContextReadModel, ToolCallPage } from "../types";
 
 /** 渲染先摘要、后结构化明细的会话观测抽屉。 */
-export function SessionInspector({ data, control, onClose }: { data: Observability | null; control?: { section: "context" | "tools"; context?: SessionContextReadModel; toolCalls?: ToolCallPage; error?: string } | null; onClose: () => void }) {
+export function SessionInspector({ data, multiAgentRunId, control, onClose }: { data: Observability | null; multiAgentRunId?: string | null; control?: { section: "context" | "tools"; context?: SessionContextReadModel; toolCalls?: ToolCallPage; error?: string } | null; onClose: () => void }) {
   if (control) return <section className="inspector" aria-label="会话检查器"><InspectorHeader onClose={onClose} /><ScrollArea className="inspector-body"><ControlReadSection control={control} /></ScrollArea></section>;
   if (!data) return <section className="inspector" aria-label="会话检查器"><InspectorHeader onClose={onClose} /><InspectorLoadingSkeleton /></section>;
   const summary = buildInspectorSummary(data);
   const sections = buildInspectorSections(data);
-  return <section className="inspector" aria-label="会话检查器"><InspectorHeader onClose={onClose} /><ScrollArea className="inspector-body"><dl className="inspector-summary"><Metric label="累计输入" value={formatTokenCount(summary.inputTokens)} /><Metric label="累计输出" value={formatTokenCount(summary.outputTokens)} /><Metric label="当前上下文" value={formatTokenCount(summary.contextTokens)} /><Metric label="压缩次数" value={formatTokenCount(summary.compactions)} /><Metric label="工具失败" value={formatTokenCount(summary.toolFailures)} /></dl><div className="inspector-sections">{sections.map((section) => <InspectorSection key={section.title} title={section.title} count={section.count} records={section.records} groups={section.groups} />)}</div></ScrollArea></section>;
+  const selectedRun = multiAgentRunId ? data.multi_agent_runs.find((run) => run.run_id === multiAgentRunId) || null : null;
+  return <section className="inspector" aria-label="会话检查器"><InspectorHeader onClose={onClose} /><ScrollArea className="inspector-body">{selectedRun && <MultiAgentRunInspector run={selectedRun} />}<dl className="inspector-summary"><Metric label="累计输入" value={formatTokenCount(summary.inputTokens)} /><Metric label="累计输出" value={formatTokenCount(summary.outputTokens)} /><Metric label="当前上下文" value={formatTokenCount(summary.contextTokens)} /><Metric label="压缩次数" value={formatTokenCount(summary.compactions)} /><Metric label="工具失败" value={formatTokenCount(summary.toolFailures)} /></dl><div className="inspector-sections">{sections.map((section) => <InspectorSection key={section.title} title={section.title} count={section.count} records={section.records} groups={section.groups} />)}</div></ScrollArea></section>;
+}
+
+// 用固定拓扑展示一个父会话内的协作 Run，而非可编辑流程图。
+function MultiAgentRunInspector({ run }: { run: MultiAgentRunSummary }) {
+  const completed = run.nodes.filter((node) => node.status === "completed").length;
+  return <section className="multi-agent-inspector" aria-label="Multi-Agent 运行详情"><header><div><strong>Multi-Agent</strong></div><span className={`multi-agent-status is-${run.status}`}>{multiAgentStatus(run.status)}</span></header><dl className="inspector-summary"><Metric label="拓扑" value={multiAgentStrategy(run.strategy)} /><Metric label="Worker" value={`${completed}/${run.nodes.length}`} /><Metric label="耗时" value={multiAgentDuration(run.duration_ms)} /><Metric label="Run Token" value={formatTokenCount(multiAgentTokens(run))} /><Metric label="Worker Token" value={formatTokenCount(multiAgentWorkerTokens(run))} /></dl><MultiAgentTopology run={run} /><WorkerFinalResults nodes={run.nodes} /></section>;
+}
+
+// 按协议支持的两种布局呈现固定的父子关系。
+function MultiAgentTopology({ run }: { run: MultiAgentRunSummary }) {
+  if (run.strategy === "pipeline") return <div className="multi-agent-topology is-pipeline" aria-label={`${multiAgentStrategy(run.strategy)}拓扑`}><span className="multi-agent-topology-parent">父 Agent</span>{run.nodes.length ? run.nodes.flatMap((node) => [<span key={`${node.node_id}-edge`} className="multi-agent-topology-arrow" aria-hidden="true">→</span>, <span key={node.node_id} className={`multi-agent-topology-worker is-${node.status}`}>{node.role}</span>]) : <><span className="multi-agent-topology-arrow" aria-hidden="true">→</span><span className="multi-agent-topology-worker">等待 Worker</span></>}<span className="multi-agent-topology-arrow" aria-hidden="true">→</span><span className="multi-agent-topology-parent">父 Agent</span></div>;
+  return <div className={`multi-agent-topology is-${run.strategy}`} aria-label={`${multiAgentStrategy(run.strategy)}拓扑`}><span className="multi-agent-topology-parent">父 Agent</span><span className="multi-agent-topology-arrow" aria-hidden="true">→</span><div className="multi-agent-topology-workers">{run.nodes.length ? run.nodes.map((node) => <span key={node.node_id} className={`multi-agent-topology-worker is-${node.status}`}>{node.role}</span>) : <span className="multi-agent-topology-worker">等待 Worker</span>}</div><span className="multi-agent-topology-arrow" aria-hidden="true">→</span><span className="multi-agent-topology-parent">父 Agent</span></div>;
+}
+
+// 在独立滚动区呈现 Worker 有界最终结果和受控错误。
+function WorkerFinalResults({ nodes }: { nodes: MultiAgentNodeView[] }) {
+  return <section className="multi-agent-worker-results"><h3>Worker 结果</h3><ScrollArea className="multi-agent-worker-results-scroll">{nodes.length ? nodes.map((node) => <article key={node.node_id} className={`multi-agent-worker-result is-${node.status}`}><header><strong>{node.role}</strong><span>{multiAgentStatus(node.status)}</span></header>{node.content ? <pre>{node.content}</pre> : node.error ? <p>{node.error}</p> : <p>尚无最终结果</p>}</article>) : <p>尚未创建 Worker</p>}</ScrollArea></section>;
+}
+
+// 映射受控状态到紧凑、可扫描的中文文案。
+function multiAgentStatus(status: string): string {
+  return { queued: "排队中", running: "运行中", waiting: "等待", completed: "已完成", failed: "失败", timed_out: "超时", cancelled: "已停止", interrupted: "已中断" }[status] || "未知";
+}
+
+// 映射协议固定的协作策略名称。
+function multiAgentStrategy(strategy: MultiAgentRunSummary["strategy"]): string {
+  return { fan_out_fan_in: "并行汇总", pipeline: "串行管线" }[strategy];
+}
+
+// 格式化持久化 Run 的受控时长字段。
+function multiAgentDuration(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "-";
+  return value >= 1000 ? `${(value / 1000).toFixed(1)} 秒` : `${Math.round(value)} ms`;
+}
+
+// 只读取 Run 汇总中明确保存的总 Token。
+function multiAgentTokens(run: MultiAgentRunSummary): number {
+  const usage = run.usage && "total" in run.usage ? run.usage.total : run.usage;
+  const value = usage && typeof usage === "object" ? (usage as { turn_total_tokens?: number; total_tokens?: number }).turn_total_tokens ?? (usage as { total_tokens?: number }).total_tokens : undefined;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+// 读取 Run 摘要中保留的 Worker 总 Token。
+function multiAgentWorkerTokens(run: MultiAgentRunSummary): number {
+  const usage = run.usage && "worker" in run.usage ? run.usage.worker : null;
+  const value = usage && typeof usage === "object" ? usage.turn_total_tokens ?? usage.total_tokens : undefined;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
 function InspectorLoadingSkeleton() {

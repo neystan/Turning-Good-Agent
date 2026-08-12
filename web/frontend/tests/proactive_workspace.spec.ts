@@ -14,6 +14,7 @@ function controlConfig() {
   const editable = {
     llm: { provider: "openai-compatible", api_key_configured: true, base_url: "https://api.example.test/v1", model: "example-model", timeout_seconds: 60, max_retries: 2, retry_delay_seconds: 0.5, streaming_enabled: true },
     runtime: { max_tool_rounds: 5, max_tool_calls_per_round: 8, parallel_tool_calls_enabled: true, max_parallel_tool_calls: 4, turn_timeout_seconds: 120, max_context_tokens: 300000, max_tool_result_tokens: 8000 },
+    multi_agent: { enabled: true, run_timeout_seconds: 60000, worker_timeout_seconds: 20000, max_workers_per_run: 4, max_concurrent_workers_per_run: 4, max_concurrent_workers_global: 8, worker_result_token_limit: 8000, parent_result_token_limit: 16000 },
     memory: { compact_token_threshold: 200000, recent_window_token_limit: 20000 },
     sessions: { retention_days: 7 },
     skills: { max_loaded_skills_per_turn: 3, max_skill_tokens: 8000, max_loaded_skill_tokens_per_turn: 16000 },

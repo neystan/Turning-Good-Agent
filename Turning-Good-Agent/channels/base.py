@@ -49,6 +49,10 @@ class ChannelAdapter(Protocol):
     async def on_error(self, content: str) -> None:
         """处理本轮错误回复。"""
 
+    # 传递安全的 Multi-Agent 运行事件。
+    async def on_multi_agent_event(self, event_type: str, payload: Mapping[str, Any]) -> None:
+        """处理安全的 Multi-Agent 运行事件。"""
+
     async def request_tool_approval(self, call: ToolCall) -> str | None:
         """请求用户确认工具调用。"""
 
@@ -106,6 +110,11 @@ class SilentChannelAdapter:
     async def on_error(self, content: str) -> None:
         """忽略错误回复。"""
         del content
+
+    # 丢弃不应出现在静默通道的运行事件。
+    async def on_multi_agent_event(self, event_type: str, payload: Mapping[str, Any]) -> None:
+        """忽略不应投影的 Multi-Agent 运行事件。"""
+        del event_type, payload
 
     async def request_tool_approval(self, call: ToolCall) -> str | None:
         """拒绝当前 Channel 无法处理的审批请求。"""

@@ -1,4 +1,6 @@
+import asyncio
 import json
+import re
 import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
@@ -8,6 +10,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from ..bus.messages import ChannelRoute, utc_now_iso
+from ..multi_agent.events import MULTI_AGENT_EVENT_TYPES
 from .token_counter import count_content_tokens
 from .types import MessageRecord, Session, ToolCallRecord
 
@@ -22,6 +25,7 @@ class JsonlSessionStore:
         self.data_dir = data_dir
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.sessions_dir = self.data_dir
+        self._write_locks: dict[str, asyncio.Lock] = {}
 
     async def load_session(self, session_id: str) -> Session | None:
         """按 ID 加载最新会话记录。"""
@@ -211,21 +215,37 @@ class JsonlSessionStore:
             return
         session_id = traces[0].session_id
         rows = [self._trace_to_dict(trace) for trace in traces]
-        self._append_jsonl_rows(self._traces_file(session_id), rows)
+        async with self._write_lock(session_id):
+            self._append_jsonl_rows(self._traces_file(session_id), rows)
 
     async def save_true_token_usage(self, turn_id: str, session_id: str, usage: dict[str, Any]) -> None:
         """保存单轮 token 使用量。"""
-        self._append_jsonl(
-            self._true_tokens_file(session_id),
-            {
-                "turn_id": turn_id,
-                "input_tokens": usage["input_tokens"],
-                "output_tokens": usage["output_tokens"],
-                "turn_total_tokens": usage["turn_total_tokens"],
-                "total_tokens": usage["total_tokens"],
-                "compacted": usage["compacted"],
-            },
-        )
+        row = {
+            "turn_id": turn_id,
+            "input_tokens": int(usage["input_tokens"]),
+            "output_tokens": int(usage["output_tokens"]),
+            "turn_total_tokens": int(usage["turn_total_tokens"]),
+            "total_tokens": int(usage["total_tokens"]),
+            "compacted": int(usage["compacted"]),
+        }
+        scope = usage.get("scope")
+        if scope is not None:
+            if scope not in {"worker", "parent"}:
+                raise ValueError("token usage scope 必须是 worker 或 parent")
+            row.update(
+                {
+                    "run_id": self._safe_identifier(usage.get("run_id"), "run_id"),
+                    "node_id": self._safe_optional_identifier(usage.get("node_id")),
+                    "agent_id": self._safe_identifier(usage.get("agent_id"), "agent_id"),
+                    "scope": scope,
+                }
+            )
+        async with self._write_lock(session_id):
+            if scope is not None:
+                previous = self._read_jsonl(self._true_tokens_file(session_id))
+                previous_total = int(previous[-1].get("total_tokens", 0)) if previous else 0
+                row["total_tokens"] = previous_total + row["turn_total_tokens"]
+            self._append_jsonl(self._true_tokens_file(session_id), row)
 
     async def save_tool_calls(
         self,
@@ -266,6 +286,193 @@ class JsonlSessionStore:
         """读取指定会话的全部真实 token 用量。"""
         return self._read_jsonl(self._true_tokens_file(session_id))
 
+    # 从父 Session trace 生成有界的 Multi-Agent Run 摘要。
+    async def read_multi_agent_runs(self, session_id: str, limit: int | None = 20) -> list[dict[str, Any]]:
+        if limit is not None and limit <= 0:
+            return []
+        traces = await self.all_turn_traces(session_id)
+        runs: dict[str, dict[str, Any]] = {}
+        terminal_runs: set[str] = set()
+        terminal_nodes: set[tuple[str, str]] = set()
+        run_terminal_events = {
+            "multi_agent.run.completed",
+            "multi_agent.run.failed",
+            "multi_agent.run.cancelled",
+        }
+        run_terminal_statuses = {
+            "completed",
+            "failed",
+            "timed_out",
+            "cancelled",
+            "interrupted",
+        }
+        node_terminal_statuses = set(run_terminal_statuses)
+        for row in traces:
+            if row.get("state") != "MULTI_AGENT":
+                continue
+            metadata = row.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            event = row.get("event")
+            if event not in MULTI_AGENT_EVENT_TYPES:
+                continue
+            run_id = metadata.get("run_id")
+            if not isinstance(run_id, str) or not run_id:
+                continue
+            if run_id not in runs:
+                parent_request_id = metadata.get("parent_request_id")
+                run_view = {
+                    "run_id": run_id,
+                    "status": "queued",
+                    "strategy": metadata.get("strategy", ""),
+                    "nodes": [],
+                    "error_code": None,
+                    "error": None,
+                    "usage": None,
+                    "duration_ms": None,
+                }
+                if isinstance(parent_request_id, str) and parent_request_id:
+                    run_view["parent_request_id"] = parent_request_id
+                runs[run_id] = run_view
+            run_view = runs[run_id]
+            status = metadata.get("status")
+            if event == "multi_agent.run.started" and run_id not in terminal_runs:
+                if isinstance(status, str) and status:
+                    run_view["status"] = status
+                if isinstance(metadata.get("strategy"), str):
+                    run_view["strategy"] = metadata["strategy"]
+                if isinstance(metadata.get("duration_ms"), (int, float)):
+                    run_view["duration_ms"] = metadata["duration_ms"]
+            if event == "multi_agent.node.updated":
+                node_id = metadata.get("node_id")
+                if not isinstance(node_id, str) or not node_id:
+                    continue
+                node_key = (run_id, node_id)
+                if node_key in terminal_nodes:
+                    continue
+                node_view = next(
+                    (item for item in run_view["nodes"] if item["node_id"] == node_id),
+                    None,
+                )
+                if node_view is None:
+                    node_view = {
+                        "node_id": node_id,
+                        "role": metadata.get("task_label", node_id),
+                        "status": "queued",
+                        "duration_ms": None,
+                        "content": None,
+                        "error_code": None,
+                        "error": None,
+                    }
+                    run_view["nodes"].append(node_view)
+                if isinstance(status, str) and status:
+                    node_view["status"] = status
+                if isinstance(metadata.get("task_label"), str):
+                    node_view["role"] = metadata["task_label"]
+                if isinstance(metadata.get("duration_ms"), (int, float)):
+                    node_view["duration_ms"] = metadata["duration_ms"]
+                if isinstance(metadata.get("content"), str):
+                    node_view["content"] = metadata["content"]
+                if isinstance(metadata.get("error_code"), str):
+                    node_view["error_code"] = metadata["error_code"]
+                if isinstance(metadata.get("error"), str):
+                    node_view["error"] = metadata["error"][:256]
+                if status in node_terminal_statuses:
+                    terminal_nodes.add(node_key)
+            if event in run_terminal_events and run_id not in terminal_runs:
+                if status in run_terminal_statuses:
+                    if isinstance(status, str) and status:
+                        run_view["status"] = status
+                    run_view["error_code"] = metadata.get("error_code")
+                    run_view["error"] = metadata.get("error")
+                    if isinstance(metadata.get("duration_ms"), (int, float)):
+                        run_view["duration_ms"] = metadata["duration_ms"]
+                    terminal_runs.add(run_id)
+        ordered = list(runs.values()) if limit is None else list(runs.values())[-limit:]
+        for run_view in ordered:
+            run_view["usage"] = self._multi_agent_usage_summary(session_id, run_view["run_id"])
+        return ordered
+
+    # 在 Gateway 重启后将没有终态的父 Run 和节点一次标记为 interrupted。
+    async def recover_interrupted_runs(self) -> list[str]:
+        recovered: list[str] = []
+        terminal_statuses = {
+            "completed",
+            "failed",
+            "timed_out",
+            "cancelled",
+            "interrupted",
+        }
+        for session_dir in self._all_session_dirs():
+            session_file = session_dir / "session.json"
+            session = self._read_session_file(session_file)
+            if session is None:
+                continue
+            session_id = session.id
+            async with self._write_lock(session_id):
+                traces = self._read_jsonl(session_dir / "turn_traces.jsonl")
+                grouped: dict[str, list[dict[str, Any]]] = {}
+                for row in traces:
+                    if row.get("state") != "MULTI_AGENT":
+                        continue
+                    if row.get("event") not in MULTI_AGENT_EVENT_TYPES:
+                        continue
+                    metadata = row.get("metadata")
+                    run_id = metadata.get("run_id") if isinstance(metadata, dict) else None
+                    if isinstance(run_id, str) and run_id:
+                        grouped.setdefault(run_id, []).append(row)
+                additions: list[dict[str, Any]] = []
+                for run_id, run_rows in grouped.items():
+                    if any(
+                        row.get("event") in {
+                            "multi_agent.run.completed",
+                            "multi_agent.run.failed",
+                            "multi_agent.run.cancelled",
+                        }
+                        and isinstance(row.get("metadata"), dict)
+                        and row["metadata"].get("status") in terminal_statuses
+                        for row in run_rows
+                    ):
+                        continue
+                    latest_nodes: dict[str, dict[str, Any]] = {}
+                    for row in run_rows:
+                        metadata = row.get("metadata")
+                        if not isinstance(metadata, dict):
+                            continue
+                        node_id = metadata.get("node_id")
+                        if not isinstance(node_id, str) or not node_id:
+                            continue
+                        latest_nodes[node_id] = metadata
+                    for node_id, metadata in latest_nodes.items():
+                        if metadata.get("status") in terminal_statuses:
+                            continue
+                        additions.append(
+                            self._recovery_trace_row(
+                                session_id,
+                                run_id,
+                                node_id,
+                                metadata,
+                            )
+                        )
+                    additions.append(
+                        self._recovery_trace_row(
+                            session_id,
+                            run_id,
+                            None,
+                            next(
+                                (
+                                    row.get("metadata", {})
+                                    for row in reversed(run_rows)
+                                    if isinstance(row.get("metadata"), dict)
+                                ),
+                                {},
+                            ),
+                        )
+                    )
+                    recovered.append(run_id)
+                self._append_jsonl_rows(session_dir / "turn_traces.jsonl", additions)
+        return recovered
+
     async def last_total_tokens(self, session_id: str) -> int:
         """读取当前会话最后一条累计 token。"""
         rows = self._read_jsonl(self._true_tokens_file(session_id))
@@ -291,6 +498,79 @@ class JsonlSessionStore:
                 if self._read_session_file(session_dir / "session.json") is not None
             )
         return sum(len(self._read_jsonl(session_dir / paths[table])) for session_dir in self._all_session_dirs())
+
+    # 返回每个 Session 独立的异步写锁，避免 Worker 账本累计竞争。
+    def _write_lock(self, session_id: str) -> asyncio.Lock:
+        return self._write_locks.setdefault(session_id, asyncio.Lock())
+
+    # 生成安全的持久化标识符。
+    @staticmethod
+    def _safe_identifier(value: object, field: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{field} 必须是非空字符串")
+        text = " ".join(value.split())
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", text):
+            raise ValueError(f"{field} 包含不安全字符")
+        return text
+
+    # 生成允许为空的安全节点标识符。
+    @classmethod
+    def _safe_optional_identifier(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        return cls._safe_identifier(value, "node_id")
+
+    # 构造重启恢复所需的最小安全 trace 行。
+    @staticmethod
+    def _recovery_trace_row(
+        session_id: str,
+        run_id: str,
+        node_id: str | None,
+        previous: dict[str, Any],
+    ) -> dict[str, Any]:
+        metadata = {
+            "run_id": run_id,
+            "node_id": node_id,
+            "task_label": previous.get("task_label") if node_id else "multi_agent",
+            "strategy": previous.get("strategy", ""),
+            "status": "interrupted",
+            "duration_ms": previous.get("duration_ms"),
+            "usage": None,
+            "error_code": "gateway_restart",
+            "error": "Gateway 重启导致 Run 中断",
+        }
+        return {
+            "turn_id": f"recovery-{run_id}",
+            "state": "MULTI_AGENT",
+            "duration_ms": 0.0,
+            "event": "multi_agent.node.updated" if node_id else "multi_agent.run.failed",
+            "error": "Gateway 重启导致 Run 中断",
+            "metadata": metadata,
+        }
+
+    # 汇总父 Session 中 Worker 与 Run 总 token 用量。
+    def _multi_agent_usage_summary(
+        self,
+        session_id: str,
+        run_id: str,
+    ) -> dict[str, dict[str, int]]:
+        fields = ("input_tokens", "output_tokens", "turn_total_tokens")
+        summary = {
+            "worker": {field: 0 for field in fields},
+            "total": {field: 0 for field in fields},
+        }
+        for row in self._read_jsonl(self._true_tokens_file(session_id)):
+            if row.get("run_id") != run_id:
+                continue
+            scope = row.get("scope")
+            if scope not in {"worker", "parent"}:
+                continue
+            for field in fields:
+                value = int(row.get(field, 0))
+                if scope == "worker":
+                    summary["worker"][field] += value
+                summary["total"][field] += value
+        return summary
 
     async def _touch_session(self, session_id: str) -> None:
         """更新会话的 updated_at。"""
@@ -518,14 +798,68 @@ class JsonlSessionStore:
 
     def _trace_to_dict(self, trace: Any) -> dict[str, Any]:
         """将状态 trace 转换为可写入 JSONL 的字典。"""
+        metadata = getattr(trace, "metadata", {})
+        if getattr(trace, "state", None) == "MULTI_AGENT":
+            metadata = self._safe_multi_agent_metadata(metadata)
         return {
             "turn_id": trace.turn_id,
             "state": trace.state,
             "duration_ms": trace.duration_ms,
             "event": trace.event,
             "error": trace.error,
-            "metadata": getattr(trace, "metadata", {}),
+            "metadata": metadata,
         }
+
+    # 过滤 Multi-Agent trace 中不允许持久化的提示词和原始调用字段。
+    @staticmethod
+    def _safe_multi_agent_metadata(metadata: object) -> dict[str, Any]:
+        if not isinstance(metadata, dict):
+            return {}
+        allowed = {
+            "run_id",
+            "node_id",
+            "parent_request_id",
+            "task_label",
+            "strategy",
+            "status",
+            "duration_ms",
+            "usage",
+            "error_code",
+            "error",
+            "content",
+        }
+        clean: dict[str, Any] = {}
+        for key in allowed:
+            value = metadata.get(key)
+            if key == "parent_request_id":
+                if isinstance(value, str):
+                    text = " ".join(value.split())
+                    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", text):
+                        clean[key] = text
+            elif key in {"run_id", "task_label", "strategy", "status", "error_code"}:
+                if isinstance(value, str):
+                    clean[key] = " ".join(value.split())[:256]
+            elif key == "node_id":
+                if value is None or isinstance(value, str):
+                    clean[key] = value[:128] if isinstance(value, str) else value
+            elif key in {"error", "content"}:
+                if isinstance(value, str):
+                    text = " ".join(value.split())
+                    clean[key] = text if key == "content" else text[:256]
+            elif key == "usage":
+                if isinstance(value, dict):
+                    clean[key] = {
+                        name: int(value.get(name, 0))
+                        for name in ("input_tokens", "output_tokens", "turn_total_tokens")
+                        if isinstance(value.get(name), (int, float))
+                        and not isinstance(value.get(name), bool)
+                    }
+            elif key == "duration_ms":
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    clean[key] = max(0.0, float(value))
+            else:
+                clean[key] = value
+        return clean
 
     def _tool_call_to_dict(self, record: ToolCallRecord) -> dict[str, Any]:
         """将 ToolCallRecord 转换为可写入 JSONL 的字典。"""

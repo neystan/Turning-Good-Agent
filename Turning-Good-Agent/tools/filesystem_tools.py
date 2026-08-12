@@ -2,6 +2,7 @@ import fnmatch
 import os
 import re
 from pathlib import Path, PurePosixPath
+from collections.abc import Callable
 from typing import Any, Iterable
 
 from . import security
@@ -50,7 +51,12 @@ def _matches_type(name: str, file_type: str | None) -> bool:
     return any(fnmatch.fnmatch(name.lower(), pattern.lower()) for pattern in patterns)
 
 
-def _iter_paths(root: Path, include_dirs: bool = False) -> Iterable[Path]:
+# 遍历时按 Worker 路径策略提前剪枝敏感目录。
+def _iter_paths(
+    root: Path,
+    include_dirs: bool = False,
+    path_allowed: Callable[[Path], bool] | None = None,
+) -> Iterable[Path]:
     """遍历路径并跳过常见噪声目录。"""
     if root.is_file():
         yield root
@@ -58,12 +64,19 @@ def _iter_paths(root: Path, include_dirs: bool = False) -> Iterable[Path]:
     if include_dirs:
         yield root
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in security.IGNORE_DIRS)
         current = Path(dirpath)
+        dirnames[:] = sorted(
+            name
+            for name in dirnames
+            if name not in security.IGNORE_DIRS
+            and (path_allowed is None or path_allowed(current / name))
+        )
         if include_dirs and current != root:
             yield current
         for filename in sorted(filenames):
-            yield current / filename
+            candidate = current / filename
+            if path_allowed is None or path_allowed(candidate):
+                yield candidate
 
 
 class _FsTool:
@@ -74,6 +87,7 @@ class _FsTool:
 
     def __init__(self, workspace: Path | None = None) -> None:
         self.workspace = (workspace or Path.cwd()).resolve()
+        self.worker_path_policy = None
 
     @classmethod
     def create(cls, context: Any | None = None):
@@ -82,7 +96,18 @@ class _FsTool:
 
     def _resolve(self, path: str) -> Path:
         """解析 workspace 内路径。"""
-        return resolve_workspace_path(path, self.workspace)
+        resolved = resolve_workspace_path(path, self.workspace)
+        policy = self.worker_path_policy
+        if policy is not None:
+            error = policy.validate(resolved)
+            if error:
+                raise PermissionError(error)
+        return resolved
+
+    # 判断遍历候选路径是否满足 Worker 策略。
+    def _path_allowed(self, path: Path) -> bool:
+        policy = self.worker_path_policy
+        return policy is None or policy.validate(path) is None
 
     def _display(self, path: Path) -> str:
         """返回 workspace 相对展示路径。"""
@@ -96,6 +121,7 @@ class ListDirTool(_FsTool):
     """列出目录内容。"""
 
     name = "list_dir"
+    worker_read_only = True
     parallel_safe = True
     description = "列出目录内容。"
     input_schema = {
@@ -124,7 +150,11 @@ class ListDirTool(_FsTool):
             recursive = bool(args.get("recursive", False))
             max_entries = security.clamp_int(args.get("max_entries"), 200, 1, security.MAX_LIST_ENTRIES)
             items: list[str] = []
-            iterator = root.rglob("*") if recursive else root.iterdir()
+            iterator = (
+                _iter_paths(root, include_dirs=True, path_allowed=self._path_allowed)
+                if recursive
+                else (item for item in root.iterdir() if self._path_allowed(item))
+            )
             for item in sorted(iterator):
                 if any(part in security.IGNORE_DIRS for part in item.parts):
                     continue
@@ -144,6 +174,7 @@ class FindFileTool(_FsTool):
     """按名称、glob 或类型查找文件。"""
 
     name = "find_file"
+    worker_read_only = True
     parallel_safe = True
     description = "查找文件路径。"
     input_schema = {
@@ -167,7 +198,7 @@ class FindFileTool(_FsTool):
             query = str(args.get("query") or "").lower()
             max_results = security.clamp_int(args.get("max_results"), 200, 1, 1000)
             matches: list[str] = []
-            for item in _iter_paths(target):
+            for item in _iter_paths(target, path_allowed=self._path_allowed):
                 if not item.is_file():
                     continue
                 rel = item.relative_to(root).as_posix()
@@ -190,6 +221,7 @@ class ReadFileTool(_FsTool):
     """读取 UTF-8 文本文件。"""
 
     name = "read_file"
+    worker_read_only = True
     parallel_safe = True
     description = "读取文本文件。"
     input_schema = {
@@ -315,6 +347,7 @@ class GrepTool(_FsTool):
     """搜索文件内容。"""
 
     name = "grep"
+    worker_read_only = True
     parallel_safe = True
     description = "搜索文件内容。"
     input_schema = {
@@ -352,7 +385,7 @@ class GrepTool(_FsTool):
             show_line_numbers = bool(args.get("show_line_numbers", False))
             results: list[str] = []
             counts: dict[str, int] = {}
-            for file_path in _iter_paths(target):
+            for file_path in _iter_paths(target, path_allowed=self._path_allowed):
                 if not file_path.is_file():
                     continue
                 rel = file_path.relative_to(root).as_posix()

@@ -38,6 +38,18 @@ _EDITABLE_FIELDS: dict[str, frozenset[str]] = {
             "max_tool_result_tokens",
         }
     ),
+    "multi_agent": frozenset(
+        {
+            "enabled",
+            "run_timeout_seconds",
+            "worker_timeout_seconds",
+            "max_workers_per_run",
+            "max_concurrent_workers_per_run",
+            "max_concurrent_workers_global",
+            "worker_result_token_limit",
+            "parent_result_token_limit",
+        }
+    ),
     "memory": frozenset({"compact_token_threshold", "recent_window_token_limit"}),
     "sessions": frozenset({"retention_days"}),
     "skills": frozenset(
@@ -292,6 +304,7 @@ class WebConfigControlService:
                 "streaming_enabled": settings.llm.streaming_enabled,
             },
             "runtime": asdict(settings.runtime),
+            "multi_agent": asdict(settings.multi_agent),
             "memory": asdict(settings.memory),
             "sessions": {"retention_days": settings.sessions.retention_days},
             "skills": {

@@ -11,6 +11,12 @@ class ToolExecutor:
 
     def precheck(self, tool: BaseTool, args: dict[str, Any]) -> str | None:
         """在策略判断或执行前检查硬安全规则。"""
+        worker_policy = getattr(tool, "worker_path_policy", None)
+        if worker_policy is not None:
+            path = args.get("path", ".")
+            policy_error = worker_policy.validate(str(path))
+            if policy_error:
+                return policy_error
         workspace = Path(getattr(tool, "workspace", Path.cwd())).resolve()
         return security.validate_tool_call(tool.name, args, workspace)
 

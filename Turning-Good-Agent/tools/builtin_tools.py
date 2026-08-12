@@ -32,6 +32,7 @@ class NowTool:
     """返回主动能力全局时区中的当前时间。"""
 
     name = "now"
+    worker_read_only = True
     source = "builtin"
     discoverable = True
     parallel_safe = True

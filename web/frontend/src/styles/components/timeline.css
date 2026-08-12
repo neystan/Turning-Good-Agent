@@ -273,3 +273,39 @@
   padding: 2px 0 6px 14px;
   list-style: none;
 }
+
+/* Multi-Agent Run 作为父 turn 的可展开入口，不另起聊天消息或页面。 */
+.multi-agent-run-card { display: grid; grid-template-columns: minmax(0, 1fr) 34px; align-items: stretch; width: 100%; min-height: 58px; margin-top: 6px; border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: 0 4px 14px color-mix(in srgb, var(--shadow) 25%, transparent); color: var(--text); }
+
+.multi-agent-run-card:hover { background: var(--surface-hover); box-shadow: 0 7px 18px color-mix(in srgb, var(--shadow) 34%, transparent); }
+
+.multi-agent-run-open { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; min-width: 0; border: 0; border-radius: var(--radius-panel) 0 0 var(--radius-panel); padding: 9px 0 9px 11px; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+
+.multi-agent-run-stop { display: grid; width: 30px; height: 30px; align-self: center; place-items: center; margin: 0 5px 0 0; border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border)); border-radius: var(--radius-control); background: transparent; color: var(--danger); cursor: pointer; }
+
+.multi-agent-run-stop:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+
+.multi-agent-run-icon { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--accent) 12%, var(--surface)); color: var(--accent); }
+
+.multi-agent-run-card.is-failed .multi-agent-run-icon, .multi-agent-run-card.is-timed_out .multi-agent-run-icon, .multi-agent-run-card.is-interrupted .multi-agent-run-icon { background: color-mix(in srgb, var(--danger) 12%, var(--surface)); color: var(--danger); }
+
+.multi-agent-run-card.is-cancelled .multi-agent-run-icon { background: color-mix(in srgb, var(--muted) 12%, var(--surface)); color: var(--muted); }
+
+.multi-agent-run-spinner { animation: multi-agent-spin 1s linear infinite; }
+
+.multi-agent-run-main { display: grid; min-width: 0; gap: 3px; }
+
+.multi-agent-run-heading { display: flex; min-width: 0; gap: 7px; color: var(--muted); font-size: .75rem; }
+
+.multi-agent-run-heading strong { color: var(--text); font-size: .8125rem; }
+
+.multi-agent-run-summary { overflow: hidden; color: var(--muted); font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
+
+.multi-agent-run-metrics { display: inline-flex; align-items: center; gap: 8px; margin-left: 10px; color: var(--muted); font-size: .6875rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+@keyframes multi-agent-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 620px) {
+  .multi-agent-run-open { grid-template-columns: 26px minmax(0, 1fr); }
+  .multi-agent-run-metrics { grid-column: 2; margin: 2px 0 0; }
+}

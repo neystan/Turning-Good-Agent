@@ -21,6 +21,8 @@ def im_command_rejection(route: ChannelRoute, content: str) -> str | None:
         return "当前 IM 渠道不支持 /exit。"
     if command.startswith("/approve"):
         return "当前 IM 渠道不支持工具审批。请在 Web 或 CLI 中操作。"
+    if command == "/multi" or command.startswith("/multi "):
+        return "当前 IM 渠道不支持 /multi 命令。请在 Web 或 CLI 中操作。"
     return None
 
 

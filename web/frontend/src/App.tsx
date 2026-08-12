@@ -18,7 +18,7 @@ import { ProactiveSocket } from "./state/proactive_socket";
 import { readSessionCache, shouldWriteSessionCache, writeSessionCache } from "./state/session_cache";
 import { createTextSegment, serializeComposerContent } from "./state/composer_segments";
 import { proactiveRouteFromHash, routeDomain, routeDomainForWire } from "./proactive_types";
-import type { ChatMessage, CommandEntry, ComposerSegment, ConnectionState, ContextWindow, Observability, Session, SessionContextReadModel, TaskEvent, ToolCallPage } from "./types";
+import type { ChatMessage, CommandEntry, ComposerSegment, ConnectionState, ContextWindow, MultiAgentMode, MultiAgentRunSummary, Observability, Session, SessionContextReadModel, TaskEvent, ToolCallPage } from "./types";
 import type { Notice } from "./components/NoticeRegion";
 import type { ProactiveDomain, ProactiveNotice, ProactiveRoute, ProactiveSnapshot, ProactiveState } from "./proactive_types";
 
@@ -50,6 +50,9 @@ export function App() {
   const [controlInspection, setControlInspection] = useState<{ section: "context" | "tools"; context?: SessionContextReadModel; toolCalls?: ToolCallPage; error?: string } | null>(null);
   const [contextWindow, setContextWindow] = useState<ContextWindow | null>(null);
   const [autoApprove, setAutoApprove] = useState(false);
+  const [multiAgentMode, setMultiAgentMode] = useState<MultiAgentMode>("auto");
+  const [multiAgentEnabled, setMultiAgentEnabled] = useState<boolean | null>(null);
+  const [inspectedMultiAgentRunId, setInspectedMultiAgentRunId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(() => window.location.hash === "#settings");
   const [proactiveDomain, setProactiveDomain] = useState<ProactiveRoute | null>(() => proactiveRouteFromHash());
   const [theme, setTheme] = useState<"dark" | "light">(() => localStorage.getItem("tga-theme") === "light" ? "light" : "dark");
@@ -159,12 +162,23 @@ export function App() {
     setMobileMenu(false);
   }, []);
 
+  /** 刷新当前 Runtime 的 Multi-Agent 可用状态。 */
+  const refreshMultiAgentConfig = useCallback(async () => {
+    try {
+      const config = await api.controlConfig();
+      setMultiAgentEnabled(config.active.multi_agent?.enabled === true);
+    } catch {
+      setMultiAgentEnabled(null);
+    }
+  }, []);
+
   /** 从主动工作面回到当前会话路径。 */
   const returnToChat = useCallback(() => {
     window.history.replaceState({}, "", window.location.pathname);
     setSettingsOpen(false);
     setProactiveDomain(null);
-  }, []);
+    void refreshMultiAgentConfig();
+  }, [refreshMultiAgentConfig]);
 
   /** 处理 WebSocket 事件与动作确认。 */
   eventHandler.current = (event) => {
@@ -199,7 +213,8 @@ export function App() {
   useEffect(() => {
     void refreshSessions().catch((error: unknown) => addNotice(error instanceof Error ? error.message : "读取会话失败"));
     void api.uiSettings().then((item) => setAutoApprove(item.auto_approve_tools)).catch((error: unknown) => addNotice(error instanceof Error ? error.message : "读取权限设置失败"));
-  }, [addNotice, refreshSessions]);
+    void refreshMultiAgentConfig();
+  }, [addNotice, refreshMultiAgentConfig, refreshSessions]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -241,6 +256,7 @@ export function App() {
     setInspectorOpen(false);
     setInspectorClosing(false);
     setInspector(null);
+    setInspectedMultiAgentRunId(null);
     clearControlInspection();
     setComposerSegments([createTextSegment()]);
     refreshContextWindow(sessionId);
@@ -338,6 +354,8 @@ export function App() {
     const actionId = retryActionId || crypto.randomUUID();
     if (messageActionIds.current.has(actionId)) return;
     messageActionIds.current.add(actionId);
+    const isGuidance = Boolean(sessionState.running && sessionId);
+    const mode = isGuidance ? undefined : multiAgentMode;
     if (retryActionId) {
       dispatch({ type: "action.retry", actionId });
     } else {
@@ -345,14 +363,14 @@ export function App() {
         type: "message.optimistic",
         action: {
           id: actionId,
-          kind: sessionState.running && sessionId ? "guidance" : "message",
+          kind: isGuidance ? "guidance" : "message",
           content,
           sessionId,
           createdAt: new Date().toISOString(),
         },
       });
     }
-    const sent = socketRef.current.send({ type: "message.send", session_id: sessionId, content, client_action_id: actionId });
+    const sent = socketRef.current.send({ type: "message.send", session_id: sessionId, content, client_action_id: actionId, ...(mode ? { multi_agent_mode: mode } : {}) });
     if (!sent) {
       messageActionIds.current.delete(actionId);
       dispatch({ type: "action.failed", actionId, message: "连接尚未建立" });
@@ -360,9 +378,10 @@ export function App() {
       dispatch({ type: "draft.pending", content: "" });
       return;
     }
+    if (mode) setMultiAgentMode("auto");
     setComposerSegments([createTextSegment()]);
     dispatch({ type: "draft.pending", content: "" });
-  }, [composerSegments, connection, sessionId, sessionState.pendingDraft, sessionState.running]);
+  }, [composerSegments, connection, multiAgentMode, sessionId, sessionState.pendingDraft, sessionState.running]);
 
   useEffect(() => {
     /** 显式重试只在连接重新建立后自动发送一次。 */
@@ -402,6 +421,7 @@ export function App() {
     if (inspectorCloseTimer.current) window.clearTimeout(inspectorCloseTimer.current);
     setInspectorClosing(false);
     clearControlInspection();
+    setInspectedMultiAgentRunId(null);
     setInspector(null);
     setInspectorOpen(true);
     try {
@@ -412,10 +432,28 @@ export function App() {
     }
   };
 
+  /** 打开指定 Run 的检查器，并按需读取持久化的最终 Worker 内容。 */
+  const openMultiAgentInspector = async (run: MultiAgentRunSummary) => {
+    if (!sessionId) return;
+    if (inspectorCloseTimer.current) window.clearTimeout(inspectorCloseTimer.current);
+    setInspectorClosing(false);
+    clearControlInspection();
+    setInspector(null);
+    setInspectedMultiAgentRunId(run.run_id);
+    setInspectorOpen(true);
+    try {
+      setInspector(await api.observability(sessionId));
+    } catch (error) {
+      setInspectorOpen(false);
+      addNotice(error instanceof Error ? error.message : "读取协作运行详情失败");
+    }
+  };
+
   /** 立即收起检查器布局列，并保留短暂的退出帧。 */
   const closeInspector = () => {
     if (inspectorCloseTimer.current) window.clearTimeout(inspectorCloseTimer.current);
     clearControlInspection();
+    setInspectedMultiAgentRunId(null);
     setInspectorOpen(false);
     setInspectorClosing(true);
     inspectorCloseTimer.current = window.setTimeout(() => {
@@ -512,6 +550,8 @@ export function App() {
   const current = useMemo(() => [...sessions, ...archived].find((item) => item.id === sessionId), [archived, sessionId, sessions]);
   const currentTurnCount = Object.values(sessionState.turns).reduce((count, turn) => count + turn.events.length, 0);
   const catalogRunning = Object.values(sessionState.turns).some((turn) => turn.kind === "catalog" && ["queued", "running", "stopping"].includes(turn.status));
+  const multiAgentRunning = Object.values(sessionState.turns).some((turn) => turn.multiAgentRuns?.some((run) => ["queued", "running", "waiting"].includes(run.status)));
+  const multiAgentDisabledReason = multiAgentEnabled === false ? "全局 Multi-Agent 未启用" : multiAgentEnabled === null ? "正在读取 Multi-Agent 配置" : null;
   const proactiveHealth: Record<ProactiveDomain, ProactiveHealth> = {
     cron: proactiveHealthForDomain("cron", proactiveState),
     breakbeat: proactiveHealthForDomain("breakbeat", proactiveState),
@@ -560,21 +600,21 @@ export function App() {
         <div className="title-block"><span className={`connection-dot ${sessionState.running ? "is-running" : ""}`} aria-hidden="true" /><h1>{current?.title || "新建会话"}</h1><span className="connection-label">{connectionLabel(connection)}</span>{current?.archived && <span className="readonly">已归档</span>}</div>
         <div className="top-actions"><button className="icon-button" aria-label="切换主题" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun /> : <Moon />}</button><button className="icon-button" aria-label="打开会话检查器" disabled={!sessionId} onClick={() => void openInspector()}><PanelRight /></button></div>
       </header>
-      <ChatTimeline sessionId={sessionId} messages={sessionState.messages} turns={sessionState.turns} contentVersion={currentTurnCount} composerRef={composerRef} retryEnabled={connection === "connected"} onRetry={retryMessage} renderTurn={(turn) => <ActivityCluster key={turn.requestId} turn={turn} actionsEnabled={connection === "connected"} onResolveApproval={resolveApproval} />}>
+      <ChatTimeline sessionId={sessionId} messages={sessionState.messages} turns={sessionState.turns} contentVersion={currentTurnCount} composerRef={composerRef} retryEnabled={connection === "connected"} onRetry={retryMessage} renderTurn={(turn) => <ActivityCluster key={turn.requestId} turn={turn} onOpenMultiAgent={(run) => void openMultiAgentInspector(run)} onStop={stop} actionsEnabled={connection === "connected"} onResolveApproval={resolveApproval} />}>
         {!sessionId && sessionState.messages.length === 0 && <div className="empty-state"><span className="empty-kicker">准备就绪</span><h2>开始一个工作会话</h2><p>描述目标、提供上下文，或直接粘贴内容。首条消息发送后会创建本地会话记录。</p><div className="empty-examples" aria-label="任务起步示例"><span>选择一个起点</span><ul>{emptyStateStarters.map((starter) => <li key={starter}><button type="button" onClick={() => useEmptyStateStarter(starter)}>{starter}</button></li>)}</ul></div></div>}
       </ChatTimeline>
       <NoticeRegion placement="conversation" notices={notices} onDismiss={dismissNotice} onNavigate={navigateProactiveNotice} />
-      <Composer rootRef={composerRef} session={current} running={sessionState.running} actionsEnabled={connection === "connected" && !catalogRunning} segments={composerSegments.some((segment) => segment.type === "guidance" || Boolean(segment.text)) || !sessionState.pendingDraft ? composerSegments : [createTextSegment(sessionState.pendingDraft)]} autoApprove={autoApprove} contextWindow={contextWindow} restoreFocusVersion={restoreFocusVersion} onSegmentsChange={changeSegments} onSend={() => send()} onStop={stop} onRestore={restoreSession} onAutoApproveChange={(enabled) => void setApproval(enabled)} onSlashRead={openSlashRead} />
-      <InspectorLayer open={inspectorOpen} closing={inspectorClosing} data={inspector} control={controlInspection} onClose={closeInspector} />
+      <Composer rootRef={composerRef} session={current} running={sessionState.running} actionsEnabled={connection === "connected" && !catalogRunning} segments={composerSegments.some((segment) => segment.type === "guidance" || Boolean(segment.text)) || !sessionState.pendingDraft ? composerSegments : [createTextSegment(sessionState.pendingDraft)]} autoApprove={autoApprove} multiAgentMode={multiAgentMode} multiAgentEnabled={multiAgentEnabled === true} multiAgentDisabledReason={multiAgentDisabledReason} multiAgentLocked={multiAgentRunning} inputLocked={multiAgentRunning} contextWindow={contextWindow} restoreFocusVersion={restoreFocusVersion} onSegmentsChange={changeSegments} onSend={() => send()} onStop={stop} onRestore={restoreSession} onAutoApproveChange={(enabled) => void setApproval(enabled)} onMultiAgentModeChange={setMultiAgentMode} onSlashRead={openSlashRead} />
+      <InspectorLayer open={inspectorOpen} closing={inspectorClosing} data={inspector} multiAgentRunId={inspectedMultiAgentRunId} control={controlInspection} onClose={closeInspector} />
     </main>
     <SessionSearchDialog open={searchOpen} sessions={[...sessions, ...archived]} currentId={sessionId} onClose={() => setSearchOpen(false)} onSelect={navigate} />
     </div>;
 }
 
 /** 渲染检查器视觉留白层，避免开关改变内容列。 */
-function InspectorLayer({ open, closing, data, control, onClose }: { open: boolean; closing: boolean; data: Observability | null; control: { section: "context" | "tools"; context?: SessionContextReadModel; toolCalls?: ToolCallPage; error?: string } | null; onClose: () => void }) {
+function InspectorLayer({ open, closing, data, multiAgentRunId, control, onClose }: { open: boolean; closing: boolean; data: Observability | null; multiAgentRunId: string | null; control: { section: "context" | "tools"; context?: SessionContextReadModel; toolCalls?: ToolCallPage; error?: string } | null; onClose: () => void }) {
   const visible = open || closing;
-  return <aside className={`inspector-layer ${open ? "is-open" : ""} ${closing ? "is-closing" : ""}`} aria-hidden={!visible}>{visible && <SessionInspector data={data} control={control} onClose={onClose} />}</aside>;
+  return <aside className={`inspector-layer ${open ? "is-open" : ""} ${closing ? "is-closing" : ""}`} aria-hidden={!visible}>{visible && <SessionInspector data={data} multiAgentRunId={multiAgentRunId} control={control} onClose={onClose} />}</aside>;
 }
 
 /** 将连接状态转换为紧凑的用户可见文本。 */

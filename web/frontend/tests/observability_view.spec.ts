@@ -28,6 +28,7 @@ const observability: Observability = {
     { turn_id: turnId, state: "RUN", duration_ms: 36058 },
     { turn_id: "turn-2", state: "RESPOND", duration_ms: 48 },
   ],
+  multi_agent_runs: [],
   tool_calls: [{ turn_id: turnId, tool_name: "web_fetch", duration_ms: 4331, error: null }],
 };
 

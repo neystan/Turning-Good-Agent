@@ -39,6 +39,17 @@ def _decode_redirect_url(url: str) -> str:
     return clean_url
 
 
+def _decode_ddg_url(url: str) -> str:
+    """从 DuckDuckGo 跳转链接（uddg 参数）中解码真实 URL。"""
+    clean_url = html.unescape(url)
+    match = re.search(r"[?&]uddg=([^&]+)", clean_url)
+    if match:
+        decoded = unquote(match.group(1))
+        if decoded.startswith(("http://", "https://")):
+            return decoded
+    return clean_url
+
+
 def _split_duckduckgo_text(text: str) -> tuple[str, str]:
     """拆分 DuckDuckGo 标题和摘要。"""
     clean_text = _compact_text(text)
@@ -63,10 +74,26 @@ def _iter_duckduckgo_topics(items: list[Any]) -> list[dict[str, Any]]:
 
 
 def _looks_blocked(body: str) -> bool:
-    """判断搜索页是否被 challenge 或验证码拦截。"""
+    """判断搜索页是否被 challenge、验证码拦截。"""
     lowered = body.lower()
-    blocked_markers = ("anomaly.js", "captcha", "unusual traffic", "verify you are human")
+    blocked_markers = (
+        "anomaly.js",
+        "captcha",
+        "unusual traffic",
+        "verify you are human",
+    )
     return any(marker in lowered for marker in blocked_markers)
+
+
+def _looks_like_yahoo_consent(body: str) -> bool:
+    """检测 Yahoo 是否返回了同意条款/登录页而非搜索结果页。"""
+    lowered = body.lower()
+    if "collectconsent" in lowered or "consent.yahoo.com" in lowered:
+        return True
+    # 同时出现 consent 与 yahoo，且没有搜索结果结构，视为被拦截
+    if "consent" in lowered and "yahoo" in lowered and "algo-sr" not in lowered:
+        return True
+    return False
 
 
 def _compact_text(raw: str) -> str:
@@ -106,6 +133,7 @@ class WebFetchTool:
     """抓取网页正文。"""
 
     name = "web_fetch"
+    worker_read_only = True
     source = "builtin"
     discoverable = True
     parallel_safe = True
@@ -139,6 +167,7 @@ class WebSearchTool:
     """搜索网页。"""
 
     name = "web_search"
+    worker_read_only = True
     source = "builtin"
     discoverable = True
     parallel_safe = True
@@ -163,9 +192,17 @@ class WebSearchTool:
         if duck_results:
             return ToolResult("\n".join(duck_results))
         if duck_error:
-            errors.append(f"api.duckduckgo.com {duck_error}")
+            errors.append(f"html.duckduckgo.com {duck_error}")
         else:
-            errors.append("api.duckduckgo.com 未返回结果")
+            errors.append("html.duckduckgo.com 未返回结果")
+
+        bing_results, bing_error = await self._search_bing(query, count)
+        if bing_results:
+            return ToolResult("\n".join(bing_results))
+        if bing_error:
+            errors.append(f"www.bing.com {bing_error}")
+        else:
+            errors.append("www.bing.com 未返回结果")
 
         url = "https://search.yahoo.com/search?p=" + quote_plus(query)
         for _attempt in range(_SEARCH_BACKEND_ATTEMPTS):
@@ -174,7 +211,7 @@ class WebSearchTool:
             except Exception as exc:
                 errors.append(str(exc))
                 continue
-            if _looks_blocked(body):
+            if _looks_blocked(body) or _looks_like_yahoo_consent(body):
                 errors.append("被搜索服务拦截")
                 break
             results = self._parse_results(body, count)
@@ -187,47 +224,89 @@ class WebSearchTool:
 
     @staticmethod
     async def _search_duckduckgo(query: str, count: int) -> tuple[list[str], str | None]:
-        """调用 DuckDuckGo API 搜索。"""
-        url = "https://api.duckduckgo.com/?q=" + quote_plus(query) + "&format=json&no_html=1&skip_disambig=1"
+        """使用 DuckDuckGo HTML 版接口搜索（即时答案 API 对普通查询常返回空结果）。"""
+        url = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
         try:
             _content_type, body = await _fetch_url(url, 12.0, security.MAX_WEB_RESPONSE_BYTES)
-            payload = json.loads(body)
         except Exception as exc:
             return [], str(exc)
+        if _looks_blocked(body):
+            return [], "被搜索服务拦截"
+        results = WebSearchTool._parse_ddg_html_results(body, count)
+        if results:
+            return results, None
+        return [], "未解析到结果"
 
+    @staticmethod
+    def _parse_ddg_html_results(body: str, count: int) -> list[str]:
+        """解析 DuckDuckGo HTML 版搜索结果。"""
         results: list[str] = []
         seen: set[str] = set()
-        candidates: list[tuple[str, str, str]] = []
-        abstract_url = payload.get("AbstractURL")
-        abstract_text = payload.get("AbstractText")
-        heading = payload.get("Heading")
-        if isinstance(abstract_url, str) and isinstance(abstract_text, str) and abstract_url and abstract_text:
-            candidates.append((abstract_url, str(heading or abstract_text), abstract_text))
-        related = payload.get("RelatedTopics")
-        if isinstance(related, list):
-            for topic in _iter_duckduckgo_topics(related):
-                first_url = topic.get("FirstURL")
-                text = topic.get("Text")
-                if not isinstance(first_url, str) or not isinstance(text, str):
-                    continue
-                title, snippet = _split_duckduckgo_text(text)
-                candidates.append((first_url, title, snippet))
-
-        for url, title, snippet in candidates:
-            if url in seen:
+        block_re = re.compile(r'<div class="result[^"]*"[^>]*>([\s\S]*?)<div class="clear"></div>', re.I)
+        for block in block_re.findall(body):
+            title_match = re.search(r'class="result__a"\s+href="([^"]+)"[^>]*>([\s\S]*?)</a>', block)
+            if not title_match:
                 continue
-            seen.add(url)
-            clean_title = _compact_text(title)
+            clean_url = _decode_ddg_url(title_match.group(1))
+            if clean_url in seen:
+                continue
+            seen.add(clean_url)
+            clean_title = _compact_text(title_match.group(2))
             if not clean_title:
                 continue
-            line = f"{len(results) + 1}. {clean_title} | {url}"
-            clean_snippet = _compact_text(snippet)
-            if clean_snippet and clean_snippet != clean_title:
-                line += f" | {clean_snippet}"
+            line = f"{len(results) + 1}. {clean_title} | {clean_url}"
+            snippet_match = re.search(r'class="result__snippet"[^>]*>([\s\S]*?)</a>', block)
+            if snippet_match:
+                clean_snippet = _compact_text(snippet_match.group(1))
+                if clean_snippet and clean_snippet != clean_title:
+                    line += f" | {clean_snippet}"
             results.append(line)
             if len(results) >= count:
                 break
-        return results, None
+        return results
+
+    @staticmethod
+    async def _search_bing(query: str, count: int) -> tuple[list[str], str | None]:
+        """使用 Bing HTML 版接口搜索。"""
+        url = "https://www.bing.com/search?q=" + quote_plus(query) + "&count=" + str(count)
+        try:
+            _content_type, body = await _fetch_url(url, 12.0, security.MAX_WEB_RESPONSE_BYTES)
+        except Exception as exc:
+            return [], str(exc)
+        if _looks_blocked(body):
+            return [], "被搜索服务拦截"
+        results = WebSearchTool._parse_bing_results(body, count)
+        if results:
+            return results, None
+        return [], "未解析到结果"
+
+    @staticmethod
+    def _parse_bing_results(body: str, count: int) -> list[str]:
+        """解析 Bing HTML 搜索结果（li.b_algo）。"""
+        results: list[str] = []
+        seen: set[str] = set()
+        block_re = re.compile(r'<li class="b_algo"[\s\S]*?</li>', re.I)
+        for block in block_re.findall(body):
+            link_match = re.search(r'<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)</a>', block)
+            if not link_match:
+                continue
+            clean_url = link_match.group(1)
+            if clean_url in seen:
+                continue
+            seen.add(clean_url)
+            clean_title = _compact_text(link_match.group(2))
+            if not clean_title:
+                continue
+            line = f"{len(results) + 1}. {clean_title} | {clean_url}"
+            snippet_match = re.search(r'<p[^>]*>([\s\S]*?)</p>', block)
+            if snippet_match:
+                clean_snippet = _compact_text(snippet_match.group(1))
+                if clean_snippet and clean_snippet != clean_title:
+                    line += f" | {clean_snippet}"
+            results.append(line)
+            if len(results) >= count:
+                break
+        return results
 
     @staticmethod
     def _parse_results(body: str, count: int) -> list[str]:

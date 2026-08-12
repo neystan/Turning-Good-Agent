@@ -10,6 +10,7 @@ from uuid import uuid4
 from ..bus.messages import ChannelRoute, OutboundMessage, Recipient
 from ..bus.queue import AsyncMessageBus
 from ..llm.types import ToolCall
+from ..multi_agent.events import MULTI_AGENT_LIVE_EVENT_FIELDS
 from ..web.backend.coordinator import WebTurnControl
 
 
@@ -98,6 +99,15 @@ class WebChannelAdapter:
     async def on_error(self, content: str) -> None:
         """由 Runtime 终态 OutboundMessage 统一发送错误内容。"""
         del content
+
+    # 将固定字段的 Multi-Agent 事件投影到现有 Web 通道。
+    async def on_multi_agent_event(self, event_type: str, payload: Mapping[str, Any]) -> None:
+        safe_payload = {
+            key: value
+            for key, value in payload.items()
+            if key in MULTI_AGENT_LIVE_EVENT_FIELDS
+        }
+        await self._publish(event_type, safe_payload)
 
     async def request_tool_approval(self, call: ToolCall) -> str | None:
         """发布审批卡并等待当前会话的用户决定。"""

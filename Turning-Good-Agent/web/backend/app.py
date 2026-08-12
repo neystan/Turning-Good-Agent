@@ -468,6 +468,10 @@ def create_app(gateway: "GatewayHost") -> FastAPI:
             "session": _session_dict(session),
             "traces": await supervisor.current_runtime.sessions.store.all_turn_traces(session_id),
             "token_usage": await supervisor.current_runtime.sessions.store.all_true_token_usage(session_id),
+            "multi_agent_runs": await supervisor.current_runtime.sessions.store.read_multi_agent_runs(
+                session_id,
+                limit=20,
+            ),
             "tool_calls": [
                 _tool_call_dict(item) for item in await supervisor.current_runtime.sessions.store.all_tool_calls(session_id)
             ],
@@ -618,10 +622,16 @@ def create_app(gateway: "GatewayHost") -> FastAPI:
                 try:
                     if action_type == "message.send":
                         validate_bound_session(action)
+                        send_options = (
+                            {"multi_agent_mode": action.get("multi_agent_mode")}
+                            if "multi_agent_mode" in action
+                            else {}
+                        )
                         accepted_request_id = await gateway.cli_coordinator.send(
                             route,
                             require_text(action, "request_id"),
                             require_text(action, "content"),
+                            **send_options,
                         )
                         await websocket.send_json(
                             {
@@ -710,7 +720,7 @@ def create_app(gateway: "GatewayHost") -> FastAPI:
                     if subscribed_session is not None:
                         coordinator.hub.unsubscribe(subscribed_session, subscribed_queue)
                     after = action.get("after_event_id")
-                    replay, subscribed_queue = coordinator.hub.subscribe(
+                    replay, subscribed_queue = await coordinator.hub.subscribe(
                         session_id, int(after) if after is not None else None
                     )
                     subscribed_session = session_id
@@ -726,10 +736,16 @@ def create_app(gateway: "GatewayHost") -> FastAPI:
                             session = await supervisor.current_runtime.sessions.store.load_session(session_id)
                             if session is not None and session.archived:
                                 raise ValueError("请先恢复已归档会话")
+                        send_options = (
+                            {"multi_agent_mode": action.get("multi_agent_mode")}
+                            if "multi_agent_mode" in action
+                            else {}
+                        )
                         session_id, request_id = await coordinator.send(
                             session_id,
                             str(action.get("content", "")),
                             client_action_id=action_id,
+                            **send_options,
                         )
                     except (ValueError, RuntimeError) as exc:
                         await send_action_error(str(exc), action_id)

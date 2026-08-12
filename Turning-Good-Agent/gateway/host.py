@@ -196,6 +196,7 @@ class GatewayHost:
                 return
             self.instance_lock.acquire()
             try:
+                await self.current_runtime.sessions.store.recover_interrupted_runs()
                 if self.settings.gateway.auth_token is None:
                     self.settings.gateway.auth_token = load_or_create_gateway_token(self._config_path)
                 await self.runtime_supervisor.start()

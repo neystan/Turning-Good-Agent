@@ -9,6 +9,16 @@
     "max_context_tokens": 300000,
     "max_tool_result_tokens": 8000
   },
+  "multi_agent": {
+    "enabled": false,
+    "run_timeout_seconds": 3600,
+    "worker_timeout_seconds": 900,
+    "max_workers_per_run": 8,
+    "max_concurrent_workers_per_run": 4,
+    "max_concurrent_workers_global": 8,
+    "worker_result_token_limit": 60000,
+    "parent_result_token_limit": 120000
+  },
   "memory": {
     "compact_token_threshold": 200000,
     "recent_window_token_limit": 20000

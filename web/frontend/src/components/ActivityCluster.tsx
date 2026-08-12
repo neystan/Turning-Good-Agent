@@ -2,17 +2,20 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, CircleAlert, CircleStop, LoaderCircle, ShieldAlert } from "lucide-react";
 
 import { ScrollArea } from "./ScrollArea";
+import { MultiAgentRunCard } from "./MultiAgentRunCard";
 import { buildActivitySteps, buildDetailActivitySteps, latestActivityStep } from "../state/activity_steps";
-import type { TaskEvent, TurnState } from "../types";
+import type { MultiAgentRunSummary, TaskEvent, TurnState } from "../types";
 
 type ActivityClusterProps = {
   turn: TurnState;
   onResolveApproval: (approvalId: string, approved: boolean) => void;
+  onOpenMultiAgent: (run: MultiAgentRunSummary) => void;
+  onStop: () => void;
   actionsEnabled?: boolean;
 };
 
 /** 渲染只包含真实任务事件的可折叠活动簇。 */
-export function ActivityCluster({ turn, onResolveApproval, actionsEnabled = true }: ActivityClusterProps) {
+export function ActivityCluster({ turn, onResolveApproval, onOpenMultiAgent, onStop, actionsEnabled = true }: ActivityClusterProps) {
   const running = turn.status === "queued" || turn.status === "running" || turn.status === "stopping";
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -36,11 +39,13 @@ export function ActivityCluster({ turn, onResolveApproval, actionsEnabled = true
     if (open && list && atBottomRef.current) list.scrollTop = list.scrollHeight;
   }, [open, steps.length]);
 
-  if (!steps.length && !approval && !running) return null;
+  const multiAgentRuns = turn.multiAgentRuns || [];
+  const hasActivity = Boolean(steps.length || approval || running);
+  if (!hasActivity && !multiAgentRuns.length) return null;
   const toolCount = turn.events.filter((event) => event.type === "tool.started").length;
   const summary = approval ? waitingApprovalSummary(approval.toolName) : running ? runningSummary(turn.status, latestStep, turn.startedAt, now) : completedSummary(turn.status, toolCount, turn.startedAt, turn.finishedAt);
   const expandable = detailSteps.length > 0;
-  return <section className={`activity-cluster is-${turn.status}`} aria-label="任务执行过程"><button className="activity-toggle" type="button" disabled={!expandable} onClick={() => setOpen((value) => !value)} aria-expanded={expandable && open}>{running ? <LoaderCircle className="activity-spinner" size={13} aria-hidden="true" /> : <StatusIcon status={turn.status} />}<span>{summary}</span>{expandable && <ChevronDown size={12} className={open ? "" : "rotated"} aria-hidden="true" />}</button>{open && <ScrollArea viewportRef={stepViewportRef} className="activity-steps" onViewportScroll={() => { const list = stepViewportRef.current; if (list) atBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 20; }}><ol className="activity-steps-list">{detailSteps.map((step) => <li className={`is-${step.tone}`} key={step.key}><span className="activity-marker" /><div><strong>{step.label}</strong>{step.detail && <small>{step.detail}</small>}</div></li>)}</ol></ScrollArea>}{approval && <ApprovalBar approval={approval} enabled={actionsEnabled} onResolve={onResolveApproval} />}</section>;
+  return <section className={`activity-cluster is-${turn.status}`} aria-label="任务执行过程">{hasActivity && <><button className="activity-toggle" type="button" disabled={!expandable} onClick={() => setOpen((value) => !value)} aria-expanded={expandable && open}>{running ? <LoaderCircle className="activity-spinner" size={13} aria-hidden="true" /> : <StatusIcon status={turn.status} />}<span>{summary}</span>{expandable && <ChevronDown size={12} className={open ? "" : "rotated"} aria-hidden="true" />}</button>{open && <ScrollArea viewportRef={stepViewportRef} className="activity-steps" onViewportScroll={() => { const list = stepViewportRef.current; if (list) atBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 20; }}><ol className="activity-steps-list">{detailSteps.map((step) => <li className={`is-${step.tone}`} key={step.key}><span className="activity-marker" /><div><strong>{step.label}</strong>{step.detail && <small>{step.detail}</small>}</div></li>)}</ol></ScrollArea>}</>}{multiAgentRuns.map((run) => <MultiAgentRunCard key={run.run_id} run={run} onOpen={onOpenMultiAgent} onStop={onStop} />)}{approval && <ApprovalBar approval={approval} enabled={actionsEnabled} onResolve={onResolveApproval} />}</section>;
 }
 
 /** 优先显示最近真实动作，空事件阶段才显示中性运行状态。 */

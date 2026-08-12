@@ -89,6 +89,26 @@
 
 .composer-action, .composer-action.is-send, .composer-action.is-stop, .composer-action.is-send:hover, .composer-action.is-stop:hover { width: 30px; min-width: 30px; min-height: 30px; height: 30px; margin-top: 2px; }
 
+/* Multi-Agent 模式保持在 Composer 的次级控制层，不改变输入区高度。 */
+.multi-agent-mode { display: inline-flex; align-items: center; min-width: 0; }
+
+.multi-agent-mode-options { display: inline-flex; min-height: 30px; overflow: hidden; border-radius: var(--radius-control); background: var(--surface-raised); }
+
+.multi-agent-mode-options button { min-width: 48px; border: 0; padding: 0 9px; background: transparent; color: var(--muted); cursor: pointer; font-size: .75rem; line-height: 1; }
+
+.multi-agent-mode-options button:hover:not(:disabled), .multi-agent-mode-options button.is-selected { background: var(--surface-hover); color: var(--text); }
+
+.multi-agent-mode-options button.is-selected { font-weight: 600; }
+
+.multi-agent-mode-options button:disabled { cursor: not-allowed; opacity: .52; }
+
+.multi-agent-mode-reason { max-width: 12rem; margin-left: 7px; overflow: hidden; color: var(--muted); font-size: .6875rem; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 660px) {
+  .multi-agent-mode-reason { display: none; }
+  .multi-agent-mode-options button { min-width: 44px; padding-inline: 7px; }
+}
+
 .composer textarea { border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
 
 .permission-menu [role="menuitemradio"] { border-radius: var(--radius-control); }
@@ -212,7 +232,7 @@
   height: 52px;
   min-height: 52px;
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr) 36px 36px;
+  grid-template-columns: max-content max-content minmax(0, 1fr) 36px 36px;
   align-items: center;
   padding: 8px 10px;
 }
