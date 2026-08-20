@@ -23,6 +23,7 @@ const fields: FieldDefinition[] = [
   { group: "llm", field: "max_retries", label: "最大重试次数", type: "number" },
   { group: "llm", field: "retry_delay_seconds", label: "重试间隔（秒）", type: "number" },
   { group: "llm", field: "streaming_enabled", label: "启用流式输出", type: "switch" },
+  { group: "llm", field: "supports_vision", label: "支持图片理解", type: "switch" },
   { group: "runtime", field: "max_tool_rounds", label: "最大工具轮数", type: "number" },
   { group: "runtime", field: "max_tool_calls_per_round", label: "每轮最大工具调用数", type: "number" },
   { group: "runtime", field: "parallel_tool_calls_enabled", label: "启用并行工具调用", type: "switch" },

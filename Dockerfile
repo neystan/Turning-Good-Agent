@@ -5,8 +5,8 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN pip install --no-cache-dir \
-    "openai>=1.0.0" \
+RUN pip install --no-cache-dir --timeout 120 --retries 10 \
+    "openai>=1.0.0,<3.0.0" \
     "tiktoken>=0.7.0" \
     "mcp>=1.26.0,<2.0.0" \
     "fastapi>=0.115.0" \
@@ -15,7 +15,12 @@ RUN pip install --no-cache-dir \
     "httpx>=0.27,<1.0" \
     "lark-oapi>=1.4,<2.0" \
     "tzdata>=2024.1" \
-    "prompt_toolkit>=3.0.0"
+    "prompt_toolkit>=3.0.0" \
+    "python-multipart>=0.0.9,<1.0.0" \
+    "pypdf>=5.0.0,<6.0.0" \
+    "python-docx>=1.1.0,<2.0.0" \
+    "openpyxl>=3.1.0,<4.0.0" \
+    "python-pptx>=1.0.0,<2.0.0"
 
 FROM python-base AS development
 

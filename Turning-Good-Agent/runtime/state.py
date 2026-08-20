@@ -14,6 +14,8 @@ from ..sessions.types import MessageRecord
 from ..sessions.token_counter import count_content_tokens
 from ..multi_agent.delegate_tool import DelegateMultiAgentInvocation
 from ..multi_agent.types import DelegateParentTurn, RequestMode, parse_multi_agent_mode
+from ..web.attachments.models import AttachmentOwner, ResolvedAttachment
+from ..web.attachments.tool import ReadAttachmentTool
 
 if TYPE_CHECKING:
     from .runtime import AgentRuntime
@@ -151,6 +153,15 @@ async def build(runtime: AgentRuntime, ctx: TurnContext) -> str:
         ctx.error = "上下文过大，已拒绝本轮请求。请先清理会话或提高 max_context_tokens。"
         ctx.final_content = f"请求失败：{ctx.error}"
         return "rejected"
+    images = [item for item in msg.attachments if getattr(getattr(item, "metadata", None), "source", None) == "image"]
+    if images and not bool(getattr(runtime.agent_loop.llm, "supports_vision", False)):
+        ctx.error = "当前 active LLM 不支持图片理解，请移除图片或切换支持视觉的模型。"
+        ctx.final_content = f"请求失败：{ctx.error}"
+        return "rejected"
+    if msg.attachments and msg.route.channel == "web":
+        owner = AttachmentOwner(msg.route.principal_id, msg.route.channel, msg.route.conversation_id)
+        resolved = {item.metadata.attachment_id: item for item in msg.attachments if isinstance(item, ResolvedAttachment)}
+        ctx.attachment_tool = ReadAttachmentTool(None, owner, resolved)
     ctx.multi_agent_invocation = _multi_agent_invocation(runtime, ctx)
     ctx.model_messages = runtime.context_builder.build(
         summary=session_context.summary,
@@ -158,6 +169,7 @@ async def build(runtime: AgentRuntime, ctx: TurnContext) -> str:
         user_content=msg.content,
         profile_memory=profile_memory.read(),
         skills=runtime.skills.list_skills(),
+        attachments=msg.attachments,
     )
     return "ok"
 
@@ -166,12 +178,18 @@ async def run(runtime: AgentRuntime, ctx: TurnContext) -> str:
     """执行 AgentLoop。"""
     if ctx.session is None:
         raise RuntimeError("RUN 缺少已加载的 session。")
+    run_options: dict[str, Any] = {
+        "allowed_tool_names": ctx.allowed_tool_names,
+        "multi_agent_invocation": ctx.multi_agent_invocation,
+    }
+    attachment_tool = getattr(ctx, "attachment_tool", None)
+    if attachment_tool is not None:
+        run_options["attachment_tool"] = attachment_tool
     result = await runtime.agent_loop.run(
         ctx.model_messages,
         ctx.channel_adapter,
         runtime.settings.tool_permissions.auto_approve_tools,
-        allowed_tool_names=ctx.allowed_tool_names,
-        multi_agent_invocation=ctx.multi_agent_invocation,
+        **run_options,
     )
     ctx.final_content = result.final_content
     ctx.tool_calls = result.tool_calls
@@ -294,6 +312,7 @@ async def save(runtime: AgentRuntime, ctx: TurnContext) -> str:
         count_content_tokens(ctx.inbound.content),
         message_id=ctx.inbound.id,
         created_at=ctx.inbound.created_at,
+        metadata={"attachments": [item.metadata.public_dict() for item in ctx.inbound.attachments if isinstance(item, ResolvedAttachment)]} if ctx.inbound.attachments else None,
     )
     for guidance in ctx.consumed_guidance:
         await sessions.save_user_message(session_id, guidance, count_content_tokens(guidance))

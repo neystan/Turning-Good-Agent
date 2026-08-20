@@ -116,3 +116,4 @@ class TurnContext:
     allowed_tool_names: frozenset[str] | None = None
     principal_context: PrincipalRuntimeContext | None = None
     multi_agent_invocation: DelegateMultiAgentInvocation | None = None
+    attachment_tool: Any | None = None

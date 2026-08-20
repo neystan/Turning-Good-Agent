@@ -152,6 +152,7 @@ class LLMSettings:
     max_retries: int = 2
     retry_delay_seconds: float = 0.5
     streaming_enabled: bool = True
+    supports_vision: bool = False
 
 
 @dataclass(slots=True)
@@ -235,6 +236,7 @@ class Settings:
                 "max_retries",
                 "retry_delay_seconds",
                 "streaming_enabled",
+                "supports_vision",
             ):
                 if key in llm:
                     setattr(settings.llm, key, llm[key])

@@ -114,6 +114,7 @@ class PrincipalSessionReader:
         *,
         message_id: str | None = None,
         created_at: str | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> MessageRecord:
         """写入当前主体会话的用户消息。"""
         await self._require_session(session_id)
@@ -123,6 +124,7 @@ class PrincipalSessionReader:
             token_count,
             message_id=message_id,
             created_at=created_at,
+            metadata=metadata,
         )
 
     async def save_assistant_message(

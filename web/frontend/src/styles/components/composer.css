@@ -232,7 +232,7 @@
   height: 52px;
   min-height: 52px;
   display: grid;
-  grid-template-columns: max-content max-content minmax(0, 1fr) 36px 36px;
+  grid-template-columns: max-content max-content max-content minmax(0, 1fr) 36px 36px;
   align-items: center;
   padding: 8px 10px;
 }

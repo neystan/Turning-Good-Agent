@@ -28,6 +28,7 @@ class OpenAICompatibleLLM:
         timeout_seconds: float = 60.0,
         max_retries: int = 2,
         retry_delay_seconds: float = 0.5,
+        supports_vision: bool = False,
     ) -> None:
         """保存模型连接配置并初始化 SDK client。"""
         self.api_key = api_key
@@ -36,6 +37,7 @@ class OpenAICompatibleLLM:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.retry_delay_seconds = retry_delay_seconds
+        self.supports_vision = bool(supports_vision)
         self.client = AsyncOpenAI(
             api_key=self.api_key,
             base_url=self.base_url,

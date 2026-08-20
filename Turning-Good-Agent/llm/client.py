@@ -7,6 +7,8 @@ from .types import LLMChunk, LLMResponse
 class LLMProvider(Protocol):
     """定义 Runtime 需要的最小模型接口。"""
 
+    supports_vision: bool
+
     async def complete(
         self,
         messages: list[dict[str, Any]],

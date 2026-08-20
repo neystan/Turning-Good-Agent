@@ -1,4 +1,4 @@
-import type { ChatMessage, CommandCatalog, ConfigApplyRequest, ContextWindow, ControlConfig, LlmTestResult, McpServerDetail, McpServerSummary, Observability, Session, SessionContextReadModel, ToolCallPage, ToolCatalog } from "./types";
+import type { AttachmentMetadata, ChatMessage, CommandCatalog, ConfigApplyRequest, ContextWindow, ControlConfig, LlmTestResult, McpServerDetail, McpServerSummary, Observability, Session, SessionContextReadModel, ToolCallPage, ToolCatalog } from "./types";
 
 /** 保存 REST 调用失败时的状态码与后端错误内容。 */
 export class ApiError extends Error {
@@ -11,7 +11,8 @@ export class ApiError extends Error {
 
 /** 调用本机 Web Host 的 REST 接口并统一转换错误。 */
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
+  const headers = options?.body instanceof FormData ? undefined : { "Content-Type": "application/json" };
+  const response = await fetch(path, { headers, ...options });
   if (!response.ok) {
     const body = await response.text();
     let message = body || "请求失败";
@@ -35,6 +36,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   listSessions: (archived = false) => request<Session[]>(`/api/sessions?archived=${archived}`),
+  createSession: () => request<Session>("/api/sessions", { method: "POST" }),
   messages: (id: string, signal?: AbortSignal) =>
     request<ChatMessage[]>(`/api/sessions/${encodeURIComponent(id)}/messages`, { signal }),
   observability: (id: string) => request<Observability>(`/api/sessions/${encodeURIComponent(id)}/observability`),
@@ -54,4 +56,10 @@ export const api = {
   toolCalls: (id: string, cursor?: string) => request<ToolCallPage>(`/api/control/sessions/${encodeURIComponent(id)}/tool-calls${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`),
   mcpServers: () => request<{ servers: McpServerSummary[] }>("/api/control/mcp/servers"),
   mcpServer: (name: string) => request<McpServerDetail>(`/api/control/mcp/servers/${encodeURIComponent(name)}`)
+  ,uploadAttachments: (sessionId: string, files: File[]) => {
+    const body = new FormData();
+    files.forEach((file) => body.append("files", file, file.name));
+    return request<{ attachments: AttachmentMetadata[] }>(`/api/control/sessions/${encodeURIComponent(sessionId)}/attachments`, { method: "POST", body });
+  },
+  modelCapabilities: () => request<{ supports_vision: boolean }>("/api/control/model-capabilities")
 };

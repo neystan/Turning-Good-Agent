@@ -23,4 +23,5 @@ def build_llm(settings: Settings) -> LLMProvider:
         timeout_seconds=settings.llm.timeout_seconds,
         max_retries=settings.llm.max_retries,
         retry_delay_seconds=settings.llm.retry_delay_seconds,
+        supports_vision=settings.llm.supports_vision,
     )

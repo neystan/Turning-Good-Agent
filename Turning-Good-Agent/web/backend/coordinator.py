@@ -12,6 +12,8 @@ from ...bus.messages import ChannelRoute, InboundMessage, OutboundMessage, Recip
 from ...bus.queue import AsyncMessageBus
 from ...gateway.routing import derive_session_id
 from ...multi_agent.events import MULTI_AGENT_EVENT_FIELDS
+from ..attachments.models import AttachmentOwner
+from ..attachments.store import WebAttachmentService
 from .events import SessionEventHub
 
 
@@ -131,6 +133,7 @@ class WebSessionCoordinator:
         on_idle: IdleCallback | None = None,
         bus: AsyncMessageBus | None = None,
         execution_semaphore: asyncio.Semaphore | None = None,
+        attachment_service: WebAttachmentService | None = None,
     ) -> None:
         self._submit = submit
         self._complete_route_turn = complete_route_turn
@@ -145,6 +148,7 @@ class WebSessionCoordinator:
         self._accepted_actions: dict[str, tuple[str, str]] = {}
         self._action_lock = asyncio.Lock()
         self._catalog_actions: dict[str, set[str]] = {}
+        self._attachment_service = attachment_service
 
     async def start(self) -> None:
         """保留 Gateway 生命周期中的统一启动入口。"""
@@ -209,10 +213,11 @@ class WebSessionCoordinator:
         content: str,
         client_action_id: str | None = None,
         multi_agent_mode: str | None = None,
+        attachment_ids: list[str] | None = None,
     ) -> tuple[str, str]:
         """向 Gateway 提交一条拥有独立 request-id 的普通消息。"""
         text = content.strip()
-        if not text:
+        if not text and not attachment_ids:
             raise ValueError("消息不能为空")
         if self._closed:
             raise RuntimeError("Web Gateway 已关闭")
@@ -222,6 +227,12 @@ class WebSessionCoordinator:
             if receipt is not None:
                 return receipt
             route = await self._route_for_session(session_id)
+            attachments = []
+            if attachment_ids:
+                if self._attachment_service is None:
+                    raise RuntimeError("Web 附件服务未启动")
+                owner = AttachmentOwner(route.principal_id, route.channel, route.conversation_id)
+                attachments = self._attachment_service.resolve(owner, attachment_ids)
             request_id = str(uuid4())
             await self.hub.publish(route.session_id, request_id, "task.queued")
 
@@ -238,7 +249,13 @@ class WebSessionCoordinator:
                     raise
 
             accepted = await self._submit(
-                InboundMessage(request_id, route=route, content=text, metadata=mode_metadata),
+                InboundMessage(
+                    request_id,
+                    route=route,
+                    content=text,
+                    attachments=attachments,
+                    metadata=mode_metadata,
+                ),
                 dispatch=dispatch,
             )
             if not accepted:
@@ -250,6 +267,12 @@ class WebSessionCoordinator:
             if client_action_id:
                 self._remember_action_receipt(client_action_id, receipt)
             return receipt
+
+    async def create_session(self) -> Any:
+        """创建一个当前 Web 主体的空会话，供发送前上传附件绑定。"""
+        runtime = await _resolve(self._runtime_provider())
+        route = await self._route_for_session(None)
+        return await runtime.sessions.load_or_create(route)
 
     async def send_guidance(self, session_id: str, content: str) -> None:
         """将补充方向加入正在运行的指定会话。"""

@@ -149,6 +149,7 @@ class SessionManager:
         *,
         message_id: str | None = None,
         created_at: str | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> MessageRecord:
         """保存用户消息。"""
         return await self.store.save_message(
@@ -158,6 +159,7 @@ class SessionManager:
             token_count,
             message_id=message_id,
             created_at=created_at,
+            metadata=metadata,
         )
 
     async def save_assistant_message(

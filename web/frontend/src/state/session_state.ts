@@ -89,7 +89,7 @@ function addOptimisticMessage(state: SessionState, input: PendingActionInput): S
     role: "user",
     content: input.content,
     created_at: input.createdAt,
-    metadata: {},
+    metadata: input.attachments?.length ? { attachments: input.attachments } : {},
     delivery: "sending",
     client_action_id: input.id,
   };

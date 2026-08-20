@@ -39,6 +39,7 @@ from ..web.backend.config_control import WebConfigControlService
 from ..web.backend.coordinator import WebSessionCoordinator
 from ..web.backend.proactive_control import WebProactiveControlService
 from ..web.backend.proactive_events import GatewayProactiveState, ProactiveEventHub
+from ..web.attachments.store import WebAttachmentService
 from .auth import load_or_create_gateway_token
 from .catalog_actions import CatalogActionExecutor
 from .instance_lock import GatewayInstanceLock
@@ -89,6 +90,7 @@ class GatewayHost:
         self._lifecycle_lock = asyncio.Lock()
         self._binding_delete_locks: dict[tuple[Platform, str], asyncio.Lock] = {}
         self._turn_slots = asyncio.Semaphore(settings.web.max_concurrent_sessions)
+        self.attachment_service = WebAttachmentService(settings.data_dir)
 
         self.web_coordinator = WebSessionCoordinator(
             submit=self._submit_turn,
@@ -99,6 +101,7 @@ class GatewayHost:
             on_idle=self._notify_idle,
             bus=self.bus,
             execution_semaphore=self._turn_slots,
+            attachment_service=self.attachment_service,
         )
         self.proactive_control = WebProactiveControlService(initial_runtime)
         self.proactive_events = ProactiveEventHub(self.proactive_control, self.proactive_owner_state)

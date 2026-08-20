@@ -1,3 +1,6 @@
+import base64
+import json
+from pathlib import Path
 from typing import Any
 
 from .system_prompt import SkillCatalogItem, build_system_prompt, render_skill_catalog
@@ -10,6 +13,35 @@ WORKER_DEPENDENCY_MAX_CHARS = 12_000
 WORKER_DEPENDENCY_MAX_TOKENS = 6_000
 
 
+def _attachment_context(attachments: list[Any]) -> str:
+    descriptors: list[dict[str, Any]] = []
+    has_document = False
+    for attachment in attachments:
+        metadata = getattr(attachment, "metadata", None)
+        attachment_id = getattr(metadata, "attachment_id", None)
+        source = getattr(metadata, "source", None)
+        if not isinstance(attachment_id, str) or source not in {"document", "image"}:
+            continue
+        has_document = has_document or source == "document"
+        descriptors.append(
+            {
+                "attachment_id": attachment_id,
+                "source": source,
+                "filename": str(getattr(metadata, "filename", "")),
+                "mime_type": str(getattr(metadata, "mime_type", "")),
+                "size_bytes": int(getattr(metadata, "size_bytes", 0)),
+            }
+        )
+    if not descriptors:
+        return ""
+    instruction = (
+        "文档内容未自动注入；需要文档内容时调用 read_attachment，并原样传入对应 attachment_id。"
+        if has_document
+        else "图片内容已作为当前请求的多模态输入提供。"
+    )
+    return "当前消息附件 metadata（不含本地路径）：\n" + json.dumps(descriptors, ensure_ascii=False) + "\n" + instruction
+
+
 class ContextBuilder:
     """组装模型调用所需的消息列表。"""
 
@@ -20,6 +52,7 @@ class ContextBuilder:
         user_content: str,
         profile_memory: str | ProfileMemorySnapshot,
         skills: list[SkillCatalogItem] | None = None,
+        attachments: list[Any] | None = None,
     ) -> list[dict[str, Any]]:
         """构建 system、摘要、历史和当前用户消息。"""
         messages: list[dict[str, Any]] = [{"role": "system", "content": build_system_prompt(skills or [])}]
@@ -28,7 +61,27 @@ class ContextBuilder:
             messages.append({"role": "system", "content": f"会话摘要：{summary}"})
         for item in history:
             messages.append({"role": item.role, "content": item.content})
-        messages.append({"role": "user", "content": user_content})
+        current_attachments = attachments or []
+        attachment_context = _attachment_context(current_attachments)
+        current_user_content = user_content
+        if attachment_context:
+            current_user_content = f"{user_content}\n\n{attachment_context}" if user_content else attachment_context
+        image_parts: list[dict[str, Any]] = []
+        for attachment in current_attachments:
+            metadata = getattr(attachment, "metadata", None)
+            path = getattr(attachment, "path", None)
+            if getattr(metadata, "source", None) != "image" or not isinstance(path, Path):
+                continue
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+            image_parts.append({"type": "image_url", "image_url": {"url": f"data:{metadata.mime_type};base64,{encoded}"}})
+        if image_parts:
+            parts: list[dict[str, Any]] = []
+            if current_user_content:
+                parts.append({"type": "text", "text": current_user_content})
+            parts.extend(image_parts)
+            messages.append({"role": "user", "content": parts})
+        else:
+            messages.append({"role": "user", "content": current_user_content})
         return messages
 
     # 组装不携带父历史的固定 Worker 消息。

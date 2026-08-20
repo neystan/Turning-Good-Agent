@@ -2,7 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "re
 import { Check, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 
-import type { ChatMessage, TurnState } from "../types";
+import type { AttachmentMetadata, ChatMessage, TurnState } from "../types";
+import { SentAttachmentCards } from "./AttachmentCards";
 import { shouldFollowLatest } from "../state/chat_scroll";
 import { isCompactCodeBlock } from "../state/code_presentation";
 import { buildTimelineEntries } from "../state/timeline_entries";
@@ -80,18 +81,19 @@ export function ChatTimeline({ sessionId, messages, turns = {}, contentVersion =
 
   const entries = buildTimelineEntries(messages, turns);
   return <section ref={scrollRef} className="chat-scroll" aria-live="polite" onScroll={onScroll}>
-    {entries.map((entry) => entry.kind === "message" ? <MessageView key={entry.id} message={entry.message} onRetry={onRetry} retryEnabled={retryEnabled} /> : <div key={entry.id}>{renderTurn?.(entry.turn)}</div>)}
+    {entries.map((entry) => entry.kind === "message" ? <MessageView key={entry.id} sessionId={sessionId || undefined} message={entry.message} onRetry={onRetry} retryEnabled={retryEnabled} /> : <div key={entry.id}>{renderTurn?.(entry.turn)}</div>)}
     {children}
     {hasUnread && <button className="new-message-button" onClick={scrollToLatest}>有新消息</button>}
   </section>;
 }
 
 /** 渲染一条安全 Markdown 对话消息。 */
-function MessageView({ message, onRetry, retryEnabled }: { message: ChatMessage; onRetry?: (message: ChatMessage) => void; retryEnabled: boolean }) {
+function MessageView({ message, sessionId, onRetry, retryEnabled }: { message: ChatMessage; sessionId?: string; onRetry?: (message: ChatMessage) => void; retryEnabled: boolean }) {
   const stopped = message.role === "assistant" && Boolean(message.metadata.incomplete);
   const failed = message.delivery === "failed";
   const networkFailure = Boolean(message.metadata.network_failure);
-  return <article className={`message ${message.role}`}><div className="message-meta">{message.role === "user" ? "你" : "TGA"}{stopped && <span className="stopped-badge">已停止</span>}{message.delivery === "sending" && <span>发送中</span>}{failed && <><span className="message-error">发送失败</span>{onRetry && <button className="message-retry" type="button" disabled={!retryEnabled} title={retryEnabled ? "重试发送" : "正在重连，恢复后可重试"} onClick={() => onRetry(message)}>重试</button>}</>}{networkFailure && onRetry && <button className="message-retry" type="button" onClick={() => onRetry(message)}>重试</button>}</div><div className="markdown"><ReactMarkdown components={{ code: CodeBlock }}>{message.content}</ReactMarkdown></div></article>;
+  const attachments = Array.isArray(message.metadata.attachments) ? message.metadata.attachments.filter((item): item is AttachmentMetadata => Boolean(item) && typeof item === "object" && typeof (item as { attachment_id?: unknown }).attachment_id === "string") : [];
+  return <article className={`message ${message.role}`}><div className="message-meta">{message.role === "user" ? "你" : "TGA"}{stopped && <span className="stopped-badge">已停止</span>}{message.delivery === "sending" && <span>发送中</span>}{failed && <><span className="message-error">发送失败</span>{onRetry && <button className="message-retry" type="button" disabled={!retryEnabled} title={retryEnabled ? "重试发送" : "正在重连，恢复后可重试"} onClick={() => onRetry(message)}>重试</button>}</>}{networkFailure && onRetry && <button className="message-retry" type="button" onClick={() => onRetry(message)}>重试</button>}</div><SentAttachmentCards attachments={attachments} sessionId={sessionId} />{message.content && <div className="markdown"><ReactMarkdown components={{ code: CodeBlock }}>{message.content}</ReactMarkdown></div>}</article>;
 }
 
 /** 渲染带语言标记和复制按钮的代码块。 */

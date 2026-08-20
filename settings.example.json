@@ -94,6 +94,7 @@
     "api_key": "replace-with-your-key",
     "base_url": "https://api.openai.com/v1",
     "model": "replace-with-your-model",
-    "streaming_enabled": false
+    "streaming_enabled": false,
+    "supports_vision": false
   }
 }

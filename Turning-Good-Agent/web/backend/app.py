@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -16,6 +16,9 @@ from ...channels.registry import ChannelConflictError
 from ...gateway.auth import is_authorized_bearer
 from ...llm.factory import build_llm
 from ...sessions.types import MessageRecord, Session, ToolCallRecord
+from ..attachments.models import AttachmentOwner
+from ..attachments.store import AttachmentNotFoundError
+from ..attachments.validation import AttachmentValidationError
 from .channel_control import ChannelControlService
 from .config_control import ApprovalToolChanges, ConfigApplyRequest, ConfigValidationError, WebConfigControlService
 from .http_errors import config_validation_response
@@ -88,6 +91,7 @@ def create_app(gateway: "GatewayHost") -> FastAPI:
     app.state.proactive_events = proactive_events
     app.state.proactive_owner_state = proactive_owner_state
     app.state.channel_control = channel_control
+    app.state.attachment_service = getattr(gateway, "attachment_service", None)
 
     def proactive_error(exc: Exception) -> HTTPException:
         if isinstance(exc, ProactiveNotFoundError):
@@ -449,6 +453,12 @@ def create_app(gateway: "GatewayHost") -> FastAPI:
         )
         return [_session_dict(item) for item in sessions]
 
+    @app.post("/api/sessions")
+    async def create_web_session() -> dict[str, Any]:
+        """创建空 Web 会话，供附件上传在发送前绑定稳定归属。"""
+        session = await coordinator.create_session()
+        return _session_dict(session)
+
     @app.get("/api/sessions/{session_id}")
     async def get_session(session_id: str) -> dict[str, Any]:
         """返回单个会话元数据。"""
@@ -459,6 +469,36 @@ def create_app(gateway: "GatewayHost") -> FastAPI:
         """返回已持久化的原始对话消息。"""
         await web_session_or_404(session_id)
         return [_message_dict(item) for item in await supervisor.current_runtime.sessions.all_messages(session_id)]
+
+    @app.post("/api/control/sessions/{session_id}/attachments")
+    async def upload_session_attachments(session_id: str, files: list[UploadFile] = File(...)) -> dict[str, object]:
+        session = await web_session_or_404(session_id)
+        owner = AttachmentOwner(session.principal_id, session.channel, session.conversation_id)
+        try:
+            metadata = await gateway.attachment_service.upload_batch(owner, files)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"attachments": [item.public_dict() for item in metadata]}
+
+    @app.get("/api/control/sessions/{session_id}/attachments/{attachment_id}/preview")
+    async def preview_session_attachment(session_id: str, attachment_id: str) -> Response:
+        session = await web_session_or_404(session_id)
+        owner = AttachmentOwner(session.principal_id, session.channel, session.conversation_id)
+        try:
+            resolved = gateway.attachment_service.open_image(owner, attachment_id)
+        except AttachmentValidationError as exc:
+            raise HTTPException(415, str(exc)) from exc
+        except AttachmentNotFoundError as exc:
+            raise HTTPException(404, "附件不存在") from exc
+        return Response(
+            resolved.path.read_bytes(),
+            media_type=resolved.metadata.mime_type,
+            headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+        )
+
+    @app.get("/api/control/model-capabilities")
+    async def model_capabilities() -> dict[str, bool]:
+        return {"supports_vision": bool(getattr(supervisor.current_runtime.agent_loop.llm, "supports_vision", False))}
 
     @app.get("/api/sessions/{session_id}/observability")
     async def get_observability(session_id: str) -> dict[str, Any]:
@@ -509,8 +549,11 @@ def create_app(gateway: "GatewayHost") -> FastAPI:
         """删除一个非活动会话的完整目录。"""
         if coordinator.is_active(session_id):
             raise HTTPException(409, "运行中、等待审批或停止中的会话不能删除")
-        await web_session_or_404(session_id)
+        session = await web_session_or_404(session_id)
         await supervisor.current_runtime.sessions.store.clear_session(session_id)
+        gateway.attachment_service.delete_session(
+            AttachmentOwner(session.principal_id, session.channel, session.conversation_id)
+        )
 
     @app.websocket("/ws/proactive")
     async def proactive_websocket(websocket: WebSocket) -> None:
@@ -741,6 +784,11 @@ def create_app(gateway: "GatewayHost") -> FastAPI:
                             if "multi_agent_mode" in action
                             else {}
                         )
+                        if "attachment_ids" in action:
+                            attachment_ids = action["attachment_ids"]
+                            if not isinstance(attachment_ids, list) or not all(isinstance(item, str) for item in attachment_ids):
+                                raise ValueError("attachment_ids 必须是字符串数组")
+                            send_options["attachment_ids"] = attachment_ids
                         session_id, request_id = await coordinator.send(
                             session_id,
                             str(action.get("content", "")),

@@ -19,6 +19,28 @@ export type ChatMessage = {
   request_id?: string;
 };
 
+export type AttachmentMetadata = {
+  attachment_id: string;
+  source: "document" | "image";
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  processing: "pending" | "ready" | "reading" | "failed" | "unsupported";
+  text_chars?: number;
+  truncated?: boolean;
+  error?: string | null;
+};
+
+export type PendingAttachment = {
+  id: string;
+  file: File;
+  source: "document" | "image";
+  status: "pending" | "uploading" | "ready" | "failed" | "unsupported";
+  metadata?: AttachmentMetadata;
+  error?: string;
+  retryable?: boolean;
+};
+
 export type TaskEvent = {
   event_id?: number;
   session_id: string;
@@ -119,6 +141,7 @@ export type PendingAction = {
   content: string;
   sessionId: string | null;
   createdAt: string;
+  attachments?: AttachmentMetadata[];
   status: "sending" | "sent" | "failed";
   requestId?: string;
   error?: string;
@@ -151,6 +174,7 @@ export type EditableControlConfig = {
     max_retries: number;
     retry_delay_seconds: number;
     streaming_enabled: boolean;
+    supports_vision: boolean;
   };
   runtime: {
     max_tool_rounds: number;

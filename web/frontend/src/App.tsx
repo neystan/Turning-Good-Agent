@@ -17,8 +17,10 @@ import { SessionSocketClient } from "./state/socket_client";
 import { ProactiveSocket } from "./state/proactive_socket";
 import { readSessionCache, shouldWriteSessionCache, writeSessionCache } from "./state/session_cache";
 import { createTextSegment, serializeComposerContent } from "./state/composer_segments";
+import { validateSelectedFiles } from "./attachments";
+import { SentAttachmentCards } from "./components/AttachmentCards";
 import { proactiveRouteFromHash, routeDomain, routeDomainForWire } from "./proactive_types";
-import type { ChatMessage, CommandEntry, ComposerSegment, ConnectionState, ContextWindow, MultiAgentMode, MultiAgentRunSummary, Observability, Session, SessionContextReadModel, TaskEvent, ToolCallPage } from "./types";
+import type { ChatMessage, CommandEntry, ComposerSegment, ConnectionState, ContextWindow, MultiAgentMode, MultiAgentRunSummary, Observability, PendingAttachment, Session, SessionContextReadModel, TaskEvent, ToolCallPage } from "./types";
 import type { Notice } from "./components/NoticeRegion";
 import type { ProactiveDomain, ProactiveNotice, ProactiveRoute, ProactiveSnapshot, ProactiveState } from "./proactive_types";
 
@@ -44,6 +46,8 @@ export function App() {
   const [hydratedSessionId, setHydratedSessionId] = useState<string | null>(null);
   const [sessionState, dispatch] = useReducer(applySessionAction, undefined, createSessionState);
   const [composerSegments, setComposerSegments] = useState<ComposerSegment[]>(() => [createTextSegment()]);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [supportsVision, setSupportsVision] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [inspectorClosing, setInspectorClosing] = useState(false);
   const [inspector, setInspector] = useState<Observability | null>(null);
@@ -72,6 +76,7 @@ export function App() {
   const composerRef = useRef<HTMLElement>(null);
   const inspectorCloseTimer = useRef<number | null>(null);
   const messageActionIds = useRef(new Set<string>());
+  const attachmentActionIds = useRef(new Set<string>());
   const stateSessionId = useRef<string | null>(sessionId);
   const retryRequest = useRef<{ actionId: string; content: string } | null>(null);
   const contextRequestVersion = useRef(0);
@@ -188,11 +193,15 @@ export function App() {
     if (event.type === "error") {
       const isMessageFailure = Boolean(event.client_action_id && messageActionIds.current.delete(event.client_action_id));
       if (event.client_action_id) dispatch({ type: "action.failed", actionId: event.client_action_id, message: event.message || "请求失败" });
+      if (event.client_action_id && attachmentActionIds.current.has(event.client_action_id)) {
+        setPendingAttachments((items) => items.map((item) => ({ ...item, status: item.metadata ? "failed" : item.status, error: event.message || "发送失败" })));
+      }
       if (!isMessageFailure) addNotice(event.message || "请求失败");
       return;
     }
     if (event.type === "message.accepted" && event.client_action_id && event.session_id && event.request_id) {
       messageActionIds.current.delete(event.client_action_id);
+      if (attachmentActionIds.current.delete(event.client_action_id)) setPendingAttachments([]);
       dispatch({ type: "action.accepted", actionId: event.client_action_id, sessionId: event.session_id, requestId: event.request_id });
       if (!sessionIdRef.current) navigate(event.session_id, true);
       void refreshSessions().catch((error: unknown) => addNotice(error instanceof Error ? error.message : "刷新会话失败"));
@@ -214,6 +223,7 @@ export function App() {
     void refreshSessions().catch((error: unknown) => addNotice(error instanceof Error ? error.message : "读取会话失败"));
     void api.uiSettings().then((item) => setAutoApprove(item.auto_approve_tools)).catch((error: unknown) => addNotice(error instanceof Error ? error.message : "读取权限设置失败"));
     void refreshMultiAgentConfig();
+    void api.modelCapabilities().then((caps) => setSupportsVision(caps.supports_vision === true)).catch(() => setSupportsVision(false));
   }, [addNotice, refreshMultiAgentConfig, refreshSessions]);
 
   useEffect(() => {
@@ -346,15 +356,50 @@ export function App() {
   }, [receiveProactiveNotice, receiveProactiveSnapshot]);
 
   /** 仅在 WebSocket 已连接时发送普通消息或运行中 guidance。 */
-  const send = useCallback((contentOverride?: string, retryActionId?: string) => {
+  const send = useCallback(async (contentOverride?: string, retryActionId?: string) => {
     const hasComposerContent = composerSegments.some((segment) => segment.type === "guidance" || Boolean(segment.text));
     const activeSegments = hasComposerContent ? composerSegments : [createTextSegment(sessionState.pendingDraft)];
     const content = (contentOverride || serializeComposerContent(activeSegments)).trim();
-    if (!content || !socketRef.current || connection !== "connected") return;
+    if ((!content && pendingAttachments.length === 0) || !socketRef.current || connection !== "connected") return;
+    if (pendingAttachments.some((item) => item.status === "uploading" || (item.status === "failed" && !item.metadata && !item.retryable))) return;
     const actionId = retryActionId || crypto.randomUUID();
+    let attachmentIds = pendingAttachments.flatMap((item) => item.metadata?.attachment_id ? [item.metadata.attachment_id] : []);
+    let sentAttachmentMetadata = pendingAttachments.flatMap((item) => item.metadata ? [item.metadata] : []);
+    let targetSessionId = sessionId;
+    if (pendingAttachments.length && !targetSessionId) {
+      try {
+        const created = await api.createSession();
+        targetSessionId = created.id;
+        navigate(created.id, true);
+        await refreshSessions();
+      } catch (error) {
+        addNotice(error instanceof Error ? error.message : "创建会话失败");
+        return;
+      }
+    }
+    if (pendingAttachments.length && targetSessionId && attachmentIds.length !== pendingAttachments.length) {
+      setPendingAttachments((items) => items.map((item) => item.metadata ? item : { ...item, status: "uploading", error: undefined, retryable: false }));
+      try {
+        const pending = pendingAttachments.filter((item) => !item.metadata);
+        const uploaded = await api.uploadAttachments(targetSessionId, pending.map((item) => item.file));
+        if (uploaded.attachments.length !== pending.length) throw new Error("附件上传结果数量不一致");
+        let uploadIndex = 0;
+        setPendingAttachments((items) => items.map((item) => {
+          if (item.metadata) return { ...item, status: "ready", error: undefined };
+          const metadata = uploaded.attachments[uploadIndex++];
+          return { ...item, status: "ready", metadata, error: undefined, retryable: false };
+        }));
+        attachmentIds = pendingAttachments.flatMap((item) => item.metadata?.attachment_id ? [item.metadata.attachment_id] : []).concat(uploaded.attachments.map((item) => item.attachment_id));
+        sentAttachmentMetadata = pendingAttachments.flatMap((item) => item.metadata ? [item.metadata] : []).concat(uploaded.attachments);
+      } catch (error) {
+        setPendingAttachments((items) => items.map((item) => ({ ...item, status: "failed", retryable: true, error: error instanceof Error ? error.message : "附件上传失败" })));
+        addNotice(error instanceof Error ? error.message : "附件上传失败");
+        return;
+      }
+    }
     if (messageActionIds.current.has(actionId)) return;
     messageActionIds.current.add(actionId);
-    const isGuidance = Boolean(sessionState.running && sessionId);
+    const isGuidance = Boolean(sessionState.running && targetSessionId);
     const mode = isGuidance ? undefined : multiAgentMode;
     if (retryActionId) {
       dispatch({ type: "action.retry", actionId });
@@ -365,30 +410,31 @@ export function App() {
           id: actionId,
           kind: isGuidance ? "guidance" : "message",
           content,
-          sessionId,
+          sessionId: targetSessionId,
           createdAt: new Date().toISOString(),
+          attachments: sentAttachmentMetadata,
         },
       });
     }
-    const sent = socketRef.current.send({ type: "message.send", session_id: sessionId, content, client_action_id: actionId, ...(mode ? { multi_agent_mode: mode } : {}) });
+    const sent = socketRef.current.send({ type: "message.send", session_id: targetSessionId, content, attachment_ids: attachmentIds, client_action_id: actionId, ...(mode ? { multi_agent_mode: mode } : {}) });
     if (!sent) {
       messageActionIds.current.delete(actionId);
       dispatch({ type: "action.failed", actionId, message: "连接尚未建立" });
-      setComposerSegments([createTextSegment()]);
-      dispatch({ type: "draft.pending", content: "" });
+      setPendingAttachments((items) => items.map((item) => ({ ...item, status: item.metadata ? "failed" : item.status, error: item.metadata ? "连接尚未建立" : item.error })));
       return;
     }
+    if (attachmentIds.length) attachmentActionIds.current.add(actionId);
     if (mode) setMultiAgentMode("auto");
     setComposerSegments([createTextSegment()]);
     dispatch({ type: "draft.pending", content: "" });
-  }, [composerSegments, connection, multiAgentMode, sessionId, sessionState.pendingDraft, sessionState.running]);
+  }, [addNotice, composerSegments, connection, multiAgentMode, navigate, pendingAttachments, refreshSessions, sessionId, sessionState.pendingDraft, sessionState.running]);
 
   useEffect(() => {
     /** 显式重试只在连接重新建立后自动发送一次。 */
     if (connection !== "connected" || !retryRequest.current) return;
     const request = retryRequest.current;
     retryRequest.current = null;
-    send(request.content, request.actionId);
+    void send(request.content, request.actionId);
   }, [connection, send]);
 
   /** 请求当前任务在下一个安全检查点停止。 */
@@ -604,7 +650,7 @@ export function App() {
         {!sessionId && sessionState.messages.length === 0 && <div className="empty-state"><span className="empty-kicker">准备就绪</span><h2>开始一个工作会话</h2><p>描述目标、提供上下文，或直接粘贴内容。首条消息发送后会创建本地会话记录。</p><div className="empty-examples" aria-label="任务起步示例"><span>选择一个起点</span><ul>{emptyStateStarters.map((starter) => <li key={starter}><button type="button" onClick={() => useEmptyStateStarter(starter)}>{starter}</button></li>)}</ul></div></div>}
       </ChatTimeline>
       <NoticeRegion placement="conversation" notices={notices} onDismiss={dismissNotice} onNavigate={navigateProactiveNotice} />
-      <Composer rootRef={composerRef} session={current} running={sessionState.running} actionsEnabled={connection === "connected" && !catalogRunning} segments={composerSegments.some((segment) => segment.type === "guidance" || Boolean(segment.text)) || !sessionState.pendingDraft ? composerSegments : [createTextSegment(sessionState.pendingDraft)]} autoApprove={autoApprove} multiAgentMode={multiAgentMode} multiAgentEnabled={multiAgentEnabled === true} multiAgentDisabledReason={multiAgentDisabledReason} multiAgentLocked={multiAgentRunning} inputLocked={multiAgentRunning} contextWindow={contextWindow} restoreFocusVersion={restoreFocusVersion} onSegmentsChange={changeSegments} onSend={() => send()} onStop={stop} onRestore={restoreSession} onAutoApproveChange={(enabled) => void setApproval(enabled)} onMultiAgentModeChange={setMultiAgentMode} onSlashRead={openSlashRead} />
+      <Composer rootRef={composerRef} session={current} running={sessionState.running} actionsEnabled={connection === "connected" && !catalogRunning} segments={composerSegments.some((segment) => segment.type === "guidance" || Boolean(segment.text)) || !sessionState.pendingDraft ? composerSegments : [createTextSegment(sessionState.pendingDraft)]} autoApprove={autoApprove} multiAgentMode={multiAgentMode} multiAgentEnabled={multiAgentEnabled === true} multiAgentDisabledReason={multiAgentDisabledReason} multiAgentLocked={multiAgentRunning} inputLocked={multiAgentRunning} contextWindow={contextWindow} restoreFocusVersion={restoreFocusVersion} attachments={pendingAttachments} supportsVision={supportsVision} onFilesSelected={(files) => setPendingAttachments((items) => validateSelectedFiles(files, items))} onRemoveAttachment={(id) => setPendingAttachments((items) => items.filter((item) => item.id !== id))} onSegmentsChange={changeSegments} onSend={() => void send()} onStop={stop} onRestore={restoreSession} onAutoApproveChange={(enabled) => void setApproval(enabled)} onMultiAgentModeChange={setMultiAgentMode} onSlashRead={openSlashRead} />
       <InspectorLayer open={inspectorOpen} closing={inspectorClosing} data={inspector} multiAgentRunId={inspectedMultiAgentRunId} control={controlInspection} onClose={closeInspector} />
     </main>
     <SessionSearchDialog open={searchOpen} sessions={[...sessions, ...archived]} currentId={sessionId} onClose={() => setSearchOpen(false)} onSelect={navigate} />

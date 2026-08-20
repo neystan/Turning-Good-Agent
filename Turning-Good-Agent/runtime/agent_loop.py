@@ -12,6 +12,7 @@ from ..llm.types import LLMResponse, LLMUsage, ToolCall
 from ..multi_agent.delegate_tool import DELEGATE_MULTI_AGENT_NAME, DelegateMultiAgentInvocation
 from ..tools.executor import ToolExecutor
 from ..tools.registry import ToolRegistry
+from ..tools.base import BaseTool
 from .attachment_manager import AttachmentManager
 from .tool_call_runner import ToolCallRunner
 
@@ -69,15 +70,23 @@ class AgentLoop:
         tool_runner: ToolCallRunner | None = None,
         multi_agent_invocation: DelegateMultiAgentInvocation | None = None,
         persist_tool_calls: bool = True,
+        attachment_tool: BaseTool | None = None,
     ) -> AgentLoopResult:
         """运行模型调用和工具循环直到得到最终文本。"""
         channel_adapter = channel_adapter or SilentChannelAdapter()
         llm = self.llm if llm_override is None else llm_override
         use_streaming = self.streaming_enabled if streaming_enabled is None else streaming_enabled
         active_tools = tool_registry if tool_registry is not None else self.tools
+        if attachment_tool is not None:
+            scoped = ToolRegistry()
+            for name in active_tools.tool_names:
+                scoped.register(active_tools.get(name))
+            scoped.register(attachment_tool)
+            active_tools = scoped
+            allowed_tool_names = frozenset(set(allowed_tool_names or active_tools.tool_names) | {attachment_tool.name})
         active_runner = tool_runner or (
             ToolCallRunner(active_tools, self.executor, self.hooks, self.runtime)
-            if tool_registry is not None
+            if tool_registry is not None or attachment_tool is not None
             else self.tool_call_runner
         )
         working = list(messages)

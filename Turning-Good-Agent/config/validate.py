@@ -67,6 +67,8 @@ def validate_settings(
         errors["skills.max_loaded_skill_tokens_per_turn"] = "不能小于 max_skill_tokens"
     if settings.llm.provider != "openai-compatible":
         errors["llm.provider"] = "仅支持 openai-compatible"
+    if not isinstance(settings.llm.supports_vision, bool):
+        errors["llm.supports_vision"] = "必须是布尔值"
     if settings.web.host not in {"127.0.0.1", "localhost", "::1"}:
         errors["web.host"] = "仅支持本机监听地址"
     _validate_gateway_settings(errors, settings)

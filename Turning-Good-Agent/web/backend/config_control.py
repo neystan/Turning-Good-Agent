@@ -25,6 +25,7 @@ _EDITABLE_FIELDS: dict[str, frozenset[str]] = {
             "max_retries",
             "retry_delay_seconds",
             "streaming_enabled",
+            "supports_vision",
         }
     ),
     "runtime": frozenset(
@@ -302,6 +303,7 @@ class WebConfigControlService:
                 "max_retries": settings.llm.max_retries,
                 "retry_delay_seconds": settings.llm.retry_delay_seconds,
                 "streaming_enabled": settings.llm.streaming_enabled,
+                "supports_vision": settings.llm.supports_vision,
             },
             "runtime": asdict(settings.runtime),
             "multi_agent": asdict(settings.multi_agent),
