@@ -103,6 +103,15 @@ class SkillEvolutionManager:
         self._save_state(state)
         self._schedule_changed()
 
+    async def defer_after_failure(self, now: datetime | None = None) -> None:
+        """失败后推迟下一次演进，避免调度器对过期 deadline 紧循环重试。"""
+        current = _as_utc(now or self._clock())
+        async with self._lock:
+            state = self._state()
+            state["next_run_at"] = (current + self._refresh).isoformat()
+            self._save_state(state)
+            self._schedule_changed()
+
     async def maybe_observe(
         self,
         session_id: str,
@@ -193,9 +202,27 @@ class SkillEvolutionManager:
         manual: bool,
         now: datetime | None = None,
     ) -> SkillEvolutionOutcome:
+        """运行 Skill 演进，并确保异常后不会保留过期 deadline。"""
+        current = _as_utc(now or self._clock())
+        try:
+            return await self._run_evolution(
+                manual=manual,
+                current=current,
+                use_injected_time=now is not None,
+            )
+        except Exception:
+            await self.defer_after_failure(now=current)
+            raise
+
+    async def _run_evolution(
+        self,
+        *,
+        manual: bool,
+        current: datetime,
+        use_injected_time: bool,
+    ) -> SkillEvolutionOutcome:
         """按 kind 串行地将 Observation 沉淀为 Draft。"""
         del manual
-        current = _as_utc(now or self._clock())
         async with self._lock:
             state = self._state()
             groups: dict[str, list[Observation]] = {}
@@ -230,7 +257,7 @@ class SkillEvolutionManager:
                         self._save_state(state)
                         created.append(draft["name"])
 
-            finished_at = current if now is not None else _as_utc(self._clock())
+            finished_at = current if use_injected_time else _as_utc(self._clock())
             state["next_run_at"] = (finished_at + self._refresh).isoformat()
             self._save_state(state)
             self._schedule_changed()

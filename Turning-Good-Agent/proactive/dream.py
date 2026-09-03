@@ -105,7 +105,38 @@ class DreamManager:
         self._save_state(state)
         self._schedule_changed()
 
+    async def defer_after_failure(self, now: datetime | None = None) -> None:
+        """失败后推迟下一次审阅，避免调度器对过期 deadline 紧循环重试。"""
+        current = _as_utc(now or self._clock())
+        async with self._lock:
+            state = self._state()
+            state["next_run_at"] = (current + self._refresh).isoformat()
+            self._save_state(state)
+            self._schedule_changed()
+
     async def run(
+        self,
+        *,
+        manual: bool,
+        scope: str,
+        session_id: str | None = None,
+        current_message: MessageRecord | None = None,
+        now: datetime | None = None,
+    ) -> DreamOutcome:
+        """运行 Dream，并确保异常后不会保留过期 deadline。"""
+        try:
+            return await self._run(
+                manual=manual,
+                scope=scope,
+                session_id=session_id,
+                current_message=current_message,
+                now=now,
+            )
+        except Exception:
+            await self.defer_after_failure()
+            raise
+
+    async def _run(
         self,
         *,
         manual: bool,
@@ -147,11 +178,10 @@ class DreamManager:
                 changed = changed or batch_changed
                 updated_targets.update(batch_targets)
                 errors += batch_errors
-            if errors == 0:
-                finished_at = _as_utc(self._clock())
-                state["next_run_at"] = (finished_at + self._refresh).isoformat()
-                self._save_state(state)
-                self._schedule_changed()
+            finished_at = _as_utc(self._clock())
+            state["next_run_at"] = (finished_at + self._refresh).isoformat()
+            self._save_state(state)
+            self._schedule_changed()
         return _outcome(
             manual,
             changed,
