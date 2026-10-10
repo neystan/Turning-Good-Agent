@@ -16,6 +16,7 @@ Turning Good Agent 面向希望持续扩展个人 Agent 的开发者。项目不
 - **主动执行与 Skill 演进**：提供 Cron、Breakbeat、Dream、Incident 与 Skill Evolution；从历史会话沉淀待办、稳定偏好、任务经验和可复用工作流，并通过后台通知跟进跨会话事项。
 - **受控 Multi-Agent 协作**：父 Agent 可按任务决定是否委派，支持并行 Fan-out / Fan-in 与顺序 Pipeline；Worker 使用独立上下文和只读工具配置，父 Agent 统一汇总结果并执行副作用。
 - **多通道与本地部署**：CLI、Web、飞书和个人微信 Adapter 复用同一 Runtime；提供 Docker Compose 本机部署，默认仅监听 loopback 地址。
+- **Web 附件与多模态**：Web 支持 PDF、DOCX、XLSX、PPTX、TXT、MD、CSV、JSON 及 PNG/JPEG/WebP；文档由父 Agent 通过 `read_attachment` 按需读取，图片仅在 active Provider 支持视觉时发送。
 
 ## 技术栈
 
@@ -26,6 +27,7 @@ Turning Good Agent 面向希望持续扩展个人 Agent 的开发者。项目不
 | Context / Memory | 摘要压缩、USER / SOUL 长期画像、Token Usage Ledger |
 | Multi-Agent | Fan-out / Fan-in、Pipeline、Worker Profile、并发与超时控制 |
 | 接入与界面 | FastAPI、WebSocket、React、CLI、飞书 / 个人微信 Adapter |
+| Web 附件 | owner-scope 私有存储、MIME/签名校验、PDF/Office/文本解析、Provider 视觉能力门禁 |
 | 工程化 | pytest、Docker Compose |
 
 ## 你可以用它做什么
@@ -34,6 +36,7 @@ Turning Good Agent 面向希望持续扩展个人 Agent 的开发者。项目不
 - 接入 MCP Server，以按需发现和启用的方式调用外部 Tool、Resource 与 Prompt。
 - 将周期任务、待办跟进、异常记录、画像更新与 Skill 草稿沉淀到后台主动能力中。
 - 对可拆分任务开启 Multi-Agent 自动委派，由父 Agent 选择并行或顺序执行方式。
+- 在 Web 会话中上传文档或图片；文档按需解析，图片以一次临时多模态请求交给支持视觉的模型。
 - 通过 Web 检查器查看会话状态、上下文占用、工具调用、Trace 与 Token 使用情况。
 
 ## 快速开始
@@ -93,6 +96,8 @@ flowchart TD
     CLI[CLI Client] --> IN[Gateway Inbound MessageBus]
     WEB[Web Workspace] --> IN
     IM[Feishu / WeChat] --> IN
+    WEB --> ATT[WebAttachmentService]
+    ATT --> IN
     IN --> RT[Single Agent Runtime]
 
     RT --> COMMAND[COMMAND]
@@ -107,6 +112,8 @@ flowchart TD
     BUILD --> MEM[Short-term / Profile Memory]
     RUN --> LOOP[AgentLoop + Tool Runner]
     LOOP --> MCP[MCP Client / Skills / Tool Registry]
+    LOOP --> READ[Web parent-only read_attachment]
+    LOOP --> VISION[Transient image content blocks]
     SAVE --> OBS[Trace + Token Usage]
     SAVE --> PRO[Proactive Service]
     PRO --> OUT[ChannelManager]
@@ -126,13 +133,23 @@ CLI / Web / IM input
 -> ChannelManager -> target channel
 ```
 
+Web 附件走同一 Gateway：先通过 REST 上传并绑定 `principal_id + channel + conversation_id`，再由 WebSocket 消息只引用 opaque `attachment_id`。附件不会创建第二个 Runtime 或 Session Store。
+
 ## 关键能力
 
 ### Context、Memory 与 Token 控制
 
 每轮由 Context Builder 组装系统提示、`USER.md` / `SOUL.md` 长期画像、历史摘要、近期原文和当前输入。旧会话在达到阈值后压缩为摘要，工具结果按上限截断；`SAVE` 阶段记录上下文构成、工具数量和真实 Token usage，便于追踪成本来源。
 
-MCP 采用渐进披露：连接后仅发现 Server Catalog；远端 Tool 需在配置中显式启用，Resource / Prompt 由 Agent 在当前轮按需读取。附件有独立 Token 上限，不写入会话历史或摘要。
+MCP 采用渐进披露：连接后仅发现 Server Catalog；远端 Tool 需在配置中显式启用，Resource / Prompt 由 Agent 在当前轮按需读取。MCP/Skill Attachment 只存在于当前 working messages；Web 文档附件不全文预注入，而由父 Agent 按需调用 `read_attachment`。Session 只保存公开附件 metadata，不保存原始路径、base64 或二进制。
+
+### Web 附件与多模态
+
+- 文档格式支持 PDF、DOCX、XLSX、PPTX、TXT、MD、CSV、JSON；解析结果受页数、行数、字符数和 Office ZIP 安全上限约束。
+- 图片格式支持 PNG、JPEG/JPG、WebP；Composer 和 Runtime 都检查 `llm.supports_vision`，能力为 `false` 或未知时提示并阻止发送。
+- `read_attachment` 只在 Web 父 Agent 的当前回合可见，不进入全局 Tool Catalog、IM、主动任务或 Multi-Agent Worker Profile。
+- 附件原始文件保存在 `<data_dir>/web-attachments/` 的 owner scope 私有目录；删除 Web Session 时同步清理。未发送附件只存在浏览器本地，不设置 24 小时清理任务。
+- 父 Agent 如需委派附件任务，必须先读取并脱敏，再把有限文本证据交给 Worker；Worker 不获得附件路径或原始附件 Tool。
 
 ### 工具权限与受控执行
 
@@ -159,7 +176,7 @@ Worker 不创建独立会话，不共享父 Agent 的工作上下文；其工具
 
 | 区域 | 用途 |
 | --- | --- |
-| `llm` | OpenAI-compatible Provider、模型、密钥与流式输出。 |
+| `llm` | OpenAI-compatible Provider、模型、密钥、流式输出与 `supports_vision`。 |
 | `runtime` | 工具轮数、单轮超时、上下文与工具结果 Token 上限。 |
 | `memory` | 压缩阈值与近期原文保留窗口。 |
 | `mcp` | Server、传输方式、显式启用 Tool 与附件上限。 |
@@ -167,7 +184,7 @@ Worker 不创建独立会话，不共享父 Agent 的工作上下文；其工具
 | `proactive` | Cron / Dream / Breakbeat 等后台能力与长期画像预算。 |
 | `multi_agent` | 委派开关、Worker 数量、超时、并发与结果预算。 |
 
-运行数据默认保存于 `.sessions/`：每个会话保留 `messages.jsonl`、`turn_traces.jsonl`、`true_token_usage.jsonl` 与 `tool_calls.jsonl`；长期画像与主动任务使用独立目录，不改写普通会话事实。
+运行数据默认保存于 `.sessions/`：每个会话保留 `messages.jsonl`、`turn_traces.jsonl`、`true_token_usage.jsonl` 与 `tool_calls.jsonl`；Web 原始附件单独保存于 `<data_dir>/web-attachments/`，会话消息只保留公开 metadata；长期画像与主动任务使用独立目录，不改写普通会话事实。
 
 ## Docker 本机部署
 
@@ -191,7 +208,7 @@ docker compose down
 
 ## 已实现范围与限制
 
-已实现：Runtime 状态机、Function Calling、Tool Registry、Hooks、MCP Client、Skills、CLI / Web、飞书 / 个人微信 Adapter、主动能力与长期记忆、Multi-Agent Team Mode、Trace 与真实 Token usage 记录。
+已实现：Runtime 状态机、Function Calling、Tool Registry、Hooks、MCP Client、Skills、CLI / Web、飞书 / 个人微信 Adapter、主动能力与长期记忆、Multi-Agent Team Mode、Web 文档附件按需读取、图片视觉能力门禁、Trace 与真实 Token usage 记录。
 
 当前边界：
 
@@ -199,6 +216,7 @@ docker compose down
 - MCP Client 支持 stdio 与 Streamable HTTP；不支持 OAuth、浏览器授权、HTTP+SSE 与跨轮附件。
 - HTTP MCP Server 应使用 HTTPS；仅 `localhost`、`127.0.0.1` 和 `::1` 可使用 HTTP。
 - Multi-Agent 在飞书和微信 Channel 中关闭；请在 CLI 或 Web 中使用。
+- Web 附件首版不扩展到飞书、微信、CLI、主动任务或 Worker；不提供 OCR、扫描 PDF 识别或 Office 精细索引。具体视觉能力由 Provider 的 `supports_vision` 配置决定，本项目不假设某个外部模型一定支持视觉。
 - 本项目不提供容器级沙箱、多租户隔离或公网认证。公网部署前需自行配置认证、TLS、网络隔离与访问审计。
 
 ## 验证
