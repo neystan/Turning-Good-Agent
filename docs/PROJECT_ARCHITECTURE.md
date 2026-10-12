@@ -51,6 +51,7 @@ python -m Turning-Good-Agent chat --session main
 | `docs/phases/` | 每一阶段的项目骨架和实施计划。 |
 | `docs/STATUS.md` | 当前进度、待办和等待所有者决定的问题。 |
 | `docs/DECISIONS.md` | 已经定下的决策及其理由。 |
+| `docs/STARTUP.md` | 本机的三种启动方式和环境重建步骤。 |
 
 ## 4. `Turning-Good-Agent/` 主 Python 包
 

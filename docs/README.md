@@ -10,6 +10,7 @@
 | [PROJECT_ARCHITECTURE.md](./PROJECT_ARCHITECTURE.md) | 当前仓库的真实代码结构说明，用于快速理解每个目录和文件职责。 |
 | [STATUS.md](./STATUS.md) | 当前进度、待办和等待所有者决定的问题。每次任务结束时更新。 |
 | [DECISIONS.md](./DECISIONS.md) | 已经定下的决策及其理由。只追加，不记录未决事项。 |
+| [STARTUP.md](./STARTUP.md) | 本机的三种启动方式、配置文件、数据位置和环境重建步骤。 |
 
 ## 阶段实施计划
 
