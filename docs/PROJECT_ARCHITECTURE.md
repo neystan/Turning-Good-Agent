@@ -49,7 +49,8 @@ python -m Turning-Good-Agent chat --session main
 | `docs/TURNING_GOOD_AGENT_SPEC.md` | 持续更新的完整 spec。 |
 | `docs/PROJECT_ARCHITECTURE.md` | 当前文档，说明真实代码结构。 |
 | `docs/phases/` | 每一阶段的项目骨架和实施计划。 |
-| `docs/archive/2026-06-11-phase-1-runtime-mvp-design.md` | Phase 1 Runtime MVP 设计快照，已归档为历史记录。 |
+| `docs/STATUS.md` | 当前进度、待办和等待所有者决定的问题。 |
+| `docs/DECISIONS.md` | 已经定下的决策及其理由。 |
 
 ## 4. `Turning-Good-Agent/` 主 Python 包
 

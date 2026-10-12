@@ -8,6 +8,8 @@
 | --- | --- |
 | [TURNING_GOOD_AGENT_SPEC.md](./TURNING_GOOD_AGENT_SPEC.md) | 持续更新的完整产品与技术规格说明，描述最终目标、当前状态和模块边界。 |
 | [PROJECT_ARCHITECTURE.md](./PROJECT_ARCHITECTURE.md) | 当前仓库的真实代码结构说明，用于快速理解每个目录和文件职责。 |
+| [STATUS.md](./STATUS.md) | 当前进度、待办和等待所有者决定的问题。每次任务结束时更新。 |
+| [DECISIONS.md](./DECISIONS.md) | 已经定下的决策及其理由。只追加，不记录未决事项。 |
 
 ## 阶段实施计划
 
@@ -23,12 +25,6 @@
 | Phase 8 | [飞书与个人微信 IM Channel](./phases/2026-06-15-phase-8-im-channel-adapters.md) | 已实现；复用唯一 Gateway，IM 只提供纯文本消息，不暴露 Tool 审批 |
 | Phase 9 | [Multi-Agent 协作模式](./phases/2026-06-15-phase-9-multi-agent.md) | 已实现；父 Agent 保留委派、汇总和副作用控制权，Worker 不获得原始附件访问 |
 | Phase 10 | [Web 附件、文档按需读取与多模态](./phases/2026-08-20-phase-10-web-attachments-multimodal.md) | 首版已实现；仅接入 Web，支持文档按需读取和 Provider 能力门控的图片请求 |
-
-## 历史文档
-
-| 文档 | 说明 |
-| --- | --- |
-| [archive/2026-06-11-phase-1-runtime-mvp-design.md](./archive/2026-06-11-phase-1-runtime-mvp-design.md) | Phase 1 Runtime MVP 的设计快照，已归档为历史记录。 |
 
 ## 维护规则
 
