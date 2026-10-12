@@ -6,14 +6,10 @@ __pycache__/
 .sessions/
 settings.local.json
 SESSIONS_SPEC.md
-AGENTS.md
-DESIGN.md
 .skills/.drafts/
 .skills/.staging/
 /.skills/
 /.skill/
-/docs/
-/tests/
 /.superpowers/
 web/static/
 web/frontend/node_modules/
